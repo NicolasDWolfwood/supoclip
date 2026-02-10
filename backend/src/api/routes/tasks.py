@@ -2,12 +2,10 @@
 Task API routes using refactored architecture.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 import json
 import logging
-from typing import Dict, Any
 
 from ...database import get_db
 from ...services.task_service import TaskService
@@ -87,16 +85,26 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         source_type = task_service.video_service.determine_source_type(raw_source["url"])
 
         # Enqueue job for worker
-        job_id = await JobQueue.enqueue_job(
-            "process_video_task",
-            task_id,
-            raw_source["url"],
-            source_type,
-            user_id,
-            font_family,
-            font_size,
-            font_color
-        )
+        try:
+            job_id = await JobQueue.enqueue_job(
+                "process_video_task",
+                task_id,
+                raw_source["url"],
+                source_type,
+                user_id,
+                font_family,
+                font_size,
+                font_color
+            )
+        except Exception as enqueue_error:
+            logger.error(f"Failed to enqueue job for task {task_id}: {enqueue_error}")
+            await task_service.task_repo.update_task_status(
+                db,
+                task_id,
+                "error",
+                progress_message="Failed to enqueue processing job"
+            )
+            raise HTTPException(status_code=503, detail="Failed to queue task for processing")
 
         logger.info(f"Task {task_id} created and job {job_id} enqueued")
 
@@ -108,20 +116,28 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
 
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error creating task: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating task: {str(e)}")
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, db: AsyncSession = Depends(get_db)):
+async def get_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Get task details."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
     try:
         task_service = TaskService(db)
         task = await task_service.get_task_with_clips(task_id)
 
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this task")
 
         return task
 
@@ -133,14 +149,20 @@ async def get_task(task_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{task_id}/clips")
-async def get_task_clips(task_id: str, db: AsyncSession = Depends(get_db)):
+async def get_task_clips(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Get all clips for a task."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
     try:
         task_service = TaskService(db)
         task = await task_service.get_task_with_clips(task_id)
 
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this task")
 
         return {
             "task_id": task_id,
@@ -156,24 +178,25 @@ async def get_task_clips(task_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{task_id}/progress")
-async def get_task_progress_sse(task_id: str, db: AsyncSession = Depends(get_db)):
+async def get_task_progress_sse(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """
     SSE endpoint for real-time progress updates.
     Streams progress updates as Server-Sent Events.
     """
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this task")
+
     async def event_generator():
         """Generate SSE events for task progress."""
-        # First, check if task exists
-        task_service = TaskService(db)
-        task = await task_service.task_repo.get_task_by_id(db, task_id)
-
-        if not task:
-            yield {
-                "event": "error",
-                "data": json.dumps({"error": "Task not found"})
-            }
-            return
-
         # Send initial task status
         yield {
             "event": "status",
@@ -225,6 +248,12 @@ async def get_task_progress_sse(task_id: str, db: AsyncSession = Depends(get_db)
 @router.patch("/{task_id}")
 async def update_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Update task details (title)."""
+    headers = request.headers
+    user_id = headers.get("user_id")
+
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
     try:
         data = await request.json()
         title = data.get("title")
@@ -238,6 +267,8 @@ async def update_task(task_id: str, request: Request, db: AsyncSession = Depends
         task = await task_service.task_repo.get_task_by_id(db, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to update this task")
 
         # Update source title
         await task_service.source_repo.update_source_title(db, task["source_id"], title)
@@ -302,6 +333,12 @@ async def delete_clip(task_id: str, clip_id: str, request: Request, db: AsyncSes
 
         if task["user_id"] != user_id:
             raise HTTPException(status_code=403, detail="Not authorized to delete this clip")
+
+        clip = await task_service.clip_repo.get_clip_by_id(db, clip_id)
+        if not clip:
+            raise HTTPException(status_code=404, detail="Clip not found")
+        if clip["task_id"] != task_id:
+            raise HTTPException(status_code=404, detail="Clip not found in this task")
 
         # Delete the clip
         await task_service.clip_repo.delete_clip(db, clip_id)

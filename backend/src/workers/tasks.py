@@ -25,7 +25,7 @@ async def process_video_task(
         ctx: arq context (provides Redis connection and other utilities)
         task_id: Task ID to update
         url: Video URL or file path
-        source_type: "youtube" or "upload"
+        source_type: "youtube" or "video_url"
         user_id: User ID who created the task
         font_family: Font family for subtitles
         font_size: Font size for subtitles
@@ -64,10 +64,12 @@ async def process_video_task(
             )
 
             logger.info(f"Task {task_id} completed successfully")
+            await progress.complete()
             return result
 
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}", exc_info=True)
+            await progress.error(str(e))
             # Error will be caught by arq and task status will be updated
             raise
 

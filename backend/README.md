@@ -1,25 +1,65 @@
-# Backend Docs
+# Backend
 
-## Requirements
+FastAPI service responsible for:
+- source ingestion (YouTube/upload)
+- transcription + transcript analysis
+- clip rendering and storage
+- task progress/status APIs
 
-Ensure you have `ffmpeg` installed.
+## Prerequisites
 
-```
-# MacOS
+- Python 3.11+
+- `uv`
+- `ffmpeg`
+
+Install ffmpeg:
+
+```bash
+# macOS
 brew install ffmpeg
 
-# Linux (Ubuntu)
-sudo apt update -y && sudo apt install install ffmpeg -y
+# Ubuntu
+sudo apt update -y && sudo apt install ffmpeg -y
 
-# Windows (Chocolatey https://chocolatey.org/)
+# Windows (Chocolatey)
 choco install ffmpeg
 ```
 
-You must also have `uv` package manager installed.
+## Local Development
 
-1. Create a virtual environment
-
-```
+```bash
+cd backend
 uv venv .venv
 source .venv/bin/activate
+uv sync
+uvicorn src.main_refactored:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Legacy entrypoint (still present):
+
+```bash
+uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+## Configuration
+
+Use the root env file and canonical config reference:
+- `.env.example`
+- `docs/config.md`
+
+Backend compatibility behavior:
+- preferred model var: `LLM`
+- legacy model var: `LLM_MODEL`
+- preferred Whisper var: `WHISPER_MODEL_SIZE`
+- legacy Whisper var: `WHISPER_MODEL`
+
+## Docker
+
+Backend is started by `docker-compose.yml` with:
+- app entrypoint: `src.main_refactored:app`
+- worker: `src.workers.tasks.WorkerSettings`
+
+## API Docs
+
+When running locally or via Docker:
+- Swagger UI: http://localhost:8000/docs

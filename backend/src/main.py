@@ -9,20 +9,25 @@ import logging
 import json
 import asyncio
 from typing import Dict, Any
+import aiofiles
+import uuid
 
 # Configure logging
+log_dir = Path("logs")
+log_dir.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('logs/backend.log')
+        logging.FileHandler(log_dir / "backend.log")
     ]
 )
 
 logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -616,17 +621,12 @@ async def get_available_transitions():
 
 # endpoint to upload a video
 @app.post("/upload")
-async def upload_video(request: Request):
+async def upload_video(video: UploadFile = File(...)):
     """Upload a video to the server"""
+    upload_chunk_size = 1024 * 1024  # 1MB
+    video_path = None
     try:
-        from fastapi import UploadFile, File, Form
-        import aiofiles
-
-        # Get the form data
-        form_data = await request.form()
-        video_file = form_data.get("video")
-
-        if not video_file or not hasattr(video_file, 'filename'):
+        if not video or not video.filename:
             raise HTTPException(status_code=400, detail="No video file provided")
 
         # Create uploads directory
@@ -634,15 +634,17 @@ async def upload_video(request: Request):
         uploads_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate unique filename to avoid conflicts
-        import uuid
-        file_extension = Path(video_file.filename).suffix
+        file_extension = Path(video.filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         video_path = uploads_dir / unique_filename
 
-        # Save the uploaded file
+        # Save uploaded file in chunks to avoid loading the full file in memory.
         async with aiofiles.open(video_path, 'wb') as f:
-            content = await video_file.read()
-            await f.write(content)
+            while True:
+                chunk = await video.read(upload_chunk_size)
+                if not chunk:
+                    break
+                await f.write(chunk)
 
         logger.info(f"✅ Video uploaded successfully to: {video_path}")
 
@@ -650,6 +652,12 @@ async def upload_video(request: Request):
             "message": "Video uploaded successfully",
             "video_path": str(video_path)
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        if video_path and video_path.exists():
+            video_path.unlink(missing_ok=True)
         logger.error(f"❌ Error uploading video: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error uploading video: {str(e)}")
+    finally:
+        await video.close()

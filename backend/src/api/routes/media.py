@@ -1,7 +1,7 @@
 """
 Media API routes (fonts, transitions, uploads).
 """
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
@@ -13,6 +13,7 @@ from ...config import Config
 logger = logging.getLogger(__name__)
 config = Config()
 router = APIRouter(tags=["media"])
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
 
 
 @router.get("/fonts")
@@ -90,14 +91,11 @@ async def get_available_transitions():
 
 
 @router.post("/upload")
-async def upload_video(request: Request):
+async def upload_video(video: UploadFile = File(...)):
     """Upload a video to the server."""
+    video_path = None
     try:
-        # Get the form data
-        form_data = await request.form()
-        video_file = form_data.get("video")
-
-        if not video_file or not hasattr(video_file, 'filename'):
+        if not video or not video.filename:
             raise HTTPException(status_code=400, detail="No video file provided")
 
         # Create uploads directory
@@ -105,14 +103,17 @@ async def upload_video(request: Request):
         uploads_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate unique filename
-        file_extension = Path(video_file.filename).suffix
+        file_extension = Path(video.filename).suffix
         unique_filename = f"{uuid.uuid4()}{file_extension}"
         video_path = uploads_dir / unique_filename
 
-        # Save the uploaded file
+        # Save uploaded file in chunks to avoid loading the full file in memory.
         async with aiofiles.open(video_path, 'wb') as f:
-            content = await video_file.read()
-            await f.write(content)
+            while True:
+                chunk = await video.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+                await f.write(chunk)
 
         logger.info(f"✅ Video uploaded successfully to: {video_path}")
 
@@ -120,6 +121,12 @@ async def upload_video(request: Request):
             "message": "Video uploaded successfully",
             "video_path": str(video_path)
         }
+    except HTTPException:
+        raise
     except Exception as e:
+        if video_path and video_path.exists():
+            video_path.unlink(missing_ok=True)
         logger.error(f"❌ Error uploading video: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error uploading video: {str(e)}")
+    finally:
+        await video.close()

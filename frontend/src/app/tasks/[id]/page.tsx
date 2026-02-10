@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -58,7 +58,7 @@ interface TaskDetails {
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, isPending } = useSession();
   const [task, setTask] = useState<TaskDetails | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -70,21 +70,19 @@ export default function TaskPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const taskId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const userId = session?.user?.id;
 
-  const fetchTaskStatus = async (retryCount = 0, maxRetries = 5) => {
-    if (!params.id) return false;
+  const fetchTaskStatus = useCallback(async (retryCount = 0, maxRetries = 5) => {
+    if (!taskId || !userId) return false;
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const headers: HeadersInit = {
+        user_id: userId,
+      };
 
-      // Fetch task details (including status)
-      // Don't wait for session - fetch immediately with user_id if available
-      const headers: HeadersInit = {};
-      if (session?.user?.id) {
-        headers["user_id"] = session.user.id;
-      }
-
-      const taskResponse = await fetch(`${apiUrl}/tasks/${params.id}`, {
+      const taskResponse = await fetch(`${apiUrl}/tasks/${taskId}`, {
         headers,
       });
 
@@ -101,16 +99,14 @@ export default function TaskPage() {
 
       const taskData = await taskResponse.json();
       setTask(taskData);
+      setProgress(taskData.progress ?? 0);
+      setProgressMessage(taskData.progress_message ?? "");
+      setError(null);
 
       // Only fetch clips if task is completed
       if (taskData.status === "completed") {
-        const clipsHeaders: HeadersInit = {};
-        if (session?.user?.id) {
-          clipsHeaders["user_id"] = session.user.id;
-        }
-
-        const clipsResponse = await fetch(`${apiUrl}/tasks/${params.id}/clips`, {
-          headers: clipsHeaders,
+        const clipsResponse = await fetch(`${apiUrl}/tasks/${taskId}/clips`, {
+          headers,
         });
 
         if (!clipsResponse.ok) {
@@ -119,6 +115,8 @@ export default function TaskPage() {
 
         const clipsData = await clipsResponse.json();
         setClips(clipsData.clips || []);
+      } else {
+        setClips([]);
       }
 
       return true;
@@ -127,11 +125,14 @@ export default function TaskPage() {
       setError(err instanceof Error ? err.message : "Failed to load task");
       return false;
     }
-  };
+  }, [apiUrl, taskId, userId]);
 
-  // Initial fetch - runs immediately, doesn't wait for session
+  // Initial fetch
   useEffect(() => {
-    if (!params.id) return;
+    if (!taskId || !userId) {
+      setIsLoading(false);
+      return;
+    }
 
     const fetchTaskData = async () => {
       try {
@@ -143,62 +144,24 @@ export default function TaskPage() {
     };
 
     fetchTaskData();
-  }, [params.id]); // Only run once when params change
+  }, [fetchTaskStatus, taskId, userId]);
 
-  // SSE effect - real-time progress updates
+  // Poll task status while queued/processing.
   useEffect(() => {
-    if (!params.id || !task) return;
-
-    // Only connect to SSE if task is queued or processing
+    if (!taskId || !userId || !task?.status) return;
     if (task.status !== "queued" && task.status !== "processing") return;
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const eventSource = new EventSource(`${apiUrl}/tasks/${params.id}/progress`);
+    const intervalId = window.setInterval(() => {
+      fetchTaskStatus();
+    }, 2000);
 
-    console.log("📡 Connected to SSE for real-time progress");
-
-    eventSource.addEventListener("status", (e) => {
-      const data = JSON.parse(e.data);
-      console.log("📊 Status:", data);
-      setProgress(data.progress || 0);
-      setProgressMessage(data.message || "");
-    });
-
-    eventSource.addEventListener("progress", (e) => {
-      const data = JSON.parse(e.data);
-      console.log("📈 Progress:", data);
-      setProgress(data.progress || 0);
-      setProgressMessage(data.message || "");
-
-      // Update task status if provided
-      if (data.status && task) {
-        setTask({ ...task, status: data.status });
-      }
-    });
-
-    eventSource.addEventListener("close", async (e) => {
-      const data = JSON.parse(e.data);
-      console.log("✅ Task completed:", data.status);
-      eventSource.close();
-
-      // Refresh task and clips
-      await fetchTaskStatus();
-    });
-
-    eventSource.addEventListener("error", (e) => {
-      console.error("❌ SSE error:", e);
-      if (e.data) {
-        const data = JSON.parse(e.data);
-        setError(data.error || "Connection error");
-      }
-      eventSource.close();
-    });
+    // Trigger one immediate refresh when polling starts.
+    fetchTaskStatus();
 
     return () => {
-      console.log("🔌 Disconnecting SSE");
-      eventSource.close();
+      window.clearInterval(intervalId);
     };
-  }, [params.id, task?.status]); // Re-run when task status changes
+  }, [fetchTaskStatus, task?.status, taskId, userId]);
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -216,7 +179,6 @@ export default function TaskPage() {
     if (!editedTitle.trim() || !session?.user?.id || !params.id) return;
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const response = await fetch(`${apiUrl}/tasks/${params.id}`, {
         method: "PATCH",
         headers: {
@@ -243,7 +205,6 @@ export default function TaskPage() {
 
     setIsDeleting(true);
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const response = await fetch(`${apiUrl}/tasks/${params.id}`, {
         method: "DELETE",
         headers: {
@@ -269,7 +230,6 @@ export default function TaskPage() {
     if (!session?.user?.id || !params.id) return;
 
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       const response = await fetch(`${apiUrl}/tasks/${params.id}/clips/${clipId}`, {
         method: "DELETE",
         headers: {
@@ -288,6 +248,45 @@ export default function TaskPage() {
       alert("Failed to delete clip");
     }
   };
+
+  if (isPending) {
+    return (
+      <div className="min-h-screen bg-white p-4">
+        <div className="max-w-6xl mx-auto">
+          <div className="mb-6">
+            <Skeleton className="h-8 w-48 mb-2" />
+            <Skeleton className="h-4 w-96" />
+          </div>
+          <div className="grid gap-6">
+            {[1, 2].map((i) => (
+              <Card key={i}>
+                <CardContent className="p-6">
+                  <Skeleton className="h-48 w-full mb-4" />
+                  <Skeleton className="h-4 w-full mb-2" />
+                  <Skeleton className="h-4 w-3/4" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session?.user) {
+    return (
+      <div className="min-h-screen bg-white p-4">
+        <div className="max-w-6xl mx-auto">
+          <Alert>
+            <AlertDescription>You need to sign in to view this task.</AlertDescription>
+          </Alert>
+          <Link href="/sign-in" className="mt-4 inline-block">
+            <Button>Sign In</Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading) {
     return (
@@ -554,7 +553,7 @@ export default function TaskPage() {
                   </div>
                   <h2 className="text-xl font-semibold text-black mb-2">Still Generating...</h2>
                   <p className="text-gray-600">
-                    Your clips are being generated. This page will refresh automatically when they're ready.
+                    Your clips are being generated. This page will refresh automatically when they&apos;re ready.
                   </p>
                 </>
               )}
@@ -598,7 +597,7 @@ export default function TaskPage() {
                     {/* Video Player */}
                     <div className="bg-black relative flex-shrink-0 flex items-center justify-center">
                       <DynamicVideoPlayer
-                        src={`http://localhost:8000${clip.video_url}`}
+                        src={`${apiUrl}${clip.video_url}`}
                         poster="/placeholder-video.jpg"
                       />
                     </div>
@@ -640,7 +639,7 @@ export default function TaskPage() {
 
                       <div className="flex gap-2">
                         <Button size="sm" variant="outline" asChild>
-                          <a href={`http://localhost:8000${clip.video_url}`} download={clip.filename}>
+                          <a href={`${apiUrl}${clip.video_url}`} download={clip.filename}>
                             <Download className="w-4 h-4 mr-2" />
                             Download
                           </a>

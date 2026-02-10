@@ -1,6 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+The canonical cross-agent guide is `AGENTS.md`; keep this file aligned for Claude-specific workflows.
 
 ## Project Overview
 
@@ -62,7 +63,10 @@ source .venv/bin/activate  # macOS/Linux
 # Install dependencies
 uv sync
 
-# Run development server
+# Run development server (recommended entrypoint, aligned with Docker)
+uvicorn src.main_refactored:app --reload --host 0.0.0.0 --port 8000
+
+# Legacy entrypoint (still available)
 uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -73,12 +77,18 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
 **Environment variables (backend/.env):**
 - `ASSEMBLY_AI_API_KEY` - Required for video transcription
-- `LLM` - AI model identifier (e.g., "openai:gpt-4", "anthropic:claude-3-5-sonnet")
+- `LLM` - AI model identifier (e.g., "openai:gpt-5-mini", "anthropic:claude-4-sonnet")
 - `OPENAI_API_KEY`, `GOOGLE_API_KEY`, or `ANTHROPIC_API_KEY` - Depending on LLM choice
 - `DATABASE_URL` - PostgreSQL connection string
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
 
+Canonical env reference: `docs/config.md`
+
 ### Frontend Development
+
+**Prerequisites:**
+- Node.js 20+
+- npm 10+
 
 ```bash
 cd frontend

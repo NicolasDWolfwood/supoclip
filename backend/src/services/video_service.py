@@ -109,7 +109,28 @@ class VideoService:
     def determine_source_type(url: str) -> str:
         """Determine if source is YouTube or uploaded file."""
         video_id = get_youtube_video_id(url)
-        return "youtube" if video_id else "upload"
+        return "youtube" if video_id else "video_url"
+
+    @staticmethod
+    def validate_uploaded_video_path(url: str) -> Path:
+        """
+        Validate that uploaded video paths stay within the managed uploads directory.
+        Prevents processing arbitrary local filesystem paths.
+        """
+        uploads_dir = (Path(config.temp_dir) / "uploads").resolve()
+        candidate_path = Path(url).expanduser()
+        resolved_path = candidate_path.resolve()
+
+        # Ensure file exists and is inside uploads directory.
+        if not resolved_path.exists() or not resolved_path.is_file():
+            raise ValueError("Video file not found")
+
+        try:
+            resolved_path.relative_to(uploads_dir)
+        except ValueError as exc:
+            raise ValueError("Invalid uploaded video path") from exc
+
+        return resolved_path
 
     @staticmethod
     async def process_video_complete(
@@ -137,9 +158,7 @@ class VideoService:
                 if not video_path:
                     raise Exception("Failed to download video")
             else:
-                video_path = Path(url)
-                if not video_path.exists():
-                    raise Exception("Video file not found")
+                video_path = VideoService.validate_uploaded_video_path(url)
 
             # Step 2: Generate transcript
             if progress_callback:

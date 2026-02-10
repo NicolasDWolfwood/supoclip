@@ -13,6 +13,18 @@ class ClipRepository:
     """Repository for clip-related database operations."""
 
     @staticmethod
+    async def get_clip_by_id(db: AsyncSession, clip_id: str) -> Dict[str, Any] | None:
+        """Get a clip by ID with its owning task reference."""
+        result = await db.execute(
+            text("SELECT id, task_id FROM generated_clips WHERE id = :clip_id"),
+            {"clip_id": clip_id}
+        )
+        row = result.fetchone()
+        if not row:
+            return None
+        return {"id": row.id, "task_id": row.task_id}
+
+    @staticmethod
     async def create_clip(
         db: AsyncSession,
         task_id: str,

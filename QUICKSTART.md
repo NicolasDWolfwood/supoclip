@@ -11,6 +11,9 @@ Run SupoClip with Docker in just one command!
      - [OpenAI API Key](https://platform.openai.com/api-keys) (recommended)
      - [Google AI API Key](https://makersuite.google.com/app/apikey)
      - [Anthropic API Key](https://console.anthropic.com/)
+3. **For local frontend development (non-Docker):**
+   - Node.js 20+
+   - npm 10+
 
 ## Quick Start (Single Command)
 
@@ -38,7 +41,7 @@ ASSEMBLY_AI_API_KEY=your_assemblyai_key_here
 OPENAI_API_KEY=your_openai_key_here
 
 # Configure which AI model to use
-LLM=openai:gpt-4
+LLM=openai:gpt-5-mini
 ```
 
 ### 2. Start SupoClip
@@ -73,13 +76,15 @@ docker-compose up -d --build
 
 ## Environment Configuration
 
+Canonical reference: `docs/config.md`
+
 ### Required Variables
 
 | Variable | Description | Where to Get |
 |----------|-------------|--------------|
 | `ASSEMBLY_AI_API_KEY` | Speech-to-text transcription | https://www.assemblyai.com/ |
 | `OPENAI_API_KEY` | OpenAI GPT models | https://platform.openai.com/api-keys |
-| `LLM` | AI model identifier | e.g., `openai:gpt-4` |
+| `LLM` | AI model identifier | e.g., `openai:gpt-5-mini` |
 
 ### Optional Variables
 
@@ -94,22 +99,21 @@ docker-compose up -d --build
 
 ### OpenAI (Recommended)
 ```bash
-LLM=openai:gpt-4
-LLM=openai:gpt-4-turbo
-LLM=openai:gpt-3.5-turbo
+LLM=openai:gpt-5
+LLM=openai:gpt-5-mini
+LLM=openai:gpt-4.1
 ```
 
 ### Anthropic
 ```bash
-LLM=anthropic:claude-3-5-sonnet-20241022
-LLM=anthropic:claude-3-opus
-LLM=anthropic:claude-3-haiku
+LLM=anthropic:claude-4-sonnet
+LLM=anthropic:claude-3-5-haiku
 ```
 
 ### Google
 ```bash
-LLM=google:gemini-1.5-pro
-LLM=google:gemini-pro
+LLM=google:gemini-2.5-pro
+LLM=google:gemini-2.5-flash
 ```
 
 ## Troubleshooting
@@ -183,7 +187,8 @@ For production use:
 
 ## Next Steps
 
-- Read the full documentation in `CLAUDE.md`
+- Read the full project-state docs in `AGENTS.md` (and `CLAUDE.md` for Claude-specific compatibility)
+- Review all env vars in `docs/config.md`
 - Check out the API docs at http://localhost:8000/docs
 - View example clips in the frontend
 - Customize fonts by adding TTF files to `backend/fonts/`

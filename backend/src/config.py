@@ -5,8 +5,11 @@ load_dotenv()
 
 class Config:
     def __init__(self):
-        self.whisper_model = os.getenv("WHISPER_MODEL", "base")
-        self.llm = os.getenv("LLM_MODEL", "google-gla:gemini-2.5-flash-lite")
+        # Backward compatible env handling:
+        # - prefer the documented vars (LLM, WHISPER_MODEL_SIZE)
+        # - still accept legacy names used in older revisions
+        self.whisper_model = os.getenv("WHISPER_MODEL_SIZE") or os.getenv("WHISPER_MODEL", "medium")
+        self.llm = os.getenv("LLM") or os.getenv("LLM_MODEL") or "openai:gpt-5-mini"
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         self.google_api_key = os.getenv("GOOGLE_API_KEY")

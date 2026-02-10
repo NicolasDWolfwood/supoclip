@@ -21,13 +21,17 @@ from .database import init_db, close_db, get_db
 from .workers.job_queue import JobQueue
 from .api.routes import tasks
 
+# Ensure the log directory exists before configuring file logging.
+log_dir = Path("logs")
+log_dir.mkdir(parents=True, exist_ok=True)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('logs/backend.log')
+        logging.FileHandler(log_dir / "backend.log")
     ]
 )
 

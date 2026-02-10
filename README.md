@@ -1,47 +1,55 @@
-# Fuck OpusClip.
+# SupoClip
 
-... because good video clips shouldn't cost a fortune or come with ugly watermarks.
+Open-source AI video clipping, built as a self-hosted alternative to OpusClip.
 
-OpusClip charges $15-29/month and slaps watermarks on every free video. SupoClip gives you the same AI-powered video clipping capabilities - completely free, completely open source, and completely watermark-free, while still providing you with a hosted version, that doesn't cost the same amount as your mortgage.
+## What This Repo Contains
 
-> For the hosted version, sign up for the waitlist here: [SupoClip Hosted](https://supoclip.vercel.app)
+- `backend/`: FastAPI service for transcription, clip analysis, and video rendering
+- `frontend/`: Next.js app for task creation and clip management
+- `waitlist/`: Next.js waitlist/landing app for hosted offering
+- `docker-compose.yml`: local full-stack orchestration
 
-## Why SupoClip Exists
+## 60-Second Local Start
 
-### The OpusClip Problem
+```bash
+cp .env.example .env
+# edit .env and add ASSEMBLY_AI_API_KEY + one model provider key
+./start.sh
+```
 
-OpusClip is undeniably powerful. It's an AI video clipping tool that can turn long-form content into viral short clips with features like:
+Then open:
+- Frontend: http://localhost:3000
+- Backend API: http://localhost:8000
+- API docs: http://localhost:8000/docs
 
-- AI-powered clip generation from long videos
-- Automated captions with 97%+ accuracy
-- Virality scoring to predict viral potential
-- Multi-language support (20+ languages)
-- Brand templates and customization
+## Documentation Map
 
-**But here's the catch:**
+- Quick start and troubleshooting: `QUICKSTART.md`
+- Canonical config reference: `docs/config.md`
+- Agent/project-state guide: `AGENTS.md`
+- Claude compatibility guide: `CLAUDE.md`
+- Backend-specific development notes: `backend/README.md`
 
-- **Free plan limitations**: Only 60 minutes of processing per month
-- **Watermarks everywhere**: Every free video gets branded with OpusClip's watermark
-- **Expensive pricing**: $15/month for Starter, $29/month for Pro
-- **Processing limits**: Even paid plans have strict minute limits
-- **Vendor lock-in**: Your content and workflows are tied to their platform
+## Model And Runtime Defaults
 
-### The SupoClip Solution
+- Default LLM: `openai:gpt-5-mini`
+- Preferred model env var: `LLM`
+- Legacy model env var still accepted: `LLM_MODEL`
+- Preferred Whisper env var: `WHISPER_MODEL_SIZE`
+- Legacy Whisper env var still accepted: `WHISPER_MODEL`
+- Frontend local runtime: Node.js `20+` / npm `10+` (`frontend/.nvmrc`)
 
-SupoClip provides the same core functionality without the financial burden:
+## Backend Entrypoints
 
-→ ✅ **Completely Free** - No monthly fees, no processing limits
+- Docker/default path: `src.main_refactored:app`
+- Legacy local path: `src.main:app`
 
-→ ✅ **No Watermarks** - Your content stays yours
+## Current Risks / Known Gaps
 
-→ ✅ **Open Source** - Full transparency, community-driven development
-
-→ ✅ **Self-Hosted** - Complete control over your data and processing
-
-→ ✅ **Unlimited Usage** - Process as many videos as your hardware can handle
-
-→ ✅ **Customizable** - Modify and extend the codebase to fit your needs
+- Runtime quality depends on model/provider behavior and prompt consistency.
+- No lightweight model regression/eval suite is currently documented.
+- Repository is actively changing; keep docs aligned via `docs/config.md`.
 
 ## License
 
-SupoClip is released under the AGPL-3.0 License. See [LICENSE](LICENSE) for details.
+AGPL-3.0. See `LICENSE`.

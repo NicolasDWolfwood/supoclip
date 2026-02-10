@@ -16,12 +16,6 @@ import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
 import { PlayCircle, ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock } from "lucide-react";
 
-interface ProcessingStatus {
-  step: string;
-  message: string;
-  progress: number;
-}
-
 interface LatestTask {
   id: string;
   source_title: string;
@@ -40,7 +34,6 @@ export default function Home() {
   const [sourceType, setSourceType] = useState<"youtube" | "upload">("youtube");
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(null);
   const [sourceTitle, setSourceTitle] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { data: session, isPending } = useSession();
@@ -188,7 +181,6 @@ export default function Home() {
     setError(null);
     setStatusMessage("");
     setCurrentStep("");
-    setTaskId(null);
     setSourceTitle(null);
 
     try {
@@ -240,7 +232,6 @@ export default function Home() {
 
       const startResult = await startResponse.json();
       const taskIdFromStart = startResult.task_id;
-      setTaskId(taskIdFromStart);
 
       // Redirect immediately to the task page
       window.location.href = `/tasks/${taskIdFromStart}`;
@@ -256,7 +247,6 @@ export default function Home() {
       setFileName(null);
       fileRef.current = null;
       setUrl("");
-      setError(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }

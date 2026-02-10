@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import prisma from "@/lib/prisma";
 
 // GET /api/preferences - Get user preferences
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const session = await auth.api.getSession({
       headers: await headers(),
@@ -65,21 +65,21 @@ export async function PATCH(request: NextRequest) {
     const { fontFamily, fontSize, fontColor } = body;
 
     // Validate inputs
-    if (fontFamily && typeof fontFamily !== "string") {
+    if (fontFamily !== undefined && typeof fontFamily !== "string") {
       return NextResponse.json(
         { error: "Invalid fontFamily" },
         { status: 400 }
       );
     }
 
-    if (fontSize && (typeof fontSize !== "number" || fontSize < 12 || fontSize > 48)) {
+    if (fontSize !== undefined && (typeof fontSize !== "number" || fontSize < 12 || fontSize > 48)) {
       return NextResponse.json(
         { error: "Invalid fontSize (must be between 12 and 48)" },
         { status: 400 }
       );
     }
 
-    if (fontColor && !/^#[0-9A-Fa-f]{6}$/.test(fontColor)) {
+    if (fontColor !== undefined && !/^#[0-9A-Fa-f]{6}$/.test(fontColor)) {
       return NextResponse.json(
         { error: "Invalid fontColor (must be hex format like #FFFFFF)" },
         { status: 400 }
