@@ -22,6 +22,8 @@ class JobQueue:
     """Wrapper for arq job queue operations."""
 
     _pool: Optional[ArqRedis] = None
+    # Use ARQ's default Redis key so backend/worker remain aligned.
+    _queue_name = "arq:queue"
 
     @classmethod
     async def get_pool(cls) -> ArqRedis:
@@ -53,8 +55,8 @@ class JobQueue:
             job_id: Unique ID for the enqueued job
         """
         pool = await cls.get_pool()
-        job = await pool.enqueue_job(function_name, *args, **kwargs)
-        logger.info(f"Enqueued job {job.job_id}: {function_name}")
+        job = await pool.enqueue_job(function_name, *args, _queue_name=cls._queue_name, **kwargs)
+        logger.info(f"Enqueued job {job.job_id} on queue '{cls._queue_name}': {function_name}")
         return job.job_id
 
     @classmethod

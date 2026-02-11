@@ -126,7 +126,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
 @router.get("/{task_id}")
 async def get_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """Get task details."""
-    user_id = request.headers.get("user_id")
+    # EventSource in browsers cannot set custom headers, so allow query fallback.
+    user_id = request.headers.get("user_id") or request.query_params.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User authentication required")
 
@@ -183,7 +184,8 @@ async def get_task_progress_sse(task_id: str, request: Request, db: AsyncSession
     SSE endpoint for real-time progress updates.
     Streams progress updates as Server-Sent Events.
     """
-    user_id = request.headers.get("user_id")
+    # EventSource in browsers cannot set custom headers, so allow query fallback.
+    user_id = request.headers.get("user_id") or request.query_params.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="User authentication required")
 

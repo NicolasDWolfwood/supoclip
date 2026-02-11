@@ -6,7 +6,7 @@ Optimized for high-quality downloads and better error handling.
 import re
 from urllib.parse import urlparse, parse_qs
 import yt_dlp
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from pathlib import Path
 import logging
 import time
@@ -181,7 +181,11 @@ def get_youtube_video_title(url: str) -> Optional[str]:
     video_info = get_youtube_video_info(url)
     return video_info.get('title') if video_info else None
 
-def download_youtube_video(url: str, max_retries: int = 3) -> Optional[Path]:
+def download_youtube_video(
+    url: str,
+    max_retries: int = 3,
+    progress_callback: Optional[Callable[[int, str], None]] = None
+) -> Optional[Path]:
     """
     Download YouTube video with optimized settings and retry logic.
     Returns the path to the downloaded file, or None if download fails.
@@ -214,6 +218,34 @@ def download_youtube_video(url: str, max_retries: int = 3) -> Optional[Path]:
             logger.info(f"Download attempt {attempt + 1}/{max_retries}")
 
             ydl_opts = downloader.get_optimal_download_options(video_id)
+            last_progress = -1
+
+            def progress_hook(progress_data: Dict[str, Any]) -> None:
+                nonlocal last_progress
+                if not progress_callback:
+                    return
+
+                status = progress_data.get("status")
+                if status != "downloading":
+                    if status == "finished":
+                        progress_callback(100, "Downloading video... 100%")
+                    return
+
+                downloaded = progress_data.get("downloaded_bytes") or 0
+                total = progress_data.get("total_bytes") or progress_data.get("total_bytes_estimate") or 0
+
+                if total <= 0:
+                    return
+
+                percent = int((downloaded / total) * 100)
+                percent = max(0, min(100, percent))
+                if percent <= last_progress:
+                    return
+
+                last_progress = percent
+                progress_callback(percent, f"Downloading video... {percent}%")
+
+            ydl_opts["progress_hooks"] = [progress_hook]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # Download the video

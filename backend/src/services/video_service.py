@@ -4,6 +4,7 @@ Video service - handles video processing business logic.
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
+import asyncio
 
 from ..utils.async_helpers import run_in_thread
 from ..youtube_utils import (
@@ -26,13 +27,34 @@ class VideoService:
     """Service for video processing operations."""
 
     @staticmethod
-    async def download_video(url: str) -> Optional[Path]:
+    async def download_video(url: str, progress_callback: Optional[callable] = None) -> Optional[Path]:
         """
         Download a YouTube video asynchronously.
         Runs the sync download_youtube_video in a thread pool.
         """
         logger.info(f"Starting video download: {url}")
-        video_path = await run_in_thread(download_youtube_video, url)
+        loop = asyncio.get_running_loop()
+
+        def on_download_progress(download_percent: int, message: str):
+            if not progress_callback:
+                return
+
+            # Download stage occupies 10%-30% of overall progress.
+            overall_progress = 10 + int((max(0, min(100, download_percent)) / 100) * 20)
+            asyncio.run_coroutine_threadsafe(
+                progress_callback(
+                    overall_progress,
+                    message,
+                    {
+                        "stage": "download",
+                        "stage_progress": max(0, min(100, download_percent)),
+                        "overall_progress": overall_progress,
+                    },
+                ),
+                loop,
+            )
+
+        video_path = await run_in_thread(download_youtube_video, url, 3, on_download_progress)
 
         if not video_path:
             logger.error(f"Failed to download video: {url}")
@@ -151,10 +173,14 @@ class VideoService:
         try:
             # Step 1: Get video path (download or use existing)
             if progress_callback:
-                await progress_callback(10, "Downloading video...")
+                await progress_callback(
+                    10,
+                    "Downloading video...",
+                    {"stage": "download", "stage_progress": 0, "overall_progress": 10}
+                )
 
             if source_type == "youtube":
-                video_path = await VideoService.download_video(url)
+                video_path = await VideoService.download_video(url, progress_callback=progress_callback)
                 if not video_path:
                     raise Exception("Failed to download video")
             else:
@@ -162,19 +188,31 @@ class VideoService:
 
             # Step 2: Generate transcript
             if progress_callback:
-                await progress_callback(30, "Generating transcript...")
+                await progress_callback(
+                    30,
+                    "Generating transcript...",
+                    {"stage": "transcript", "stage_progress": 0, "overall_progress": 30}
+                )
 
             transcript = await VideoService.generate_transcript(video_path)
 
             # Step 3: AI analysis
             if progress_callback:
-                await progress_callback(50, "Analyzing content with AI...")
+                await progress_callback(
+                    50,
+                    "Analyzing content with AI...",
+                    {"stage": "analysis", "stage_progress": 0, "overall_progress": 50}
+                )
 
             relevant_parts = await VideoService.analyze_transcript(transcript)
 
             # Step 4: Create clips
             if progress_callback:
-                await progress_callback(70, "Creating video clips...")
+                await progress_callback(
+                    70,
+                    "Creating video clips...",
+                    {"stage": "clips", "stage_progress": 0, "overall_progress": 70}
+                )
 
             segments_json = [
                 {
@@ -196,7 +234,11 @@ class VideoService:
             )
 
             if progress_callback:
-                await progress_callback(100, "Processing complete!")
+                await progress_callback(
+                    100,
+                    "Processing complete!",
+                    {"stage": "finalizing", "stage_progress": 100, "overall_progress": 100}
+                )
 
             return {
                 "segments": segments_json,

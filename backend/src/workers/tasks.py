@@ -2,7 +2,7 @@
 Worker tasks - background jobs processed by arq workers.
 """
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -48,8 +48,8 @@ async def process_video_task(
 
         try:
             # Progress callback
-            async def update_progress(percent: int, message: str):
-                await progress.update(percent, message)
+            async def update_progress(percent: int, message: str, metadata: Optional[Dict[str, Any]] = None):
+                await progress.update(percent, message, metadata=metadata)
                 logger.info(f"Task {task_id}: {percent}% - {message}")
 
             # Process the video
@@ -85,7 +85,8 @@ class WorkerSettings:
 
     # Functions to run
     functions = [process_video_task]
-    queue_name = "supoclip_tasks"
+    # Must match the exact Redis ZSET key used by ArqRedis.enqueue_job.
+    queue_name = "arq:queue"
 
     # Redis settings from environment
     redis_settings = RedisSettings(

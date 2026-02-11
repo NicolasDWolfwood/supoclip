@@ -95,12 +95,12 @@ class TaskService:
             )
 
             # Progress callback wrapper
-            async def update_progress(progress: int, message: str):
+            async def update_progress(progress: int, message: str, metadata: Optional[Dict[str, Any]] = None):
                 await self.task_repo.update_task_status(
                     self.db, task_id, "processing", progress=progress, progress_message=message
                 )
                 if progress_callback:
-                    await progress_callback(progress, message)
+                    await progress_callback(progress, message, metadata)
 
             # Process video with progress updates
             result = await self.video_service.process_video_complete(

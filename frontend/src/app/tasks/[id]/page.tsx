@@ -55,6 +55,53 @@ interface TaskDetails {
   font_color?: string;
 }
 
+type StageKey = "download" | "transcript" | "analysis" | "clips" | "finalizing";
+
+const STAGE_LABELS: Record<StageKey, string> = {
+  download: "Download",
+  transcript: "Transcript",
+  analysis: "AI Analysis",
+  clips: "Clip Creation",
+  finalizing: "Finalizing",
+};
+
+const EMPTY_STAGE_PROGRESS: Record<StageKey, number> = {
+  download: 0,
+  transcript: 0,
+  analysis: 0,
+  clips: 0,
+  finalizing: 0,
+};
+
+function clampPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function deriveStageProgress(
+  overallProgress: number,
+  progressMessage: string,
+  current: Record<StageKey, number>
+): Record<StageKey, number> {
+  const next = { ...current };
+  const overall = clampPercent(overallProgress);
+  const message = progressMessage.toLowerCase();
+
+  if (message.includes("download")) {
+    const match = progressMessage.match(/(\d{1,3})%/);
+    if (match) {
+      next.download = Math.max(next.download, clampPercent(Number(match[1])));
+    }
+  }
+
+  if (overall >= 30) next.download = Math.max(next.download, 100);
+  if (overall >= 50) next.transcript = Math.max(next.transcript, 100);
+  if (overall >= 70) next.analysis = Math.max(next.analysis, 100);
+  if (overall >= 95) next.clips = Math.max(next.clips, 100);
+  if (overall >= 100) next.finalizing = 100;
+
+  return next;
+}
+
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
@@ -65,6 +112,7 @@ export default function TaskPage() {
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
+  const [stageProgress, setStageProgress] = useState<Record<StageKey, number>>(EMPTY_STAGE_PROGRESS);
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -99,8 +147,11 @@ export default function TaskPage() {
 
       const taskData = await taskResponse.json();
       setTask(taskData);
-      setProgress(taskData.progress ?? 0);
-      setProgressMessage(taskData.progress_message ?? "");
+      const nextProgress = taskData.progress ?? 0;
+      const nextMessage = taskData.progress_message ?? "";
+      setProgress(nextProgress);
+      setProgressMessage(nextMessage);
+      setStageProgress((prev) => deriveStageProgress(nextProgress, nextMessage, prev));
       setError(null);
 
       // Only fetch clips if task is completed
@@ -162,6 +213,62 @@ export default function TaskPage() {
       window.clearInterval(intervalId);
     };
   }, [fetchTaskStatus, task?.status, taskId, userId]);
+
+  // Subscribe to backend SSE progress stream for real-time updates.
+  useEffect(() => {
+    if (!taskId || !userId || !task?.status) return;
+    if (task.status !== "queued" && task.status !== "processing") return;
+
+    const progressUrl = `${apiUrl}/tasks/${taskId}/progress?user_id=${encodeURIComponent(userId)}`;
+    const eventSource = new EventSource(progressUrl);
+
+    const handleStatusOrProgress = (event: MessageEvent) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (typeof data.progress === "number") setProgress(data.progress);
+        if (typeof data.message === "string") setProgressMessage(data.message);
+        const metadata = (data?.metadata ?? {}) as { stage?: StageKey; stage_progress?: number };
+        if (metadata.stage && metadata.stage in STAGE_LABELS) {
+          setStageProgress((prev) => ({
+            ...prev,
+            [metadata.stage as StageKey]: Math.max(
+              prev[metadata.stage as StageKey],
+              clampPercent(metadata.stage_progress ?? 0)
+            ),
+          }));
+        } else {
+          const nextProgress = typeof data.progress === "number" ? data.progress : progress;
+          const nextMessage = typeof data.message === "string" ? data.message : progressMessage;
+          setStageProgress((prev) => deriveStageProgress(nextProgress, nextMessage, prev));
+        }
+        if (typeof data.status === "string") {
+          setTask((prev) => (prev ? { ...prev, status: data.status } : prev));
+        }
+      } catch (err) {
+        console.error("Failed to parse progress event:", err);
+      }
+    };
+
+    const handleClose = () => {
+      eventSource.close();
+      // Refresh once when stream closes to fetch final task/clips state.
+      fetchTaskStatus();
+    };
+
+    eventSource.addEventListener("status", handleStatusOrProgress);
+    eventSource.addEventListener("progress", handleStatusOrProgress);
+    eventSource.addEventListener("close", handleClose);
+    eventSource.onerror = () => {
+      eventSource.close();
+    };
+
+    return () => {
+      eventSource.removeEventListener("status", handleStatusOrProgress);
+      eventSource.removeEventListener("progress", handleStatusOrProgress);
+      eventSource.removeEventListener("close", handleClose);
+      eventSource.close();
+    };
+  }, [apiUrl, fetchTaskStatus, task?.status, taskId, userId]);
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -453,7 +560,7 @@ export default function TaskPage() {
                   {progress > 0 && (
                     <div className="w-full">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-500">Progress</span>
+                        <span className="text-xs text-gray-500">Overall</span>
                         <span className="text-xs font-medium text-blue-600">{progress}%</span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2">
@@ -462,6 +569,25 @@ export default function TaskPage() {
                           style={{ width: `${progress}%` }}
                         />
                       </div>
+                    </div>
+                  )}
+
+                  {progress > 0 && (
+                    <div className="space-y-2">
+                      {(Object.keys(STAGE_LABELS) as StageKey[]).map((stage) => (
+                        <div key={stage} className="w-full">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs text-gray-500">{STAGE_LABELS[stage]}</span>
+                            <span className="text-xs font-medium text-gray-700">{stageProgress[stage]}%</span>
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-1.5">
+                            <div
+                              className="bg-blue-500 h-1.5 rounded-full transition-all duration-500 ease-out"
+                              style={{ width: `${stageProgress[stage]}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
 
