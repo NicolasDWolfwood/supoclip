@@ -1,6 +1,15 @@
 # Use Bun as the base image
 FROM oven/bun:1.2-debian AS base
 
+# Install Node.js 22.x for tooling that requires modern Node (e.g. Prisma 7, Next 16)
+ARG NODE_VERSION=22.13.1
+RUN apt-get update && apt-get install -y curl ca-certificates xz-utils \
+    && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 \
+    && rm -f /tmp/node.tar.xz \
+    && rm -rf /var/lib/apt/lists/* \
+    && node -v && npm -v && bun -v
+
 # Dependencies stage
 FROM base AS deps
 WORKDIR /app

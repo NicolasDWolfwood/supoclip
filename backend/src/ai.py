@@ -66,7 +66,7 @@ Find 3-7 compelling segments that would work well as standalone clips. Quality o
 # Create simplified agent
 transcript_agent = Agent(
     model=config.llm,
-    result_type=TranscriptAnalysis,
+    output_type=TranscriptAnalysis,
     system_prompt=simplified_system_prompt
 )
 
