@@ -14,6 +14,7 @@ from ..youtube_utils import (
 )
 from ..video_utils import (
     get_video_transcript,
+    get_cached_formatted_transcript,
     create_clips_with_transitions
 )
 from ..ai import get_most_relevant_parts_by_transcript
@@ -41,6 +42,7 @@ class VideoService:
 
             # Download stage occupies 10%-30% of overall progress.
             overall_progress = 10 + int((max(0, min(100, download_percent)) / 100) * 20)
+            is_cached = "skipping download" in message.lower() or "found existing download" in message.lower()
             asyncio.run_coroutine_threadsafe(
                 progress_callback(
                     overall_progress,
@@ -49,6 +51,7 @@ class VideoService:
                         "stage": "download",
                         "stage_progress": max(0, min(100, download_percent)),
                         "overall_progress": overall_progress,
+                        "cached": is_cached,
                     },
                 ),
                 loop,
@@ -88,6 +91,58 @@ class VideoService:
         return transcript
 
     @staticmethod
+    async def generate_transcript_with_progress(video_path: Path, progress_callback: Optional[callable] = None) -> str:
+        """
+        Generate transcript and emit heartbeat progress while waiting for AssemblyAI.
+        This prevents the UI from appearing stuck during long transcription calls.
+        """
+        cached_transcript = await run_in_thread(get_cached_formatted_transcript, str(video_path))
+        if cached_transcript:
+            logger.info(f"Using cached transcript for: {video_path.name}")
+            if progress_callback:
+                await progress_callback(
+                    50,
+                    "Found existing transcript, skipping transcription.",
+                    {"stage": "transcript", "stage_progress": 100, "overall_progress": 50, "cached": True},
+                )
+            return cached_transcript
+
+        heartbeat_task = None
+        stop_heartbeat = asyncio.Event()
+
+        async def heartbeat():
+            # Transcript stage maps to overall progress range 30..50.
+            overall = 31
+            stage_progress = 5
+            while not stop_heartbeat.is_set():
+                if progress_callback:
+                    await progress_callback(
+                        min(overall, 49),
+                        "Generating transcript...",
+                        {
+                            "stage": "transcript",
+                            "stage_progress": min(stage_progress, 95),
+                            "overall_progress": min(overall, 49),
+                        },
+                    )
+                overall += 1
+                stage_progress += 5
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=4)
+                except asyncio.TimeoutError:
+                    pass
+
+        try:
+            if progress_callback:
+                heartbeat_task = asyncio.create_task(heartbeat())
+            transcript = await VideoService.generate_transcript(video_path)
+            return transcript
+        finally:
+            stop_heartbeat.set()
+            if heartbeat_task:
+                await heartbeat_task
+
+    @staticmethod
     async def analyze_transcript(transcript: str) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -97,6 +152,49 @@ class VideoService:
         relevant_parts = await get_most_relevant_parts_by_transcript(transcript)
         logger.info(f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found")
         return relevant_parts
+
+    @staticmethod
+    async def analyze_transcript_with_progress(
+        transcript: str,
+        progress_callback: Optional[callable] = None,
+    ) -> Any:
+        """
+        Analyze transcript and emit heartbeat progress while waiting for the LLM call.
+        This keeps UI progress moving during long AI analysis.
+        """
+        heartbeat_task = None
+        stop_heartbeat = asyncio.Event()
+
+        async def heartbeat():
+            # Analysis stage maps to overall progress range 50..70.
+            overall = 51
+            stage_progress = 5
+            while not stop_heartbeat.is_set():
+                if progress_callback:
+                    await progress_callback(
+                        min(overall, 69),
+                        "Analyzing content with AI...",
+                        {
+                            "stage": "analysis",
+                            "stage_progress": min(stage_progress, 95),
+                            "overall_progress": min(overall, 69),
+                        },
+                    )
+                overall += 1
+                stage_progress += 5
+                try:
+                    await asyncio.wait_for(stop_heartbeat.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    pass
+
+        try:
+            if progress_callback:
+                heartbeat_task = asyncio.create_task(heartbeat())
+            return await VideoService.analyze_transcript(transcript)
+        finally:
+            stop_heartbeat.set()
+            if heartbeat_task:
+                await heartbeat_task
 
     @staticmethod
     async def create_video_clips(
@@ -194,7 +292,10 @@ class VideoService:
                     {"stage": "transcript", "stage_progress": 0, "overall_progress": 30}
                 )
 
-            transcript = await VideoService.generate_transcript(video_path)
+            transcript = await VideoService.generate_transcript_with_progress(
+                video_path,
+                progress_callback=progress_callback,
+            )
 
             # Step 3: AI analysis
             if progress_callback:
@@ -204,7 +305,10 @@ class VideoService:
                     {"stage": "analysis", "stage_progress": 0, "overall_progress": 50}
                 )
 
-            relevant_parts = await VideoService.analyze_transcript(transcript)
+            relevant_parts = await VideoService.analyze_transcript_with_progress(
+                transcript,
+                progress_callback=progress_callback,
+            )
 
             # Step 4: Create clips
             if progress_callback:
@@ -244,7 +348,8 @@ class VideoService:
                 "segments": segments_json,
                 "clips": clips_info,
                 "summary": relevant_parts.summary if relevant_parts else None,
-                "key_topics": relevant_parts.key_topics if relevant_parts else None
+                "key_topics": relevant_parts.key_topics if relevant_parts else None,
+                "analysis_diagnostics": relevant_parts.diagnostics if relevant_parts else None,
             }
 
         except Exception as e:

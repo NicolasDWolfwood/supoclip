@@ -73,6 +73,14 @@ const EMPTY_STAGE_PROGRESS: Record<StageKey, number> = {
   finalizing: 0,
 };
 
+const EMPTY_STAGE_NOTES: Record<StageKey, string> = {
+  download: "",
+  transcript: "",
+  analysis: "",
+  clips: "",
+  finalizing: "",
+};
+
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
@@ -113,6 +121,7 @@ export default function TaskPage() {
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState("");
   const [stageProgress, setStageProgress] = useState<Record<StageKey, number>>(EMPTY_STAGE_PROGRESS);
+  const [stageNotes, setStageNotes] = useState<Record<StageKey, string>>(EMPTY_STAGE_NOTES);
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -152,6 +161,15 @@ export default function TaskPage() {
       setProgress(nextProgress);
       setProgressMessage(nextMessage);
       setStageProgress((prev) => deriveStageProgress(nextProgress, nextMessage, prev));
+      if (typeof nextMessage === "string") {
+        const lower = nextMessage.toLowerCase();
+        if (lower.includes("found existing download") || lower.includes("skipping download")) {
+          setStageNotes((prev) => ({ ...prev, download: "previous download found" }));
+        }
+        if (lower.includes("found existing transcript") || lower.includes("skipping transcription")) {
+          setStageNotes((prev) => ({ ...prev, transcript: "previous transcript found" }));
+        }
+      }
       setError(null);
 
       // Only fetch clips if task is completed
@@ -227,7 +245,16 @@ export default function TaskPage() {
         const data = JSON.parse(event.data);
         if (typeof data.progress === "number") setProgress(data.progress);
         if (typeof data.message === "string") setProgressMessage(data.message);
-        const metadata = (data?.metadata ?? {}) as { stage?: StageKey; stage_progress?: number };
+        if (typeof data.message === "string") {
+          const lowerMessage = data.message.toLowerCase();
+          if (lowerMessage.includes("found existing download") || lowerMessage.includes("skipping download")) {
+            setStageNotes((prev) => ({ ...prev, download: "previous download found" }));
+          }
+          if (lowerMessage.includes("found existing transcript") || lowerMessage.includes("skipping transcription")) {
+            setStageNotes((prev) => ({ ...prev, transcript: "previous transcript found" }));
+          }
+        }
+        const metadata = (data?.metadata ?? {}) as { stage?: StageKey; stage_progress?: number; cached?: boolean };
         if (metadata.stage && metadata.stage in STAGE_LABELS) {
           setStageProgress((prev) => ({
             ...prev,
@@ -236,6 +263,17 @@ export default function TaskPage() {
               clampPercent(metadata.stage_progress ?? 0)
             ),
           }));
+          if (metadata.cached) {
+            setStageNotes((prev) => {
+              const note =
+                metadata.stage === "download"
+                  ? "previous download found"
+                  : metadata.stage === "transcript"
+                    ? "previous transcript found"
+                    : "cached";
+              return { ...prev, [metadata.stage as StageKey]: note };
+            });
+          }
         } else {
           const nextProgress = typeof data.progress === "number" ? data.progress : progress;
           const nextMessage = typeof data.message === "string" ? data.message : progressMessage;
@@ -354,6 +392,35 @@ export default function TaskPage() {
       console.error("Error deleting clip:", err);
       alert("Failed to delete clip");
     }
+  };
+
+  const displayProgressMessage = (() => {
+    const msg = progressMessage || "";
+    const lower = msg.toLowerCase();
+    if (lower.includes("found existing download") || lower.includes("skipping download")) {
+      return "Processing video and generating clips...";
+    }
+    return msg;
+  })();
+
+  const getStageStatusLabel = (stage: StageKey): string => {
+    if (stageNotes[stage]) {
+      return stageNotes[stage];
+    }
+
+    // Fallback for cases where the cached transcript event was missed:
+    // if download is cached and transcript is fully complete early in the pipeline,
+    // treat transcript as cached for display purposes.
+    if (
+      stage === "transcript" &&
+      stageProgress.transcript >= 100 &&
+      stageNotes.download === "previous download found" &&
+      progress < 70
+    ) {
+      return "previous transcript found";
+    }
+
+    return `${stageProgress[stage]}%`;
   };
 
   if (isPending) {
@@ -551,7 +618,7 @@ export default function TaskPage() {
                   <div className="flex items-center justify-center gap-3">
                     <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                     <p className="text-sm font-medium text-black">
-                      {progressMessage ||
+                      {displayProgressMessage ||
                         (!task ? "Initializing your task..." : "Processing video and generating clips...")}
                     </p>
                   </div>
@@ -578,7 +645,9 @@ export default function TaskPage() {
                         <div key={stage} className="w-full">
                           <div className="flex items-center justify-between mb-1">
                             <span className="text-xs text-gray-500">{STAGE_LABELS[stage]}</span>
-                            <span className="text-xs font-medium text-gray-700">{stageProgress[stage]}%</span>
+                            <span className="text-xs font-medium text-gray-700">
+                              {getStageStatusLabel(stage)}
+                            </span>
                           </div>
                           <div className="w-full bg-gray-200 rounded-full h-1.5">
                             <div
@@ -665,6 +734,11 @@ export default function TaskPage() {
                     The task completed but no clips were generated. The video may not have had suitable content for
                     clipping.
                   </p>
+                  {task?.progress_message && (
+                    <p className="text-sm text-left text-gray-700 bg-gray-50 border border-gray-200 rounded p-3 mb-4">
+                      {task.progress_message}
+                    </p>
+                  )}
                   <Link href="/">
                     <Button>
                       <ArrowLeft className="w-4 h-4 mr-2" />

@@ -4,6 +4,7 @@ Task service - orchestrates task creation and processing workflow.
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, Optional, Callable
 import logging
+import asyncio
 
 from ..repositories.task_repository import TaskRepository
 from ..repositories.source_repository import SourceRepository
@@ -95,12 +96,17 @@ class TaskService:
             )
 
             # Progress callback wrapper
+            progress_lock = asyncio.Lock()
+
             async def update_progress(progress: int, message: str, metadata: Optional[Dict[str, Any]] = None):
-                await self.task_repo.update_task_status(
-                    self.db, task_id, "processing", progress=progress, progress_message=message
-                )
-                if progress_callback:
-                    await progress_callback(progress, message, metadata)
+                # Progress updates can arrive from background thread callbacks.
+                # Serialize DB updates to avoid AsyncSession concurrent-use errors.
+                async with progress_lock:
+                    await self.task_repo.update_task_status(
+                        self.db, task_id, "processing", progress=progress, progress_message=message
+                    )
+                    if progress_callback:
+                        await progress_callback(progress, message, metadata)
 
             # Process video with progress updates
             result = await self.video_service.process_video_complete(
@@ -137,9 +143,39 @@ class TaskService:
             # Update task with clip IDs
             await self.task_repo.update_task_clips(self.db, task_id, clip_ids)
 
+            completion_message = "Complete!"
+            if len(clip_ids) == 0:
+                diagnostics = result.get("analysis_diagnostics") or {}
+                raw_segments = diagnostics.get("raw_segments")
+                validated_segments = diagnostics.get("validated_segments")
+                error_text = diagnostics.get("error")
+
+                if error_text:
+                    completion_message = f"No clips generated: AI analysis failed ({error_text})"
+                elif raw_segments is not None and validated_segments is not None:
+                    rejected_counts = diagnostics.get("rejected_counts") or {}
+                    reject_bits = []
+                    for key in [
+                        "insufficient_text",
+                        "identical_timestamps",
+                        "invalid_duration",
+                        "too_short",
+                        "invalid_timestamp_format",
+                    ]:
+                        count = rejected_counts.get(key, 0)
+                        if count:
+                            reject_bits.append(f"{key}={count}")
+                    rejection_summary = f" Rejections: {', '.join(reject_bits)}." if reject_bits else ""
+                    completion_message = (
+                        f"No clips generated: AI returned {raw_segments} segments, "
+                        f"{validated_segments} passed validation.{rejection_summary}"
+                    )
+                else:
+                    completion_message = "No clips generated: no valid highlight segments were detected."
+
             # Mark as completed
             await self.task_repo.update_task_status(
-                self.db, task_id, "completed", progress=100, progress_message="Complete!"
+                self.db, task_id, "completed", progress=100, progress_message=completion_message
             )
 
             logger.info(f"Task {task_id} completed successfully with {len(clip_ids)} clips")

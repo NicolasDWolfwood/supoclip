@@ -208,6 +208,15 @@ def download_youtube_video(
 
     downloader = YouTubeDownloader()
 
+    # Fast path: reuse an already-downloaded local file.
+    for file_path in downloader.temp_dir.glob(f"{video_id}.*"):
+        if file_path.is_file() and file_path.suffix.lower() in [".mp4", ".mkv", ".webm"]:
+            file_size_mb = file_path.stat().st_size // 1024 // 1024
+            logger.info(f"Using cached download: {file_path.name} ({file_size_mb}MB)")
+            if progress_callback:
+                progress_callback(100, f"Found existing download ({file_path.name}), skipping download.")
+            return file_path
+
     # Get video info first to validate and get metadata
     video_info = get_youtube_video_info(url)
     if not video_info:

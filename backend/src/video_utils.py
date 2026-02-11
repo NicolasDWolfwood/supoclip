@@ -4,7 +4,7 @@ Optimized for MoviePy v2, AssemblyAI integration, and high-quality output.
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Tuple, Optional, Union
 import os
 import logging
 import numpy as np
@@ -57,8 +57,9 @@ class VideoProcessor:
         }
         return settings.get(target_quality, settings["high"])
 
-def get_video_transcript(video_path: Path) -> str:
+def get_video_transcript(video_path: Union[Path, str]) -> str:
     """Get transcript using AssemblyAI with word-level timing for precise subtitles."""
+    video_path = Path(video_path)
     logger.info(f"Getting transcript for: {video_path}")
 
     # Configure AssemblyAI
@@ -70,7 +71,7 @@ def get_video_transcript(video_path: Path) -> str:
         speaker_labels=False,
         punctuate=True,
         format_text=True,
-        speech_model=aai.SpeechModel.best
+        speech_models=["universal-2"]
     )
 
     try:
@@ -122,6 +123,7 @@ def get_video_transcript(video_path: Path) -> str:
 
         # Cache the raw transcript for subtitle generation
         cache_transcript_data(video_path, transcript)
+        cache_formatted_transcript(video_path, formatted_lines)
 
         result = '\n'.join(formatted_lines)
         logger.info(f"Transcript formatted: {len(formatted_lines)} segments, {len(result)} chars")
@@ -156,6 +158,14 @@ def cache_transcript_data(video_path: Path, transcript) -> None:
 
     logger.info(f"Cached {len(words_data)} words to {cache_path}")
 
+def cache_formatted_transcript(video_path: Path, formatted_lines: List[str]) -> None:
+    """Cache formatted transcript text used by AI analysis."""
+    transcript_path = video_path.with_suffix('.transcript.txt')
+    transcript_text = '\n'.join(formatted_lines)
+    with open(transcript_path, 'w', encoding='utf-8') as f:
+        f.write(transcript_text)
+    logger.info(f"Cached formatted transcript to {transcript_path}")
+
 def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
     """Load cached AssemblyAI transcript data."""
     cache_path = video_path.with_suffix('.transcript_cache.json')
@@ -169,6 +179,84 @@ def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
     except Exception as e:
         logger.warning(f"Failed to load transcript cache: {e}")
         return None
+
+def build_formatted_transcript_from_words(words: List[Dict[str, Any]]) -> str:
+    """Build AI-analysis transcript text from cached word-level timings."""
+    if not words:
+        return ""
+
+    formatted_lines = []
+    current_segment: List[str] = []
+    current_start: Optional[int] = None
+    segment_word_count = 0
+    max_words_per_segment = 8
+
+    for word in words:
+        word_text = str(word.get('text', '')).strip()
+        if not word_text:
+            continue
+
+        word_start = word.get('start')
+        word_end = word.get('end')
+        if word_start is None or word_end is None:
+            continue
+
+        if current_start is None:
+            current_start = int(word_start)
+
+        current_segment.append(word_text)
+        segment_word_count += 1
+
+        if (
+            segment_word_count >= max_words_per_segment
+            or word_text.endswith('.')
+            or word_text.endswith('!')
+            or word_text.endswith('?')
+        ):
+            start_time = format_ms_to_timestamp(current_start)
+            end_time = format_ms_to_timestamp(int(word_end))
+            text = ' '.join(current_segment)
+            formatted_lines.append(f"[{start_time} - {end_time}] {text}")
+            current_segment = []
+            current_start = None
+            segment_word_count = 0
+
+    if current_segment and current_start is not None:
+        last_word_end = int(words[-1].get('end') or current_start)
+        start_time = format_ms_to_timestamp(current_start)
+        end_time = format_ms_to_timestamp(last_word_end)
+        text = ' '.join(current_segment)
+        formatted_lines.append(f"[{start_time} - {end_time}] {text}")
+
+    return '\n'.join(formatted_lines)
+
+def get_cached_formatted_transcript(video_path: Union[Path, str]) -> Optional[str]:
+    """Load cached formatted transcript text for AI analysis if available."""
+    video_path = Path(video_path)
+    transcript_path = video_path.with_suffix('.transcript.txt')
+
+    if transcript_path.exists():
+        try:
+            content = transcript_path.read_text(encoding='utf-8').strip()
+            if content:
+                return content
+        except Exception as e:
+            logger.warning(f"Failed to read cached formatted transcript: {e}")
+
+    cached_data = load_cached_transcript_data(video_path)
+    if not cached_data:
+        return None
+
+    words = cached_data.get('words') or []
+    rebuilt = build_formatted_transcript_from_words(words).strip()
+    if rebuilt:
+        try:
+            transcript_path.write_text(rebuilt, encoding='utf-8')
+        except Exception as e:
+            logger.warning(f"Failed to persist rebuilt transcript cache: {e}")
+        return rebuilt
+
+    return None
 
 def format_ms_to_timestamp(ms: int) -> str:
     """Format milliseconds to MM:SS format."""

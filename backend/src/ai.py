@@ -29,6 +29,7 @@ class TranscriptAnalysis(BaseModel):
     most_relevant_segments: List[TranscriptSegment]
     summary: str = Field(description="Brief summary of the video content")
     key_topics: List[str] = Field(description="List of main topics discussed")
+    diagnostics: Dict[str, Any] = Field(default_factory=dict, description="Internal analysis diagnostics")
 
 # Simplified system prompt that trusts AssemblyAI timing
 simplified_system_prompt = """You are an expert at analyzing video transcripts to find the most engaging segments for short-form content creation.
@@ -84,20 +85,31 @@ Transcript:
 {transcript}"""
         )
 
-        analysis = result.data
+        analysis = getattr(result, "data", None) or getattr(result, "output", None)
+        if analysis is None:
+            raise RuntimeError("AI result did not contain parsed output (expected .data or .output)")
         logger.info(f"AI analysis found {len(analysis.most_relevant_segments)} segments")
 
         # Simple validation - just ensure segments have content
         validated_segments = []
+        rejected_counts = {
+            "insufficient_text": 0,
+            "identical_timestamps": 0,
+            "invalid_duration": 0,
+            "too_short": 0,
+            "invalid_timestamp_format": 0,
+        }
         for segment in analysis.most_relevant_segments:
             # Validate text content
             if not segment.text.strip() or len(segment.text.split()) < 3:  # At least 3 words
                 logger.warning(f"Skipping segment with insufficient content: '{segment.text[:50]}...'")
+                rejected_counts["insufficient_text"] += 1
                 continue
 
             # Validate timestamps - CRITICAL: start and end must be different
             if segment.start_time == segment.end_time:
                 logger.warning(f"Skipping segment with identical start/end times: {segment.start_time}")
+                rejected_counts["identical_timestamps"] += 1
                 continue
 
             # Parse timestamps to validate duration
@@ -112,10 +124,12 @@ Transcript:
 
                 if duration <= 0:
                     logger.warning(f"Skipping segment with invalid duration: {segment.start_time} to {segment.end_time} = {duration}s")
+                    rejected_counts["invalid_duration"] += 1
                     continue
 
                 if duration < 5:  # Minimum 5 seconds
                     logger.warning(f"Skipping segment too short: {duration}s (min 5s required)")
+                    rejected_counts["too_short"] += 1
                     continue
 
                 validated_segments.append(segment)
@@ -123,6 +137,7 @@ Transcript:
 
             except (ValueError, IndexError) as e:
                 logger.warning(f"Skipping segment with invalid timestamp format: {segment.start_time}-{segment.end_time}: {e}")
+                rejected_counts["invalid_timestamp_format"] += 1
                 continue
 
         # Sort by relevance
@@ -131,7 +146,12 @@ Transcript:
         final_analysis = TranscriptAnalysis(
             most_relevant_segments=validated_segments,
             summary=analysis.summary,
-            key_topics=analysis.key_topics
+            key_topics=analysis.key_topics,
+            diagnostics={
+                "raw_segments": len(analysis.most_relevant_segments),
+                "validated_segments": len(validated_segments),
+                "rejected_counts": rejected_counts,
+            },
         )
 
         logger.info(f"Selected {len(validated_segments)} segments for processing")
@@ -145,7 +165,11 @@ Transcript:
         return TranscriptAnalysis(
             most_relevant_segments=[],
             summary=f"Analysis failed: {str(e)}",
-            key_topics=[]
+            key_topics=[],
+            diagnostics={
+                "error": str(e),
+                "error_type": type(e).__name__,
+            },
         )
 
 def get_most_relevant_parts_sync(transcript: str) -> TranscriptAnalysis:
