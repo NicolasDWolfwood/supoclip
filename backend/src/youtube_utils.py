@@ -29,8 +29,16 @@ class YouTubeDownloader:
 
         return {
             'outtmpl': str(output_path),
-            # More permissive format selection to avoid "format not available" errors
-            'format': 'bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b',
+            # Prefer 1080p mp4 + m4a first, then gracefully fall back to lower resolutions.
+            # Order is important: first match wins.
+            'format': (
+                'bestvideo[height=1080][ext=mp4]+bestaudio[ext=m4a]/'
+                'best[height=1080][ext=mp4]/'
+                'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/'
+                'best[height<=1080][ext=mp4]/'
+                'bestvideo[height<=1080]+bestaudio/'
+                'best[height<=1080]'
+            ),
             'merge_output_format': 'mp4',
             'writesubtitles': False,
             'writeautomaticsub': False,
@@ -54,7 +62,8 @@ class YouTubeDownloader:
             # Simplified YouTube bypass - use android client for better reliability
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android', 'web'],
+                    # Prefer android_vr; android often requires PO tokens for better formats.
+                    'player_client': ['android_vr', 'android', 'web'],
                 }
             },
             # Post-processing options

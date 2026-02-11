@@ -44,8 +44,8 @@ services:
       - "8000:8000"
     volumes:
       - ./backend/src:/app/src
-      - uploads:/app/uploads
-      - clips:/app/clips
+      - ./backend/uploads:/app/uploads
+      - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
     environment:
@@ -86,8 +86,8 @@ services:
     command: [".venv/bin/arq", "src.workers.tasks.WorkerSettings"]
     volumes:
       - ./backend/src:/app/src
-      - uploads:/app/uploads
-      - clips:/app/clips
+      - ./backend/uploads:/app/uploads
+      - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
     environment:
@@ -148,10 +148,6 @@ services:
       retries: 3
 
 volumes:
-  uploads:
-    driver: local
-  clips:
-    driver: local
   redis_data:
     driver: local
   postgres_data:
