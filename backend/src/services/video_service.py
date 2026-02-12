@@ -202,7 +202,8 @@ class VideoService:
         segments: List[Dict[str, Any]],
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
-        font_color: str = "#FFFFFF"
+        font_color: str = "#FFFFFF",
+        progress_callback: Optional[callable] = None,
     ) -> Dict[str, Any]:
         """
         Create video clips from segments with transitions and subtitles.
@@ -212,6 +213,26 @@ class VideoService:
         clips_output_dir = Path(config.temp_dir) / "clips"
         clips_output_dir.mkdir(parents=True, exist_ok=True)
         render_diagnostics: Dict[str, Any] = {}
+        loop = asyncio.get_running_loop()
+
+        def on_clip_progress(completed: int, total: int) -> None:
+            if not progress_callback or total <= 0:
+                return
+            pct = int((max(0, min(total, completed)) / total) * 100)
+            stage_progress = max(0, min(100, pct))
+            overall_progress = 70 + int((stage_progress / 100) * 25)  # 70..95
+            asyncio.run_coroutine_threadsafe(
+                progress_callback(
+                    overall_progress,
+                    f"Creating video clips... ({completed}/{total})",
+                    {
+                        "stage": "clips",
+                        "stage_progress": stage_progress,
+                        "overall_progress": overall_progress,
+                    },
+                ),
+                loop,
+            )
 
         clips_info = await run_in_thread(
             create_clips_with_transitions,
@@ -222,6 +243,7 @@ class VideoService:
             font_size,
             font_color,
             render_diagnostics,
+            on_clip_progress,
         )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
@@ -336,7 +358,8 @@ class VideoService:
                 segments_json,
                 font_family,
                 font_size,
-                font_color
+                font_color,
+                progress_callback=progress_callback,
             )
             clips_info = clip_result.get("clips", [])
             clip_generation_diagnostics = clip_result.get("diagnostics", {})

@@ -2,7 +2,7 @@
 Clip repository - handles all database operations for generated clips.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import text as sql_text
 from typing import List, Dict, Any
 import logging
 
@@ -16,7 +16,7 @@ class ClipRepository:
     async def get_clip_by_id(db: AsyncSession, clip_id: str) -> Dict[str, Any] | None:
         """Get a clip by ID with its owning task reference."""
         result = await db.execute(
-            text("SELECT id, task_id FROM generated_clips WHERE id = :clip_id"),
+            sql_text("SELECT id, task_id FROM generated_clips WHERE id = :clip_id"),
             {"clip_id": clip_id}
         )
         row = result.fetchone()
@@ -40,7 +40,7 @@ class ClipRepository:
     ) -> str:
         """Create a new clip record and return its ID."""
         result = await db.execute(
-            text("""
+            sql_text("""
                 INSERT INTO generated_clips
                 (task_id, filename, file_path, start_time, end_time, duration,
                  text, relevance_score, reasoning, clip_order, created_at)
@@ -70,7 +70,7 @@ class ClipRepository:
     async def get_clips_by_task(db: AsyncSession, task_id: str) -> List[Dict[str, Any]]:
         """Get all clips for a specific task, ordered by clip_order."""
         result = await db.execute(
-            text("""
+            sql_text("""
                 SELECT id, filename, file_path, start_time, end_time, duration,
                        text, relevance_score, reasoning, clip_order, created_at
                 FROM generated_clips
@@ -103,7 +103,7 @@ class ClipRepository:
     async def get_clips_count(db: AsyncSession, task_id: str) -> int:
         """Get the count of clips for a task."""
         result = await db.execute(
-            text("SELECT COUNT(*) as count FROM generated_clips WHERE task_id = :task_id"),
+            sql_text("SELECT COUNT(*) as count FROM generated_clips WHERE task_id = :task_id"),
             {"task_id": task_id}
         )
         return result.scalar()
@@ -112,7 +112,7 @@ class ClipRepository:
     async def delete_clips_by_task(db: AsyncSession, task_id: str) -> int:
         """Delete all clips for a task. Returns count of deleted clips."""
         result = await db.execute(
-            text("DELETE FROM generated_clips WHERE task_id = :task_id"),
+            sql_text("DELETE FROM generated_clips WHERE task_id = :task_id"),
             {"task_id": task_id}
         )
         await db.commit()
@@ -124,7 +124,7 @@ class ClipRepository:
     async def delete_clip(db: AsyncSession, clip_id: str) -> None:
         """Delete a single clip by ID."""
         await db.execute(
-            text("DELETE FROM generated_clips WHERE id = :clip_id"),
+            sql_text("DELETE FROM generated_clips WHERE id = :clip_id"),
             {"clip_id": clip_id}
         )
         await db.commit()

@@ -4,7 +4,7 @@ Optimized for MoviePy v2, AssemblyAI integration, and high-quality output.
 """
 
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional, Union
+from typing import List, Dict, Any, Tuple, Optional, Union, Callable
 import os
 import logging
 import numpy as np
@@ -739,6 +739,7 @@ def create_clips_from_segments(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     diagnostics: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments."""
     video_path = Path(video_path)
@@ -749,6 +750,7 @@ def create_clips_from_segments(
     clips_info = []
     clip_failures: List[Dict[str, Any]] = []
 
+    total_segments = len(segments)
     for i, segment in enumerate(segments):
         try:
             # Debug log the segment data
@@ -762,6 +764,8 @@ def create_clips_from_segments(
 
             if duration <= 0:
                 logger.warning(f"Skipping clip {i+1}: invalid duration {duration:.1f}s (start: {start_seconds}s, end: {end_seconds}s)")
+                if progress_callback:
+                    progress_callback(i + 1, total_segments)
                 continue
 
             clip_filename = f"clip_{i+1}_{segment['start_time'].replace(':', '')}-{segment['end_time'].replace(':', '')}.mp4"
@@ -805,6 +809,9 @@ def create_clips_from_segments(
                     }
                 )
 
+            if progress_callback:
+                progress_callback(i + 1, total_segments)
+
         except Exception as e:
             logger.error(f"Error processing clip {i+1}: {e}")
             clip_failures.append(
@@ -815,6 +822,8 @@ def create_clips_from_segments(
                     "error": str(e),
                 }
             )
+            if progress_callback:
+                progress_callback(i + 1, total_segments)
 
     logger.info(f"Successfully created {len(clips_info)}/{len(segments)} clips")
     if diagnostics is not None:
@@ -909,6 +918,7 @@ def create_clips_with_transitions(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     diagnostics: Optional[Dict[str, Any]] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
     """Create video clips with transition effects between them."""
     video_path = Path(video_path)
@@ -925,6 +935,7 @@ def create_clips_with_transitions(
         font_size,
         font_color,
         diagnostics=render_diagnostics,
+        progress_callback=progress_callback,
     )
 
     if len(clips_info) < 2:
