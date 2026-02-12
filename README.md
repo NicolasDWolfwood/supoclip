@@ -18,14 +18,15 @@ cp .env.sample .env
 ```
 
 Then open:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API docs: http://localhost:8000/docs
+- Frontend: `http://${APP_HOST}:${FRONTEND_HOST_PORT}` (default `http://localhost:3000`)
+- Backend API: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8000`)
+- API docs: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 
 ## Documentation Map
 
 - Quick start and troubleshooting: `QUICKSTART.md`
 - Canonical config reference: `docs/config.md`
+- Local URL/port mapping reference: `docs/local-host-mappings.md`
 - Agent/project-state guide: `AGENTS.md`
 - Claude compatibility guide: `CLAUDE.md`
 - Backend-specific development notes: `backend/README.md`

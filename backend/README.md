@@ -44,8 +44,9 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ## Configuration
 
 Use the root env file and canonical config reference:
-- `.env.example`
+- root `.env.sample`
 - `docs/config.md`
+- `docs/local-host-mappings.md`
 
 Backend compatibility behavior:
 - preferred model var: `LLM`
@@ -63,7 +64,7 @@ Backend is started by `docker-compose.yml` with:
 ## API Docs
 
 When running locally or via Docker:
-- Swagger UI: http://localhost:8000/docs
+- Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 
 ## Fonts
 

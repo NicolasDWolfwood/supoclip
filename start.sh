@@ -27,6 +27,7 @@ if [ ! -f .env ]; then
     echo "     - OPENAI_API_KEY or GOOGLE_API_KEY or ANTHROPIC_API_KEY"
     echo "     - TRANSCRIPTION_PROVIDER=local (default) or assemblyai"
     echo "     - ASSEMBLY_AI_API_KEY (only if TRANSCRIPTION_PROVIDER=assemblyai)"
+    echo "     - Optional local URL/port mappings (see docs/local-host-mappings.md)"
     echo ""
     exit 1
 fi
@@ -70,6 +71,14 @@ else
     DOCKER_COMPOSE="docker-compose"
 fi
 
+# Local host mapping defaults (overridable in .env).
+APP_HOST="${APP_HOST:-localhost}"
+FRONTEND_HOST_PORT="${FRONTEND_HOST_PORT:-3000}"
+BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-8000}"
+FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-http://${APP_HOST}:${FRONTEND_HOST_PORT}}"
+BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://${APP_HOST}:${BACKEND_HOST_PORT}}"
+API_DOCS_URL="${BACKEND_ORIGIN}/docs"
+
 echo -e "${GREEN}Starting SupoClip...${NC}"
 echo ""
 
@@ -84,9 +93,9 @@ echo ""
 echo -e "${GREEN}SupoClip is starting up!${NC}"
 echo ""
 echo "Services will be available at:"
-echo "  - Frontend:  http://localhost:3000"
-echo "  - Backend:   http://localhost:8000"
-echo "  - API Docs:  http://localhost:8000/docs"
+echo "  - Frontend:  ${FRONTEND_ORIGIN}"
+echo "  - Backend:   ${BACKEND_ORIGIN}"
+echo "  - API Docs:  ${API_DOCS_URL}"
 echo ""
 echo "To view logs, run:"
 echo "  $DOCKER_COMPOSE logs -f"
@@ -104,7 +113,7 @@ if $DOCKER_COMPOSE ps | grep -q "Up"; then
     echo -e "${GREEN}Services are starting successfully!${NC}"
     echo ""
     echo "You can now:"
-    echo "  1. Open http://localhost:3000 in your browser"
+    echo "  1. Open ${FRONTEND_ORIGIN} in your browser"
     echo "  2. View logs: $DOCKER_COMPOSE logs -f"
     echo "  3. Stop services: $DOCKER_COMPOSE down"
 else

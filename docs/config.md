@@ -20,6 +20,12 @@ This is the single source of truth for SupoClip runtime environment variables.
 | `ARQ_QUEUE_NAME_LOCAL` | No | `arq:queue:local` | backend, workers | Queue name for local Whisper jobs. |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | No | `arq:queue:assembly` | backend, workers | Queue name for AssemblyAI jobs. |
 | `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |
+| `APP_HOST` | No | `localhost` | docs, startup output | Hostname used to build default browser-facing local URLs. |
+| `FRONTEND_HOST_PORT` | No | `3000` | docker-compose, startup output | Host port published for frontend container port `3000`. |
+| `BACKEND_HOST_PORT` | No | `8000` | docker-compose, startup output | Host port published for backend container port `8000`. |
+| `POSTGRES_HOST_PORT` | No | `5432` | docker-compose | Host port published for PostgreSQL container port `5432`. |
+| `REDIS_HOST_PORT` | No | `6379` | docker-compose | Host port published for Redis container port `6379`. |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | No | `http://localhost:3000,http://127.0.0.1:3000` | frontend | Comma-separated Better Auth origin allowlist for local/dev. |
 | `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |
 | `DOCKER_GPU_REQUEST_WORKER2` | No | `all` | docker-compose | GPU device request for optional `worker2` profile (`all` or `0`). |
 | `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | No | `all` | docker-compose | GPU device request for dedicated AssemblyAI worker. |
@@ -33,6 +39,16 @@ This is the single source of truth for SupoClip runtime environment variables.
 | `POSTGRES_DB` | Yes (Docker setup) | `supoclip` | postgres init | Database name for compose setup. |
 | `POSTGRES_USER` | Yes (Docker setup) | `supoclip` | postgres init | Database user for compose setup. |
 | `POSTGRES_PASSWORD` | Yes (Docker setup) | `supoclip_password` | postgres init | Database password for compose setup. |
+
+## Local Host Mapping Variables
+
+For local URL/port changes, edit host mapping vars in root `.env` (template: `.env.sample`) and then run `docker compose config` to confirm rendered mappings.
+
+Derived browser URLs:
+- Frontend: `http://${APP_HOST}:${FRONTEND_HOST_PORT}`
+- Backend: `http://${APP_HOST}:${BACKEND_HOST_PORT}`
+
+Reference quick lookup: `docs/local-host-mappings.md`.
 
 ## Backward Compatibility Variables
 

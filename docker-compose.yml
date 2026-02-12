@@ -1,4 +1,5 @@
 services:
+  # Local host mapping values come from root `.env` (see `.env.sample` and `docs/local-host-mappings.md`).
   frontend:
     build:
       context: ./frontend
@@ -6,7 +7,7 @@ services:
       target: development
     container_name: supoclip-frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
@@ -14,10 +15,10 @@ services:
     environment:
       - NODE_ENV=development
       - NEXT_TELEMETRY_DISABLED=1
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=http://${APP_HOST:-localhost}:${BACKEND_HOST_PORT:-8000}
       - DATABASE_URL=postgresql://supoclip:supoclip_password@postgres:5432/supoclip
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET:-supoclip_dev_secret_change_in_production}
-      - BETTER_AUTH_URL=http://localhost:3000
+      - BETTER_AUTH_URL=http://${APP_HOST:-localhost}:${FRONTEND_HOST_PORT:-3000}
       - BETTER_AUTH_TRUSTED_ORIGINS=${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     depends_on:
       postgres:
@@ -43,7 +44,7 @@ services:
     gpus: ${DOCKER_GPU_REQUEST:-all}
     command: [".venv/bin/uvicorn", "src.main_refactored:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "8000:8000"
+      - "${BACKEND_HOST_PORT:-8000}:8000"
     volumes:
       - ./backend/src:/app/src
       - ./backend/uploads:/app/uploads
@@ -235,7 +236,7 @@ services:
     image: redis:7-alpine
     container_name: supoclip-redis
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
@@ -254,7 +255,7 @@ services:
       POSTGRES_USER: supoclip
       POSTGRES_PASSWORD: supoclip_password
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql

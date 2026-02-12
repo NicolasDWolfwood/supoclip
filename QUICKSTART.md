@@ -33,6 +33,11 @@ That's it! The script will:
 Edit the `.env` file in the project root and add your API keys:
 
 ```bash
+# Local host mappings (single place to adjust localhost ports/URLs)
+APP_HOST=localhost
+FRONTEND_HOST_PORT=3000
+BACKEND_HOST_PORT=8000
+
 # Choose one AI provider for clip selection
 OPENAI_API_KEY=your_openai_key_here
 
@@ -57,9 +62,9 @@ TRANSCRIPTION_PROVIDER=local
 
 ### 3. Access the Application
 
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **API Documentation**: http://localhost:8000/docs
+- **Frontend**: `http://${APP_HOST}:${FRONTEND_HOST_PORT}` (default `http://localhost:3000`)
+- **Backend API**: `http://${APP_HOST}:${BACKEND_HOST_PORT}` (default `http://localhost:8000`)
+- **API Documentation**: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 
 ## Manual Docker Commands
 
@@ -85,6 +90,7 @@ docker-compose up -d --build
 ## Environment Configuration
 
 Canonical reference: `docs/config.md`
+Local URL/port mapping reference: `docs/local-host-mappings.md`
 
 ### Required Variables
 
@@ -107,6 +113,12 @@ Canonical reference: `docs/config.md`
 | `ARQ_QUEUE_NAME_LOCAL` | `arq:queue:local` | Queue name for local Whisper jobs |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | `arq:queue:assembly` | Queue name for AssemblyAI jobs |
 | `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |
+| `APP_HOST` | `localhost` | Hostname used for local URL defaults |
+| `FRONTEND_HOST_PORT` | `3000` | Host port bound to frontend container port `3000` |
+| `BACKEND_HOST_PORT` | `8000` | Host port bound to backend container port `8000` |
+| `POSTGRES_HOST_PORT` | `5432` | Host port bound to PostgreSQL container port `5432` |
+| `REDIS_HOST_PORT` | `6379` | Host port bound to Redis container port `6379` |
+| `BETTER_AUTH_TRUSTED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Better Auth origin allowlist |
 | `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
 | `DOCKER_GPU_REQUEST_WORKER2` | `all` | Docker GPU request for optional second worker (`all` or `0`) |
 | `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | `all` | Docker GPU request for dedicated AssemblyAI worker |
@@ -217,7 +229,8 @@ For production use:
 
 - Read the full project-state docs in `AGENTS.md` (and `CLAUDE.md` for Claude-specific compatibility)
 - Review all env vars in `docs/config.md`
-- Check out the API docs at http://localhost:8000/docs
+- Review local URL/port mappings in `docs/local-host-mappings.md`
+- Check out the API docs at `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 - View example clips in the frontend
 - Customize fonts by uploading `.ttf` files from the font menu in the app (or add files directly to `backend/fonts/`)
 - Install a curated free subtitle font pack: `./backend/bin/install_subtitle_font_pack.sh`
@@ -226,5 +239,5 @@ For production use:
 ## Getting Help
 
 - Check logs: `docker-compose logs -f`
-- View API documentation: http://localhost:8000/docs
+- View API documentation: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 - Report issues: Create a GitHub issue with logs and error messages
