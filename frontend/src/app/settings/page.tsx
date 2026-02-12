@@ -254,7 +254,7 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium text-black">
                   Font Size: {fontSize}px
                 </Label>
-                <div className="px-2 pt-1">
+                <div className="px-2 pt-5">
                   <Slider
                     value={[fontSize]}
                     onValueChange={(value) => setFontSize(normalizeFontSize(value[0]))}

@@ -156,6 +156,58 @@ export default function Home() {
     setFileName(file ? file.name : null);
   };
 
+  const uploadVideoWithProgress = (file: File): Promise<{ video_path?: string; message?: string }> => {
+    return new Promise((resolve, reject) => {
+      const formData = new FormData();
+      formData.append("video", file);
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${apiUrl}/upload`);
+
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable || event.total <= 0) {
+          return;
+        }
+
+        const uploadPercent = Math.round((event.loaded / event.total) * 100);
+        // Keep room for the handoff to task creation after upload completes.
+        const progressValue = Math.max(5, Math.min(95, Math.round(uploadPercent * 0.95)));
+        setProgress(progressValue);
+        setStatusMessage(`Uploading video file... ${uploadPercent}%`);
+      };
+
+      xhr.onload = () => {
+        const isSuccess = xhr.status >= 200 && xhr.status < 300;
+        if (!isSuccess) {
+          let detail = xhr.responseText || `HTTP ${xhr.status}`;
+          try {
+            const parsed = JSON.parse(xhr.responseText) as { detail?: string };
+            if (parsed?.detail) {
+              detail = parsed.detail;
+            }
+          } catch {
+            // Keep raw response text when JSON parsing fails.
+          }
+          reject(new Error(`Upload error: ${detail}`));
+          return;
+        }
+
+        try {
+          const response = JSON.parse(xhr.responseText) as { video_path?: string; message?: string };
+          resolve(response);
+        } catch {
+          reject(new Error("Upload error: invalid response from server"));
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error("Upload error: network failure"));
+      };
+
+      xhr.send(formData);
+    });
+  };
+
   const getStepIcon = (step: string) => {
     const iconMap: Record<string, React.ReactElement> = {
       validation: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
@@ -192,21 +244,15 @@ export default function Home() {
 
       // If uploading file, upload it first
       if (sourceType === "upload" && fileRef.current) {
+        setCurrentStep("upload");
         setStatusMessage("Uploading video file...");
         setProgress(5);
-
-        const formData = new FormData();
-        formData.append("video", fileRef.current);
-        const uploadResponse = await fetch(`${apiUrl}/upload`, {
-          method: "POST",
-          body: formData
-        });
-
-        if (!uploadResponse.ok) {
-          throw new Error(`Upload error: ${uploadResponse.status}`);
+        const uploadResult = await uploadVideoWithProgress(fileRef.current);
+        if (!uploadResult.video_path) {
+          throw new Error("Upload error: server did not return uploaded file path");
         }
-
-        const uploadResult = await uploadResponse.json();
+        setStatusMessage("Upload complete. Starting processing...");
+        setProgress(100);
         videoUrl = uploadResult.video_path;
       }
 
@@ -561,7 +607,7 @@ export default function Home() {
                     <label className="text-sm font-medium text-black">
                       Font Size: {fontSize}px
                     </label>
-                    <div className="px-2 pt-1">
+                    <div className="px-2 pt-5">
                       <Slider
                         value={[fontSize]}
                         onValueChange={(value) => setFontSize(normalizeFontSize(value[0]))}

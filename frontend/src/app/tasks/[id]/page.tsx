@@ -759,7 +759,7 @@ export default function TaskPage() {
                     clipping.
                   </p>
                   {task?.progress_message && (
-                    <p className="text-sm text-left text-gray-700 bg-gray-50 border border-gray-200 rounded p-3 mb-4">
+                    <p className="text-sm text-left text-gray-700 bg-gray-50 border border-gray-200 rounded p-3 mb-4 dark:text-gray-100 dark:bg-slate-800/70 dark:border-slate-700">
                       {task.progress_message}
                     </p>
                   )}
@@ -850,7 +850,9 @@ export default function TaskPage() {
                       {clip.text && (
                         <div className="mb-4">
                           <h4 className="font-medium text-black mb-2">Transcript</h4>
-                          <p className="text-sm text-gray-700 bg-gray-50 p-3 rounded">{clip.text}</p>
+                          <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 p-3 rounded leading-relaxed dark:text-gray-100 dark:bg-slate-800/70 dark:border-slate-700">
+                            {clip.text}
+                          </p>
                         </div>
                       )}
 
