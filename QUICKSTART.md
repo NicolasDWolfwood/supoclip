@@ -219,7 +219,8 @@ For production use:
 - Review all env vars in `docs/config.md`
 - Check out the API docs at http://localhost:8000/docs
 - View example clips in the frontend
-- Customize fonts by adding TTF files to `backend/fonts/`
+- Customize fonts by uploading `.ttf` files from the font menu in the app (or add files directly to `backend/fonts/`)
+- Install a curated free subtitle font pack: `./backend/bin/install_subtitle_font_pack.sh`
 - Add transition effects by adding MP4 files to `backend/transitions/`
 
 ## Getting Help

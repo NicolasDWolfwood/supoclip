@@ -8,6 +8,7 @@ from pathlib import Path
 import logging
 import json
 import asyncio
+import re
 from typing import Dict, Any
 import aiofiles
 import uuid
@@ -38,6 +39,8 @@ from .database import init_db, close_db, get_db, AsyncSessionLocal
 from .api.routes.tasks import router as tasks_router
 
 config = Config()
+UPLOAD_CHUNK_SIZE = 1024 * 1024  # 1MB
+MAX_FONT_SIZE_BYTES = 20 * 1024 * 1024  # 20MB
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -572,6 +575,74 @@ async def get_available_fonts():
         logger.error(f"Error retrieving fonts: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving fonts: {str(e)}")
 
+@app.post("/fonts/upload")
+async def upload_font(font: UploadFile = File(...)):
+    """Upload a TTF font to the server fonts directory."""
+    font_path = None
+    should_cleanup = False
+    try:
+        if not font or not font.filename:
+            raise HTTPException(status_code=400, detail="No font file provided")
+
+        file_extension = Path(font.filename).suffix.lower()
+        if file_extension != ".ttf":
+            raise HTTPException(status_code=400, detail="Only .ttf font files are supported")
+
+        font_name = re.sub(r"[^A-Za-z0-9_-]+", "-", Path(font.filename).stem.strip()).strip("-_")
+        if not font_name:
+            raise HTTPException(status_code=400, detail="Invalid font filename")
+
+        fonts_dir = Path(__file__).parent.parent / "fonts"
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+        font_path = fonts_dir / f"{font_name}.ttf"
+
+        if font_path.exists():
+            raise HTTPException(status_code=409, detail=f"Font '{font_name}' already exists")
+
+        bytes_written = 0
+        first_chunk = True
+        async with aiofiles.open(font_path, "wb") as f:
+            should_cleanup = True
+            while True:
+                chunk = await font.read(UPLOAD_CHUNK_SIZE)
+                if not chunk:
+                    break
+
+                bytes_written += len(chunk)
+                if bytes_written > MAX_FONT_SIZE_BYTES:
+                    raise HTTPException(status_code=413, detail="Font file too large (max 20MB)")
+
+                if first_chunk:
+                    first_chunk = False
+                    if chunk[:4] not in (b"\x00\x01\x00\x00", b"ttcf", b"true"):
+                        raise HTTPException(status_code=400, detail="Invalid TTF font file")
+
+                await f.write(chunk)
+
+        if bytes_written == 0:
+            raise HTTPException(status_code=400, detail="Uploaded font file is empty")
+
+        should_cleanup = False
+        logger.info(f"Uploaded font successfully: {font_name}.ttf")
+        return {
+            "message": "Font uploaded successfully",
+            "font": {
+                "name": font_name,
+                "display_name": font_name.replace("-", " ").replace("_", " ").title(),
+            },
+        }
+    except HTTPException:
+        if should_cleanup and font_path and font_path.exists():
+            font_path.unlink(missing_ok=True)
+        raise
+    except Exception as e:
+        if should_cleanup and font_path and font_path.exists():
+            font_path.unlink(missing_ok=True)
+        logger.error(f"Error uploading font: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error uploading font: {str(e)}")
+    finally:
+        await font.close()
+
 @app.get("/fonts/{font_name}")
 async def get_font_file(font_name: str):
     """Serve a specific font file"""
@@ -623,7 +694,6 @@ async def get_available_transitions():
 @app.post("/upload")
 async def upload_video(video: UploadFile = File(...)):
     """Upload a video to the server"""
-    upload_chunk_size = 1024 * 1024  # 1MB
     video_path = None
     try:
         if not video or not video.filename:
@@ -641,7 +711,7 @@ async def upload_video(video: UploadFile = File(...)):
         # Save uploaded file in chunks to avoid loading the full file in memory.
         async with aiofiles.open(video_path, 'wb') as f:
             while True:
-                chunk = await video.read(upload_chunk_size)
+                chunk = await video.read(UPLOAD_CHUNK_SIZE)
                 if not chunk:
                     break
                 await f.write(chunk)

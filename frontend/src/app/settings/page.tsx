@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +62,9 @@ export default function SettingsPage() {
   const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
 
   const [availableFonts, setAvailableFonts] = useState<Array<{ name: string; display_name: string }>>([]);
+  const [isUploadingFont, setIsUploadingFont] = useState(false);
+  const [fontUploadMessage, setFontUploadMessage] = useState<string | null>(null);
+  const [fontUploadError, setFontUploadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,47 +99,48 @@ export default function SettingsPage() {
   const { data: session, isPending } = useSession();
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-  useEffect(() => {
-    const loadFonts = async () => {
-      try {
-        const response = await fetch(`${apiUrl}/fonts`);
-        if (!response.ok) {
-          return;
-        }
-
-        const data = await response.json();
-        setAvailableFonts(data.fonts || []);
-
-        const fontFaceStyles = (data.fonts || [])
-          .map((font: { name: string }) => {
-            return `
-              @font-face {
-                font-family: '${font.name}';
-                src: url('${apiUrl}/fonts/${font.name}') format('truetype');
-                font-weight: normal;
-                font-style: normal;
-              }
-            `;
-          })
-          .join("\n");
-
-        const styleElement = document.createElement("style");
-        styleElement.id = "custom-fonts";
-        styleElement.innerHTML = fontFaceStyles;
-
-        const existingStyle = document.getElementById("custom-fonts");
-        if (existingStyle) {
-          existingStyle.remove();
-        }
-
-        document.head.appendChild(styleElement);
-      } catch (loadError) {
-        console.error("Failed to load fonts:", loadError);
+  const loadFonts = useCallback(async () => {
+    try {
+      const response = await fetch(`${apiUrl}/fonts`);
+      if (!response.ok) {
+        return;
       }
-    };
 
-    loadFonts();
+      const data = await response.json();
+      const fonts = data.fonts || [];
+      setAvailableFonts(fonts);
+
+      const fontFaceStyles = fonts
+        .map((font: { name: string }) => {
+          return `
+            @font-face {
+              font-family: '${font.name}';
+              src: url('${apiUrl}/fonts/${font.name}') format('truetype');
+              font-weight: normal;
+              font-style: normal;
+            }
+          `;
+        })
+        .join("\n");
+
+      const styleElement = document.createElement("style");
+      styleElement.id = "custom-fonts";
+      styleElement.innerHTML = fontFaceStyles;
+
+      const existingStyle = document.getElementById("custom-fonts");
+      if (existingStyle) {
+        existingStyle.remove();
+      }
+
+      document.head.appendChild(styleElement);
+    } catch (loadError) {
+      console.error("Failed to load fonts:", loadError);
+    }
   }, [apiUrl]);
+
+  useEffect(() => {
+    void loadFonts();
+  }, [loadFonts]);
 
   useEffect(() => {
     const loadPreferences = async () => {
@@ -370,6 +374,51 @@ export default function SettingsPage() {
     }
   };
 
+  const handleFontUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    setFontUploadError(null);
+    setFontUploadMessage(null);
+
+    if (!file.name.toLowerCase().endsWith(".ttf")) {
+      setFontUploadError("Only .ttf font files are supported.");
+      e.target.value = "";
+      return;
+    }
+
+    setIsUploadingFont(true);
+    try {
+      const formData = new FormData();
+      formData.append("font", file);
+
+      const response = await fetch(`${apiUrl}/fonts/upload`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const responseData = await response
+        .json()
+        .catch(() => ({} as { detail?: string; message?: string; font?: { name?: string } }));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to upload font");
+      }
+
+      await loadFonts();
+      if (typeof responseData?.font?.name === "string" && responseData.font.name.length > 0) {
+        setFontFamily(responseData.font.name);
+      }
+      setFontUploadMessage(responseData?.message || "Font uploaded successfully.");
+    } catch (uploadError) {
+      setFontUploadError(uploadError instanceof Error ? uploadError.message : "Failed to upload font.");
+    } finally {
+      setIsUploadingFont(false);
+      e.target.value = "";
+    }
+  };
+
   const handleSavePreferences = async () => {
     setIsLoading(true);
     setError(null);
@@ -503,6 +552,18 @@ export default function SettingsPage() {
                     )}
                   </SelectContent>
                 </Select>
+                <input
+                  type="file"
+                  accept=".ttf,font/ttf"
+                  onChange={handleFontUpload}
+                  disabled={isLoading || isUploadingFont}
+                  className="file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full min-w-0 rounded-md border bg-transparent px-3 py-1 text-sm shadow-xs transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive"
+                />
+                <p className="text-xs text-gray-500">
+                  {isUploadingFont ? "Uploading font..." : "Upload a .ttf file to add it to this list."}
+                </p>
+                {fontUploadMessage && <p className="text-xs text-green-600">{fontUploadMessage}</p>}
+                {fontUploadError && <p className="text-xs text-red-600">{fontUploadError}</p>}
               </div>
 
               <div className="space-y-2">

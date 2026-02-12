@@ -65,6 +65,15 @@ Backend is started by `docker-compose.yml` with:
 When running locally or via Docker:
 - Swagger UI: http://localhost:8000/docs
 
+## Fonts
+
+- `GET /fonts`: list available subtitle fonts from `backend/fonts`.
+- `POST /fonts/upload`: upload a new `.ttf` font file (available immediately in the frontend font dropdown).
+- `GET /fonts/{font_name}`: serve a specific `.ttf` font for frontend preview loading.
+- You can still add `.ttf` files manually to `backend/fonts/` if preferred.
+- Install a curated top-10 free subtitle pack: `./backend/bin/install_subtitle_font_pack.sh`
+- Pack details and references: `backend/fonts/FONT_PACK_TOP10.md`
+
 ## Admin Task API
 
 - `POST /tasks/admin/cancel-all`: cancel all `queued`/`processing` tasks and drain queued ARQ jobs.
