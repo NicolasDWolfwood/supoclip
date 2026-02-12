@@ -25,6 +25,10 @@ interface LatestTask {
   created_at: string;
 }
 
+function normalizeFontSize(size: number): number {
+  return Math.max(24, Math.min(48, size));
+}
+
 export default function Home() {
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -103,7 +107,7 @@ export default function Home() {
         if (response.ok) {
           const data = await response.json();
           setFontFamily(data.fontFamily || "TikTokSans-Regular");
-          setFontSize(data.fontSize || 24);
+          setFontSize(normalizeFontSize(data.fontSize || 24));
           setFontColor(data.fontColor || "#FFFFFF");
         }
       } catch (error) {
@@ -557,19 +561,19 @@ export default function Home() {
                     <label className="text-sm font-medium text-black">
                       Font Size: {fontSize}px
                     </label>
-                    <div className="px-2">
+                    <div className="px-2 pt-1">
                       <Slider
                         value={[fontSize]}
-                        onValueChange={(value) => setFontSize(value[0])}
+                        onValueChange={(value) => setFontSize(normalizeFontSize(value[0]))}
                         max={48}
-                        min={12}
+                        min={24}
                         step={2}
                         disabled={isLoading}
                         className="w-full"
                       />
                     </div>
                     <div className="flex justify-between text-xs text-gray-500">
-                      <span>12px</span>
+                      <span>24px</span>
                       <span>48px</span>
                     </div>
                   </div>

@@ -601,9 +601,12 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
     subtitle_clips = []
     processor = VideoProcessor(font_family, font_size, font_color)
 
-    # Use custom font size or calculate based on video width
-    calculated_font_size = max(20, min(40, int(font_size * (video_width / 720))))
+    # Readability tuning:
+    # - slightly larger base size
+    # - stronger outline for busy backgrounds
+    calculated_font_size = max(24, min(48, int(font_size * (video_width / 640) * 1.15)))
     final_font_size = calculated_font_size
+    stroke_width = max(2, int(final_font_size * 0.09))
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -624,22 +627,42 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
         text = ' '.join(word['text'] for word in word_group)
 
         try:
-            # Create high-quality text clip with custom font settings
-            text_clip = TextClip(
-                text=text,
-                font=processor.font_path,
-                font_size=final_font_size,
-                color=font_color,
-                stroke_color='black',
-                stroke_width=1,
-                method='label',
-                text_align='center'
-            ).with_duration(segment_duration).with_start(segment_start)
+            # Reserve a consistent subtitle box to avoid glyph clipping that can
+            # happen with tight "label" bounds on some fonts.
+            subtitle_box_width = max(240, int(video_width * 0.92))
+            subtitle_box_height = max(62, int(final_font_size * 2.8))
 
-            # Position in lower middle (not full bottom, not center)
-            text_height = text_clip.size[1] if text_clip.size else 40
-            # Place at about 75% of the way down the video (lower middle)
-            vertical_position = int(video_height * 0.75 - text_height // 2)
+            try:
+                text_clip = TextClip(
+                    text=text,
+                    font=processor.font_path,
+                    font_size=final_font_size,
+                    color=font_color,
+                    stroke_color='black',
+                    stroke_width=stroke_width,
+                    method='caption',
+                    size=(subtitle_box_width, subtitle_box_height),
+                    text_align='center'
+                )
+            except Exception:
+                # Fallback when caption rendering is unavailable in the runtime.
+                text_clip = TextClip(
+                    text=text,
+                    font=processor.font_path,
+                    font_size=final_font_size,
+                    color=font_color,
+                    stroke_color='black',
+                    stroke_width=stroke_width,
+                    method='label',
+                    text_align='center'
+                )
+
+            text_clip = text_clip.with_duration(segment_duration).with_start(segment_start)
+
+            # Position in lower middle with clamped bounds.
+            text_height = text_clip.size[1] if text_clip.size else subtitle_box_height
+            vertical_position = int(video_height * 0.70 - text_height // 2)
+            vertical_position = max(0, min(vertical_position, max(0, video_height - text_height)))
             text_clip = text_clip.with_position(('center', vertical_position))
 
             subtitle_clips.extend([text_clip])

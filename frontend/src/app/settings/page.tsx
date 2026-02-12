@@ -20,6 +20,10 @@ interface UserPreferences {
   fontColor: string;
 }
 
+function normalizeFontSize(size: number): number {
+  return Math.max(24, Math.min(48, size));
+}
+
 export default function SettingsPage() {
   const [fontFamily, setFontFamily] = useState("TikTokSans-Regular");
   const [fontSize, setFontSize] = useState(24);
@@ -86,7 +90,7 @@ export default function SettingsPage() {
         if (response.ok) {
           const data: UserPreferences = await response.json();
           setFontFamily(data.fontFamily);
-          setFontSize(data.fontSize);
+          setFontSize(normalizeFontSize(data.fontSize));
           setFontColor(data.fontColor);
         }
       } catch (error) {
@@ -250,19 +254,19 @@ export default function SettingsPage() {
                 <Label className="text-sm font-medium text-black">
                   Font Size: {fontSize}px
                 </Label>
-                <div className="px-2">
+                <div className="px-2 pt-1">
                   <Slider
                     value={[fontSize]}
-                    onValueChange={(value) => setFontSize(value[0])}
+                    onValueChange={(value) => setFontSize(normalizeFontSize(value[0]))}
                     max={48}
-                    min={12}
+                    min={24}
                     step={2}
                     disabled={isLoading}
                     className="w-full"
                   />
                 </div>
                 <div className="flex justify-between text-xs text-gray-500">
-                  <span>12px</span>
+                  <span>24px</span>
                   <span>48px</span>
                 </div>
               </div>
