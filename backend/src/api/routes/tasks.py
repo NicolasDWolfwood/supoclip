@@ -19,6 +19,29 @@ config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+def _require_admin_access(request: Request) -> None:
+    """
+    Admin guard for destructive task-management endpoints.
+    If ADMIN_API_KEY is configured, it must match x-admin-key header.
+    """
+    configured_admin_key = (config.admin_api_key or "").strip()
+    provided_admin_key = (request.headers.get("x-admin-key") or "").strip()
+
+    if configured_admin_key:
+        if not provided_admin_key or provided_admin_key != configured_admin_key:
+            raise HTTPException(status_code=403, detail="Invalid admin key")
+        return
+
+    # Backward-compatible fallback for local/dev setups without ADMIN_API_KEY.
+    user_id = (request.headers.get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Admin access requires x-admin-key (recommended) or user_id header",
+        )
+    logger.warning("ADMIN_API_KEY is not configured; allowing admin task cancellation via user_id header.")
+
+
 @router.get("/")
 async def list_tasks(request: Request, db: AsyncSession = Depends(get_db), limit: int = 50):
     """
@@ -121,6 +144,45 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error creating task: {e}")
         raise HTTPException(status_code=500, detail=f"Error creating task: {str(e)}")
+
+
+@router.post("/admin/cancel-all")
+async def cancel_all_tasks(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Admin action: cancel all queued/processing tasks and drain ARQ queue keys.
+    """
+    _require_admin_access(request)
+
+    try:
+        task_service = TaskService(db)
+        cancelled_task_ids = await task_service.task_repo.cancel_active_tasks(
+            db,
+            progress_message="Cancelled by admin action",
+        )
+        cancel_flags_set = await JobQueue.mark_tasks_cancelled(cancelled_task_ids)
+        queue_summary = await JobQueue.cancel_all_jobs()
+
+        logger.info(
+            "Admin cancelled tasks: tasks=%s cancel_flags=%s queue_removed=%s job_keys_deleted=%s",
+            len(cancelled_task_ids),
+            cancel_flags_set,
+            queue_summary.get("queue_entries_removed", 0),
+            queue_summary.get("job_keys_deleted", 0),
+        )
+
+        return {
+            "message": "Cancellation completed",
+            "cancelled_task_count": len(cancelled_task_ids),
+            "cancelled_task_ids": cancelled_task_ids,
+            "cancel_flags_set": cancel_flags_set,
+            "queue_summary": queue_summary,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling all tasks: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error cancelling tasks: {str(e)}")
 
 
 @router.get("/{task_id}")

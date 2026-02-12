@@ -4,7 +4,6 @@ Task repository - handles all database operations for tasks.
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from typing import Optional, Dict, Any, List
-from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -172,3 +171,30 @@ class TaskRepository:
         )
         await db.commit()
         logger.info(f"Deleted task {task_id}")
+
+    @staticmethod
+    async def cancel_active_tasks(
+        db: AsyncSession,
+        progress_message: str = "Cancelled by admin action"
+    ) -> List[str]:
+        """
+        Mark all active tasks as error and return affected task IDs.
+        Active = queued or processing.
+        """
+        result = await db.execute(
+            text(
+                """
+                UPDATE tasks
+                SET status = 'error',
+                    progress_message = :progress_message,
+                    updated_at = NOW()
+                WHERE status IN ('queued', 'processing')
+                RETURNING id
+                """
+            ),
+            {"progress_message": progress_message},
+        )
+        await db.commit()
+        task_ids = [row.id for row in result.fetchall()]
+        logger.info(f"Cancelled {len(task_ids)} active tasks")
+        return task_ids

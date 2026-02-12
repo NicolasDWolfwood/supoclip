@@ -44,6 +44,9 @@ TRANSCRIPTION_PROVIDER=local
 
 # Optional (only needed when TRANSCRIPTION_PROVIDER=assemblyai)
 # ASSEMBLY_AI_API_KEY=your_assemblyai_key_here
+
+# Optional (recommended for admin cancel-all API protection)
+# ADMIN_API_KEY=your_strong_random_admin_key
 ```
 
 ### 2. Start SupoClip
@@ -96,12 +99,14 @@ Canonical reference: `docs/config.md`
 | `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API) |
 | `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
 | `WORKER_MAX_JOBS` | `2` | Max concurrent background jobs (reduce if CPU is saturated) |
+| `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |
 | `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
+| `WHISPER_CACHE_HOST_DIR` | `./backend/.cache/whisper` | Host path for Whisper model cache (prevents re-downloads after rebuilds) |
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
 | `ANTHROPIC_API_KEY` | - | For Claude models |
 
-Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into a persistent Docker volume.
+Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
 
 ## Supported AI Models
 

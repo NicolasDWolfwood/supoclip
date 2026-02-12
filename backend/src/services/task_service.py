@@ -2,7 +2,7 @@
 Task service - orchestrates task creation and processing workflow.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, Awaitable
 import logging
 import asyncio
 
@@ -81,7 +81,8 @@ class TaskService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
-        progress_callback: Optional[Callable] = None
+        progress_callback: Optional[Callable] = None,
+        cancel_check: Optional[Callable[[], Awaitable[None]]] = None
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -94,6 +95,8 @@ class TaskService:
             await self.task_repo.update_task_status(
                 self.db, task_id, "processing", progress=0, progress_message="Starting..."
             )
+            if cancel_check:
+                await cancel_check()
 
             # Progress callback wrapper
             progress_lock = asyncio.Lock()
@@ -102,11 +105,15 @@ class TaskService:
                 # Progress updates can arrive from background thread callbacks.
                 # Serialize DB updates to avoid AsyncSession concurrent-use errors.
                 async with progress_lock:
+                    if cancel_check:
+                        await cancel_check()
                     await self.task_repo.update_task_status(
                         self.db, task_id, "processing", progress=progress, progress_message=message
                     )
                     if progress_callback:
                         await progress_callback(progress, message, metadata)
+                    if cancel_check:
+                        await cancel_check()
 
             # Process video with progress updates
             result = await self.video_service.process_video_complete(
@@ -115,7 +122,8 @@ class TaskService:
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,
-                progress_callback=update_progress
+                progress_callback=update_progress,
+                cancel_check=cancel_check,
             )
 
             # Save clips to database

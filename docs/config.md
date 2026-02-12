@@ -15,7 +15,9 @@ This is the single source of truth for SupoClip runtime environment variables.
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
 | `WORKER_MAX_JOBS` | No | `2` | worker | Max concurrent background jobs; lower values reduce CPU contention during local transcription. |
+| `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |
 | `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |
+| `WHISPER_CACHE_HOST_DIR` | No | `./backend/.cache/whisper` | docker-compose | Host bind-mount location for Whisper model cache (`/root/.cache/whisper` in containers). |
 | `TEMP_DIR` | No | `temp` (local) / `/app/uploads` (Docker) | backend, worker | Working directory for uploaded/downloaded files and clip output paths. |
 | `DATABASE_URL` | Yes | compose-provided value | backend, worker | Postgres connection string. |
 | `REDIS_HOST` | Yes (Docker) | `localhost` | backend, worker | Redis host. |

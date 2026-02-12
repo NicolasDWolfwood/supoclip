@@ -5,6 +5,8 @@ FROM python:3.11-slim
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
+    gcc \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv package manager

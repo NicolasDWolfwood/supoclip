@@ -85,6 +85,7 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `OPENAI_API_KEY`, `GOOGLE_API_KEY`, or `ANTHROPIC_API_KEY` - Depending on LLM choice
 - `DATABASE_URL` - PostgreSQL connection string
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
+- `WHISPER_CACHE_HOST_DIR` - Docker host path for Whisper cache mount (default `./backend/.cache/whisper`)
 
 Canonical env reference: `docs/config.md`
 

@@ -39,6 +39,7 @@ export default function Home() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceTitle, setSourceTitle] = useState<string | null>(null);
+  const youtubeInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const { data: session, isPending } = useSession();
 
@@ -297,6 +298,9 @@ export default function Home() {
       setFileName(null);
       fileRef.current = null;
       setUrl("");
+      if (youtubeInputRef.current) {
+        youtubeInputRef.current.value = "";
+      }
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -525,7 +529,7 @@ export default function Home() {
 
             {/* Dynamic Input Based on Source Type */}
             {sourceType === "youtube" ? (
-              <div className="space-y-2">
+              <div key="source-youtube" className="space-y-2">
                 <label htmlFor="youtube-url" className="text-sm font-medium text-black">
                   YouTube URL
                 </label>
@@ -533,26 +537,27 @@ export default function Home() {
                   id="youtube-url"
                   type="url"
                   placeholder="https://www.youtube.com/watch?v=..."
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
+                  ref={youtubeInputRef}
+                  defaultValue=""
+                  onChange={(e) => setUrl(e.target.value ?? "")}
                   disabled={isLoading}
                   className="h-11"
                 />
               </div>
             ) : (
-              <div className="space-y-2">
+              <div key="source-upload" className="space-y-2">
                 <label htmlFor="video-upload" className="text-sm font-medium text-black">
                   Upload Video
                 </label>
-                <Input
+                <input
                   id="video-upload"
                   type="file"
+                  data-slot="input"
                   accept="video/*"
                   ref={fileInputRef}
                   onChange={handleFileChange}
                   disabled={isLoading}
-                  className="h-11"
-                // Do not set value prop, keep input uncontrolled
+                  className="file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-11 w-full min-w-0 rounded-md border bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive"
                 />
                 {fileName && (
                   <div className="text-xs text-gray-600 mt-1">

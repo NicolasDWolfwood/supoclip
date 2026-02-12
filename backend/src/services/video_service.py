@@ -2,7 +2,7 @@
 Video service - handles video processing business logic.
 """
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 import logging
 import asyncio
 
@@ -283,7 +283,8 @@ class VideoService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
-        progress_callback: Optional[callable] = None
+        progress_callback: Optional[callable] = None,
+        cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
         """
         Complete video processing pipeline.
@@ -293,6 +294,12 @@ class VideoService:
                           Signature: async def callback(progress: int, message: str)
         """
         try:
+            async def ensure_not_cancelled() -> None:
+                if cancel_check:
+                    await cancel_check()
+
+            await ensure_not_cancelled()
+
             # Step 1: Get video path (download or use existing)
             if progress_callback:
                 await progress_callback(
@@ -307,6 +314,7 @@ class VideoService:
                     raise Exception("Failed to download video")
             else:
                 video_path = VideoService.validate_uploaded_video_path(url)
+            await ensure_not_cancelled()
 
             # Step 2: Generate transcript
             if progress_callback:
@@ -320,6 +328,7 @@ class VideoService:
                 video_path,
                 progress_callback=progress_callback,
             )
+            await ensure_not_cancelled()
 
             # Step 3: AI analysis
             if progress_callback:
@@ -333,6 +342,7 @@ class VideoService:
                 transcript,
                 progress_callback=progress_callback,
             )
+            await ensure_not_cancelled()
 
             # Step 4: Create clips
             if progress_callback:
@@ -361,6 +371,7 @@ class VideoService:
                 font_color,
                 progress_callback=progress_callback,
             )
+            await ensure_not_cancelled()
             clips_info = clip_result.get("clips", [])
             clip_generation_diagnostics = clip_result.get("diagnostics", {})
 

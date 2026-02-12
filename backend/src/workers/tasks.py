@@ -3,9 +3,12 @@ Worker tasks - background jobs processed by arq workers.
 """
 import logging
 from typing import Dict, Any, Optional
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+class TaskCancelledError(Exception):
+    """Raised when a task is explicitly cancelled by an admin action."""
 
 
 async def process_video_task(
@@ -36,6 +39,7 @@ async def process_video_task(
     """
     from ..database import AsyncSessionLocal
     from ..services.task_service import TaskService
+    from ..workers.job_queue import JobQueue
     from ..workers.progress import ProgressTracker
 
     logger.info(f"Worker processing task {task_id}")
@@ -47,10 +51,18 @@ async def process_video_task(
         task_service = TaskService(db)
 
         try:
+            async def ensure_not_cancelled() -> None:
+                if await JobQueue.is_task_cancelled(task_id):
+                    raise TaskCancelledError("Cancelled by admin action")
+
+            await ensure_not_cancelled()
+
             # Progress callback
             async def update_progress(percent: int, message: str, metadata: Optional[Dict[str, Any]] = None):
+                await ensure_not_cancelled()
                 await progress.update(percent, message, metadata=metadata)
                 logger.info(f"Task {task_id}: {percent}% - {message}")
+                await ensure_not_cancelled()
 
             # Process the video
             result = await task_service.process_task(
@@ -60,18 +72,33 @@ async def process_video_task(
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,
-                progress_callback=update_progress
+                progress_callback=update_progress,
+                cancel_check=ensure_not_cancelled,
             )
 
             logger.info(f"Task {task_id} completed successfully")
             await progress.complete()
             return result
 
+        except TaskCancelledError as e:
+            message = str(e)
+            logger.info(f"Task {task_id} cancelled: {message}")
+            await task_service.task_repo.update_task_status(
+                db,
+                task_id,
+                "error",
+                progress_message=message,
+            )
+            await progress.error(message)
+            return {"task_id": task_id, "cancelled": True, "message": message}
+
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}", exc_info=True)
             await progress.error(str(e))
             # Error will be caught by arq and task status will be updated
             raise
+        finally:
+            await JobQueue.clear_task_cancelled(task_id)
 
 
 # Worker configuration for arq

@@ -1026,7 +1026,7 @@ def get_available_transitions() -> List[str]:
 def apply_transition_effect(clip1_path: Path, clip2_path: Path, transition_path: Path, output_path: Path) -> bool:
     """Apply transition effect between two clips using a transition video."""
     try:
-        from moviepy import VideoFileClip, CompositeVideoClip, concatenate_videoclips
+        from moviepy import VideoFileClip, concatenate_videoclips, vfx
 
         # Load clips
         clip1 = VideoFileClip(str(clip1_path))
@@ -1044,11 +1044,9 @@ def apply_transition_effect(clip1_path: Path, clip2_path: Path, transition_path:
         # Create fade effect with transition
         fade_duration = 0.5  # Half second fade
 
-        # Fade out clip1
-        clip1_faded = clip1.with_effects(["fadeout", fade_duration])
-
-        # Fade in clip2
-        clip2_faded = clip2.with_effects(["fadein", fade_duration])
+        # MoviePy v2 expects effect objects, not string names.
+        clip1_faded = clip1.with_effects([vfx.FadeOut(fade_duration)])
+        clip2_faded = clip2.with_effects([vfx.FadeIn(fade_duration)])
 
         # Combine: clip1 -> transition -> clip2
         final_clip = concatenate_videoclips([

@@ -8,3 +8,4 @@ temp/
 *.m4a
 backend/uploads/
 backend/clips/
+backend/.cache/

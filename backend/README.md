@@ -64,3 +64,8 @@ Backend is started by `docker-compose.yml` with:
 
 When running locally or via Docker:
 - Swagger UI: http://localhost:8000/docs
+
+## Admin Task API
+
+- `POST /tasks/admin/cancel-all`: cancel all `queued`/`processing` tasks and drain queued ARQ jobs.
+- If `ADMIN_API_KEY` is set, include it as `x-admin-key` request header.
