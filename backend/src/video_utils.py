@@ -1,6 +1,6 @@
 """
 Utility functions for video-related operations.
-Optimized for MoviePy v2, AssemblyAI integration, and high-quality output.
+Optimized for MoviePy v2, local transcription, and high-quality output.
 """
 
 from pathlib import Path
@@ -10,11 +10,15 @@ import logging
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import json
+import threading
 
 import cv2
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
 
-import assemblyai as aai
+try:
+    import assemblyai as aai
+except ImportError:  # pragma: no cover - optional provider
+    aai = None
 import srt
 from datetime import timedelta
 
@@ -22,6 +26,8 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
+_whisper_model_cache: Dict[str, Any] = {}
+_whisper_model_lock = threading.Lock()
 
 class VideoProcessor:
     """Handles video processing operations with optimized settings."""
@@ -57,101 +63,244 @@ class VideoProcessor:
         }
         return settings.get(target_quality, settings["high"])
 
-def get_video_transcript(video_path: Union[Path, str]) -> str:
-    """Get transcript using AssemblyAI with word-level timing for precise subtitles."""
-    video_path = Path(video_path)
-    logger.info(f"Getting transcript for: {video_path}")
+def _get_transcription_provider() -> str:
+    provider = (config.transcription_provider or "local").strip().lower()
+    if provider not in {"local", "assemblyai"}:
+        logger.warning(f"Unknown transcription provider '{provider}', falling back to local")
+        return "local"
+    return provider
 
-    # Configure AssemblyAI
+
+def _resolve_whisper_device() -> Tuple[str, bool]:
+    desired = (getattr(config, "whisper_device", "auto") or "auto").strip().lower()
+    if desired not in {"auto", "cuda", "gpu", "cpu"}:
+        logger.warning(f"Unknown WHISPER_DEVICE '{desired}', defaulting to auto")
+        desired = "auto"
+
+    try:
+        import torch  # type: ignore
+        cuda_available = bool(torch.cuda.is_available())
+    except Exception as exc:
+        logger.warning(f"Torch CUDA probe failed ({exc}); using CPU")
+        cuda_available = False
+
+    if desired in {"cuda", "gpu"}:
+        if cuda_available:
+            return "cuda", True
+        logger.warning("WHISPER_DEVICE requested CUDA but no GPU is available; falling back to CPU")
+        return "cpu", False
+
+    if desired == "cpu":
+        return "cpu", False
+
+    # Auto mode.
+    return ("cuda", True) if cuda_available else ("cpu", False)
+
+
+def _get_whisper_model(model_name: str, device: str):
+    cache_key = f"{model_name}:{device}"
+    with _whisper_model_lock:
+        cached = _whisper_model_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        import whisper
+
+        logger.info(f"Loading local Whisper model '{model_name}' on device '{device}'")
+        loaded_model = whisper.load_model(model_name, device=device)
+        _whisper_model_cache[cache_key] = loaded_model
+        return loaded_model
+
+
+def _transcribe_with_local_whisper(video_path: Path) -> Dict[str, Any]:
+    model_name = config.whisper_model or "medium"
+    device, use_fp16 = _resolve_whisper_device()
+    model = _get_whisper_model(model_name, device)
+    logger.info(
+        f"Starting local Whisper transcription using model '{model_name}' "
+        f"on device '{device}' (fp16={use_fp16})"
+    )
+    result = model.transcribe(
+        str(video_path),
+        task="transcribe",
+        word_timestamps=True,
+        verbose=False,
+        fp16=use_fp16,
+    )
+
+    transcript_text = str(result.get("text") or "").strip()
+    segments = result.get("segments") or []
+    words_data: List[Dict[str, Any]] = []
+
+    for segment in segments:
+        segment_words = segment.get("words") or []
+        for word in segment_words:
+            text = str(word.get("word") or "").strip()
+            if not text:
+                continue
+
+            start_sec = word.get("start")
+            end_sec = word.get("end")
+            if start_sec is None or end_sec is None:
+                continue
+
+            start_ms = int(float(start_sec) * 1000)
+            end_ms = int(float(end_sec) * 1000)
+            if end_ms <= start_ms:
+                continue
+
+            probability = word.get("probability")
+            confidence = float(probability) if probability is not None else 1.0
+            words_data.append(
+                {
+                    "text": text,
+                    "start": start_ms,
+                    "end": end_ms,
+                    "confidence": confidence,
+                }
+            )
+
+    # Fallback for environments where word-level timings are unavailable.
+    if not words_data:
+        for segment in segments:
+            text = str(segment.get("text") or "").strip()
+            start_sec = segment.get("start")
+            end_sec = segment.get("end")
+            if not text or start_sec is None or end_sec is None:
+                continue
+            start_ms = int(float(start_sec) * 1000)
+            end_ms = int(float(end_sec) * 1000)
+            if end_ms <= start_ms:
+                continue
+            words_data.append(
+                {
+                    "text": text,
+                    "start": start_ms,
+                    "end": end_ms,
+                    "confidence": 1.0,
+                }
+            )
+
+    if not words_data:
+        raise Exception("Transcription produced no timestamped words")
+
+    return {"words": words_data, "text": transcript_text}
+
+
+def _transcribe_with_assemblyai(video_path: Path) -> Dict[str, Any]:
+    if aai is None:
+        raise Exception("AssemblyAI provider selected but assemblyai package is not installed")
+    if not config.assembly_ai_api_key:
+        raise Exception("AssemblyAI provider selected but ASSEMBLY_AI_API_KEY is not set")
+
     aai.settings.api_key = config.assembly_ai_api_key
     transcriber = aai.Transcriber()
-
-    # Request word-level timestamps for precise subtitle sync
     config_obj = aai.TranscriptionConfig(
         speaker_labels=False,
         punctuate=True,
         format_text=True,
-        speech_models=["universal-2"]
+        speech_models=["universal-2"],
     )
 
+    logger.info("Starting AssemblyAI transcription")
+    transcript = transcriber.transcribe(str(video_path), config=config_obj)
+    if transcript.status == aai.TranscriptStatus.error:
+        raise Exception(f"Transcription failed: {transcript.error}")
+
+    words_data: List[Dict[str, Any]] = []
+    if transcript.words:
+        for word in transcript.words:
+            if word.start is None or word.end is None:
+                continue
+            if word.end <= word.start:
+                continue
+            words_data.append(
+                {
+                    "text": str(word.text or "").strip(),
+                    "start": int(word.start),
+                    "end": int(word.end),
+                    "confidence": float(getattr(word, "confidence", None) or 1.0),
+                }
+            )
+
+    if not words_data:
+        raise Exception("AssemblyAI transcription produced no timestamped words")
+
+    return {"words": words_data, "text": str(getattr(transcript, "text", "") or "").strip()}
+
+
+def get_video_transcript(video_path: Union[Path, str]) -> str:
+    """Get transcript using configured provider with word-level timings."""
+    video_path = Path(video_path)
+    logger.info(f"Getting transcript for: {video_path}")
+
+    provider = _get_transcription_provider()
+    logger.info(f"Transcription provider: {provider}")
+
     try:
-        logger.info("Starting AssemblyAI transcription")
-        transcript = transcriber.transcribe(str(video_path), config=config_obj)
+        if provider == "assemblyai":
+            transcript_data = _transcribe_with_assemblyai(video_path)
+        else:
+            transcript_data = _transcribe_with_local_whisper(video_path)
 
-        if transcript.status == aai.TranscriptStatus.error:
-            logger.error(f"AssemblyAI transcription failed: {transcript.error}")
-            raise Exception(f"Transcription failed: {transcript.error}")
-
-        # Format transcript with timestamps for AI analysis
-        formatted_lines = []
-        if transcript.words:
-            logger.info(f"Processing {len(transcript.words)} words with precise timing")
-
-            # Group words into logical segments for readability
-            current_segment = []
-            current_start = None
-            segment_word_count = 0
-            max_words_per_segment = 8  # ~3-4 seconds of speech
-
-            for word in transcript.words:
-                if current_start is None:
-                    current_start = word.start
-
-                current_segment.append(word.text)
-                segment_word_count += 1
-
-                # End segment at natural breaks or word limit
-                if (segment_word_count >= max_words_per_segment or
-                    word.text.endswith('.') or word.text.endswith('!') or word.text.endswith('?')):
-
-                    if current_segment:
-                        start_time = format_ms_to_timestamp(current_start)
-                        end_time = format_ms_to_timestamp(word.end)
-                        text = ' '.join(current_segment)
-                        formatted_lines.append(f"[{start_time} - {end_time}] {text}")
-
-                    current_segment = []
-                    current_start = None
-                    segment_word_count = 0
-
-            # Handle any remaining words
-            if current_segment and current_start is not None:
-                start_time = format_ms_to_timestamp(current_start)
-                end_time = format_ms_to_timestamp(transcript.words[-1].end)
-                text = ' '.join(current_segment)
-                formatted_lines.append(f"[{start_time} - {end_time}] {text}")
-
-        # Cache the raw transcript for subtitle generation
-        cache_transcript_data(video_path, transcript)
+        cache_transcript_data(video_path, transcript_data)
+        formatted_transcript = build_formatted_transcript_from_words(transcript_data["words"])
+        formatted_lines = [line for line in formatted_transcript.splitlines() if line.strip()]
         cache_formatted_transcript(video_path, formatted_lines)
 
-        result = '\n'.join(formatted_lines)
-        logger.info(f"Transcript formatted: {len(formatted_lines)} segments, {len(result)} chars")
+        result = "\n".join(formatted_lines)
+        logger.info(
+            f"Transcript formatted: {len(formatted_lines)} segments, "
+            f"{len(transcript_data['words'])} words, {len(result)} chars"
+        )
         return result
-
     except Exception as e:
         logger.error(f"Error in transcription: {e}")
         raise
 
-def cache_transcript_data(video_path: Path, transcript) -> None:
-    """Cache AssemblyAI transcript data for subtitle generation."""
+def cache_transcript_data(video_path: Path, transcript: Union[Dict[str, Any], Any]) -> None:
+    """Cache provider-agnostic transcript data for subtitle generation."""
     cache_path = video_path.with_suffix('.transcript_cache.json')
 
-    # Store word-level data
-    words_data = []
-    if transcript.words:
-        for word in transcript.words:
+    words_data: List[Dict[str, Any]] = []
+    transcript_text = ""
+
+    # New provider-agnostic path (dict-like).
+    if isinstance(transcript, dict):
+        transcript_text = str(transcript.get("text") or "")
+        for word in transcript.get("words") or []:
+            text = str(word.get("text") or "").strip()
+            start = word.get("start")
+            end = word.get("end")
+            if not text or start is None or end is None:
+                continue
+            start_ms = int(start)
+            end_ms = int(end)
+            if end_ms <= start_ms:
+                continue
             words_data.append({
-                'text': word.text,
-                'start': word.start,
-                'end': word.end,
-                'confidence': word.confidence if hasattr(word, 'confidence') else 1.0
+                "text": text,
+                "start": start_ms,
+                "end": end_ms,
+                "confidence": float(word.get("confidence", 1.0) or 1.0),
+            })
+    else:
+        # Backward compatibility path for old AssemblyAI object shape.
+        transcript_text = str(getattr(transcript, "text", "") or "")
+        transcript_words = getattr(transcript, "words", None) or []
+        for word in transcript_words:
+            if getattr(word, "start", None) is None or getattr(word, "end", None) is None:
+                continue
+            if word.end <= word.start:
+                continue
+            words_data.append({
+                "text": str(getattr(word, "text", "")).strip(),
+                "start": int(word.start),
+                "end": int(word.end),
+                "confidence": float(getattr(word, "confidence", 1.0) or 1.0),
             })
 
-    cache_data = {
-        'words': words_data,
-        'text': transcript.text
-    }
+    cache_data = {"words": words_data, "text": transcript_text}
 
     with open(cache_path, 'w') as f:
         json.dump(cache_data, f)
@@ -167,7 +316,7 @@ def cache_formatted_transcript(video_path: Path, formatted_lines: List[str]) -> 
     logger.info(f"Cached formatted transcript to {transcript_path}")
 
 def load_cached_transcript_data(video_path: Path) -> Optional[Dict]:
-    """Load cached AssemblyAI transcript data."""
+    """Load cached transcript data with word timings."""
     cache_path = video_path.with_suffix('.transcript_cache.json')
 
     if not cache_path.exists():
@@ -561,7 +710,7 @@ def parse_timestamp_to_seconds(timestamp_str: str) -> float:
         return 0.0
 
 def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float, clip_end: float, video_width: int, video_height: int, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> List[TextClip]:
-    """Create subtitles using AssemblyAI's precise word timing."""
+    """Create subtitles using cached word timings."""
     video_path = Path(video_path)
     transcript_data = load_cached_transcript_data(video_path)
 
@@ -671,7 +820,7 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
             logger.warning(f"Failed to create subtitle for '{text}': {e}")
             continue
 
-    logger.info(f"Created {len(subtitle_clips)} subtitle elements from AssemblyAI data")
+    logger.info(f"Created {len(subtitle_clips)} subtitle elements from cached transcript data")
     return subtitle_clips
 
 def create_optimized_clip(
@@ -685,7 +834,7 @@ def create_optimized_clip(
     font_color: str = "#FFFFFF",
     error_collector: Optional[List[str]] = None,
 ) -> bool:
-    """Create optimized 9:16 clip with AssemblyAI subtitles."""
+    """Create optimized 9:16 clip with word-timed subtitles."""
     try:
         video_path = Path(video_path)
         output_path = Path(output_path)
@@ -717,7 +866,7 @@ def create_optimized_clip(
             x2=x_offset + new_width, y2=y_offset + new_height
         )
 
-        # Add AssemblyAI subtitles
+        # Add subtitles from cached word timings.
         final_clips = [cropped_clip]
 
         if add_subtitles:
@@ -1028,7 +1177,7 @@ def create_clips_with_transitions(
 
 # Backward compatibility functions
 def get_video_transcript_with_assemblyai(path: Path) -> str:
-    """Backward compatibility wrapper."""
+    """Backward compatibility wrapper; uses configured transcription provider."""
     return get_video_transcript(path)
 
 def create_9_16_clip(video_path: Path, start_time: float, end_time: float, output_path: Path, subtitle_text: str = "") -> bool:

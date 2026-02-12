@@ -52,6 +52,7 @@ Backend compatibility behavior:
 - legacy model var: `LLM_MODEL`
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
 - legacy Whisper var: `WHISPER_MODEL`
+- transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)
 
 ## Docker
 

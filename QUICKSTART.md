@@ -6,7 +6,6 @@ Run SupoClip with Docker in just one command!
 
 1. **Docker Desktop** installed and running
 2. **API Keys** (get these from the providers):
-   - [AssemblyAI API Key](https://www.assemblyai.com/) (required for transcription)
    - At least one AI provider:
      - [OpenAI API Key](https://platform.openai.com/api-keys) (recommended)
      - [Google AI API Key](https://makersuite.google.com/app/apikey)
@@ -34,14 +33,17 @@ That's it! The script will:
 Edit the `.env` file in the project root and add your API keys:
 
 ```bash
-# Required for video transcription
-ASSEMBLY_AI_API_KEY=your_assemblyai_key_here
-
 # Choose one AI provider for clip selection
 OPENAI_API_KEY=your_openai_key_here
 
 # Configure which AI model to use
 LLM=openai:gpt-5-mini
+
+# Optional (default local transcription)
+TRANSCRIPTION_PROVIDER=local
+
+# Optional (only needed when TRANSCRIPTION_PROVIDER=assemblyai)
+# ASSEMBLY_AI_API_KEY=your_assemblyai_key_here
 ```
 
 ### 2. Start SupoClip
@@ -82,7 +84,6 @@ Canonical reference: `docs/config.md`
 
 | Variable | Description | Where to Get |
 |----------|-------------|--------------|
-| `ASSEMBLY_AI_API_KEY` | Speech-to-text transcription | https://www.assemblyai.com/ |
 | `OPENAI_API_KEY` | OpenAI GPT models | https://platform.openai.com/api-keys |
 | `LLM` | AI model identifier | e.g., `openai:gpt-5-mini` |
 
@@ -91,9 +92,16 @@ Canonical reference: `docs/config.md`
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WHISPER_MODEL_SIZE` | `medium` | Whisper model size (tiny/base/small/medium/large) |
+| `WHISPER_DEVICE` | `auto` | Whisper device target (`auto`, `cuda`, `cpu`) |
+| `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API) |
+| `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
+| `WORKER_MAX_JOBS` | `2` | Max concurrent background jobs (reduce if CPU is saturated) |
+| `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
 | `ANTHROPIC_API_KEY` | - | For Claude models |
+
+Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into a persistent Docker volume.
 
 ## Supported AI Models
 

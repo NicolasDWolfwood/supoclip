@@ -39,6 +39,7 @@ services:
         - linux/amd64  # Force x86_64 for MediaPipe compatibility
     container_name: supoclip-backend
     platform: linux/amd64
+    gpus: ${DOCKER_GPU_REQUEST:-all}
     command: [".venv/bin/uvicorn", "src.main_refactored:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "8000:8000"
@@ -48,6 +49,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - whisper_cache:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -56,11 +58,16 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ASSEMBLY_AI_API_KEY=${ASSEMBLY_AI_API_KEY}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-local}
       - LLM=${LLM:-openai:gpt-5-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-medium}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-2}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped
     depends_on:
       postgres:
@@ -83,6 +90,7 @@ services:
         - linux/amd64
     container_name: supoclip-worker
     platform: linux/amd64
+    gpus: ${DOCKER_GPU_REQUEST:-all}
     command: [".venv/bin/arq", "src.workers.tasks.WorkerSettings"]
     volumes:
       - ./backend/src:/app/src
@@ -90,6 +98,7 @@ services:
       - ./backend/clips:/app/clips
       - ./backend/fonts:/app/fonts
       - ./backend/transitions:/app/transitions
+      - whisper_cache:/root/.cache/whisper
     environment:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
@@ -98,11 +107,16 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - ASSEMBLY_AI_API_KEY=${ASSEMBLY_AI_API_KEY}
+      - TRANSCRIPTION_PROVIDER=${TRANSCRIPTION_PROVIDER:-local}
       - LLM=${LLM:-openai:gpt-5-mini}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-medium}
+      - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-2}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
     restart: unless-stopped
     depends_on:
       postgres:
@@ -151,6 +165,8 @@ volumes:
   redis_data:
     driver: local
   postgres_data:
+    driver: local
+  whisper_cache:
     driver: local
 
 networks:

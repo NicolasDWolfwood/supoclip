@@ -191,9 +191,9 @@ async def start_task(request: Request):
 
         # Process video (same for both YouTube and uploaded videos)
         if video_path:
-            logger.info("🎤 Starting transcript generation with AssemblyAI + SRT equalization")
+            logger.info("🎤 Starting transcript generation with configured transcription provider")
             transcript = get_video_transcript(video_path)
-            logger.info(f"✅ AssemblyAI transcript generated with 10-char line equalization (length: {len(transcript)} characters)")
+            logger.info(f"✅ Transcript generated with 10-char line equalization (length: {len(transcript)} characters)")
 
             logger.info("🤖 Starting AI analysis for relevant segments")
             relevant_parts = await get_most_relevant_parts_by_transcript(transcript)
@@ -386,7 +386,7 @@ async def process_video_task(task_id: str, raw_source: dict, user_id: str, font_
 
         # Process video
         if video_path:
-            logger.info(f"📊 Task {task_id}: Generating transcript with AssemblyAI...")
+            logger.info(f"📊 Task {task_id}: Generating transcript...")
             transcript = get_video_transcript(video_path)
             logger.info(f"✅ Transcript generated (length: {len(transcript)} characters)")
 

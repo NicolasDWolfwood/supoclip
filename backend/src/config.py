@@ -9,6 +9,8 @@ class Config:
         # - prefer the documented vars (LLM, WHISPER_MODEL_SIZE)
         # - still accept legacy names used in older revisions
         self.whisper_model = os.getenv("WHISPER_MODEL_SIZE") or os.getenv("WHISPER_MODEL", "medium")
+        self.whisper_device = (os.getenv("WHISPER_DEVICE", "auto") or "auto").strip().lower()
+        self.transcription_provider = (os.getenv("TRANSCRIPTION_PROVIDER", "local") or "local").strip().lower()
         self.llm = os.getenv("LLM") or os.getenv("LLM_MODEL") or "openai:gpt-5-mini"
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -26,3 +28,4 @@ class Config:
         # Redis configuration
         self.redis_host = os.getenv("REDIS_HOST", "localhost")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
+        self.worker_max_jobs = int(os.getenv("WORKER_MAX_JOBS", "2"))

@@ -82,7 +82,7 @@ class VideoService:
     @staticmethod
     async def generate_transcript(video_path: Path) -> str:
         """
-        Generate transcript from video using AssemblyAI.
+        Generate transcript from video using configured transcription provider.
         Runs in thread pool to avoid blocking.
         """
         logger.info(f"Generating transcript for: {video_path}")
@@ -93,7 +93,7 @@ class VideoService:
     @staticmethod
     async def generate_transcript_with_progress(video_path: Path, progress_callback: Optional[callable] = None) -> str:
         """
-        Generate transcript and emit heartbeat progress while waiting for AssemblyAI.
+        Generate transcript and emit heartbeat progress while waiting for transcription.
         This prevents the UI from appearing stuck during long transcription calls.
         """
         cached_transcript = await run_in_thread(get_cached_formatted_transcript, str(video_path))

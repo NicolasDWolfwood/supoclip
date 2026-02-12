@@ -684,6 +684,23 @@ export default function Home() {
 
             {isLoading && (
               <div className="space-y-4">
+                {/*
+                  Upload flow should only show upload progress on this page.
+                  Pipeline stage progress is shown on the task details page after redirect.
+                */}
+                {sourceType === "upload" && currentStep === "upload" ? (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-gray-600">Upload</span>
+                      <span className="text-black">{progress}%</span>
+                    </div>
+                    <Progress value={progress} className="h-2" />
+                    {statusMessage && (
+                      <p className="text-sm text-black">{statusMessage}</p>
+                    )}
+                  </div>
+                ) : (
+                  <>
                 <div className="space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-600">Processing</span>
@@ -733,6 +750,8 @@ export default function Home() {
                       </div>
                     </div>
                   </div>
+                )}
+                  </>
                 )}
               </div>
             )}

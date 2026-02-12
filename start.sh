@@ -21,11 +21,12 @@ if [ ! -f .env ]; then
     echo -e "${RED}Error: .env file not found!${NC}"
     echo ""
     echo "Please create a .env file with your API keys:"
-    echo "  1. Copy the template: cp .env.example .env"
+    echo "  1. Copy the template: cp .env.sample .env"
     echo "  2. Or use the provided .env file"
     echo "  3. Edit .env and add your API keys:"
-    echo "     - ASSEMBLY_AI_API_KEY (required)"
     echo "     - OPENAI_API_KEY or GOOGLE_API_KEY or ANTHROPIC_API_KEY"
+    echo "     - TRANSCRIPTION_PROVIDER=local (default) or assemblyai"
+    echo "     - ASSEMBLY_AI_API_KEY (only if TRANSCRIPTION_PROVIDER=assemblyai)"
     echo ""
     exit 1
 fi
@@ -33,9 +34,10 @@ fi
 # Check if required API keys are set
 source .env
 
-if [ -z "$ASSEMBLY_AI_API_KEY" ]; then
-    echo -e "${YELLOW}Warning: ASSEMBLY_AI_API_KEY is not set in .env${NC}"
-    echo "Video transcription will not work without this key."
+TRANSCRIPTION_PROVIDER="${TRANSCRIPTION_PROVIDER:-local}"
+if [ "$TRANSCRIPTION_PROVIDER" = "assemblyai" ] && [ -z "$ASSEMBLY_AI_API_KEY" ]; then
+    echo -e "${YELLOW}Warning: TRANSCRIPTION_PROVIDER=assemblyai but ASSEMBLY_AI_API_KEY is not set in .env${NC}"
+    echo "Transcription will fail until ASSEMBLY_AI_API_KEY is configured."
     echo ""
 fi
 

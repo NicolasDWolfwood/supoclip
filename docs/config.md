@@ -6,12 +6,16 @@ This is the single source of truth for SupoClip runtime environment variables.
 
 | Variable | Required | Default | Used By | Notes |
 |---|---|---|---|---|
-| `ASSEMBLY_AI_API_KEY` | Yes | - | backend, worker | Required for transcription. |
+| `TRANSCRIPTION_PROVIDER` | No | `local` | backend, worker | Transcription backend: `local` or `assemblyai`. |
+| `ASSEMBLY_AI_API_KEY` | Conditional | - | backend, worker | Required when `TRANSCRIPTION_PROVIDER=assemblyai`. |
 | `LLM` | No | `openai:gpt-5-mini` | backend, worker | Primary model selector (`provider:model`). |
 | `OPENAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `openai:*`. |
 | `GOOGLE_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `google:*`. |
 | `ANTHROPIC_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `anthropic:*`. |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
+| `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
+| `WORKER_MAX_JOBS` | No | `2` | worker | Max concurrent background jobs; lower values reduce CPU contention during local transcription. |
+| `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |
 | `TEMP_DIR` | No | `temp` (local) / `/app/uploads` (Docker) | backend, worker | Working directory for uploaded/downloaded files and clip output paths. |
 | `DATABASE_URL` | Yes | compose-provided value | backend, worker | Postgres connection string. |
 | `REDIS_HOST` | Yes (Docker) | `localhost` | backend, worker | Redis host. |
@@ -50,6 +54,6 @@ Examples:
 
 When adding/changing a variable:
 1. Update `backend/src/config.py`.
-2. Update `.env.example` and `backend/.env.example`.
+2. Update root env template (`.env.sample` in this repo; `.env.example` if present) and `backend/.env.example`.
 3. Update this file.
 4. Update references in `QUICKSTART.md` and `CLAUDE.md` if user-visible.

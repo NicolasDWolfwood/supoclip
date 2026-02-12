@@ -31,7 +31,7 @@ class TranscriptAnalysis(BaseModel):
     key_topics: List[str] = Field(description="List of main topics discussed")
     diagnostics: Dict[str, Any] = Field(default_factory=dict, description="Internal analysis diagnostics")
 
-# Simplified system prompt that trusts AssemblyAI timing
+# Simplified system prompt that trusts transcript timing
 simplified_system_prompt = """You are an expert at analyzing video transcripts to find the most engaging segments for short-form content creation.
 
 CORE OBJECTIVES:

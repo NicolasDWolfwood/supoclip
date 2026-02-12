@@ -28,7 +28,8 @@ supoclip/
 
 **Backend:**
 - FastAPI with async/await patterns
-- AssemblyAI for video transcription (word-level timing)
+- Local Whisper for video transcription (word-level timing)
+- Optional AssemblyAI transcription provider
 - Pydantic AI for transcript analysis and clip selection
 - MoviePy v2 for video processing
 - OpenCV + MediaPipe for face detection and smart cropping
@@ -76,7 +77,10 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `uv` package manager
 
 **Environment variables (backend/.env):**
-- `ASSEMBLY_AI_API_KEY` - Required for video transcription
+- `TRANSCRIPTION_PROVIDER` - `local` (default) or `assemblyai`
+- `ASSEMBLY_AI_API_KEY` - Required only when `TRANSCRIPTION_PROVIDER=assemblyai`
+- `WHISPER_MODEL_SIZE` - Whisper model size used for local transcription
+- `WHISPER_DEVICE` - Whisper execution target (`auto`, `cuda`, `cpu`)
 - `LLM` - AI model identifier (e.g., "openai:gpt-5-mini", "anthropic:claude-4-sonnet")
 - `OPENAI_API_KEY`, `GOOGLE_API_KEY`, or `ANTHROPIC_API_KEY` - Depending on LLM choice
 - `DATABASE_URL` - PostgreSQL connection string
@@ -146,11 +150,11 @@ Services:
 ### Video Processing Pipeline
 
 1. **Video Input** → YouTube URL (via yt-dlp) or uploaded file
-2. **Transcription** → AssemblyAI generates word-level timestamps
+2. **Transcription** → Local Whisper (default) generates word-level timestamps
 3. **AI Analysis** → Pydantic AI analyzes transcript for viral segments (10-45s clips)
 4. **Clip Generation** → MoviePy creates 9:16 clips with:
    - Smart face-centered cropping (MediaPipe + OpenCV fallbacks)
-   - AssemblyAI-powered subtitles (word-level sync)
+   - Word-timed subtitles from cached transcript data
    - Custom fonts (TTF files in backend/fonts/)
    - Optional transition effects (videos in backend/transitions/)
 5. **Storage** → Clips saved to `{TEMP_DIR}/clips/` and metadata in PostgreSQL
@@ -235,7 +239,7 @@ Backend stores font preferences in tasks table and applies during clip generatio
 - Face detection uses MediaPipe (primary), OpenCV DNN (fallback), Haar cascade (last resort)
 - Subtitles positioned at 75% down the video (lower-middle, not bottom)
 - H.264 encoding with even dimensions required (uses `round_to_even()`)
-- AssemblyAI transcript data cached as `.transcript_cache.json` alongside video files
+- Transcript word timing data cached as `.transcript_cache.json` alongside video files
 
 ### AI Segment Selection
 
