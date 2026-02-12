@@ -6,7 +6,6 @@ Open-source AI video clipping, built as a self-hosted alternative to OpusClip.
 
 - `backend/`: FastAPI service for transcription, clip analysis, and video rendering
 - `frontend/`: Next.js app for task creation and clip management
-- `waitlist/`: Next.js waitlist/landing app for hosted offering
 - `docker-compose.yml`: local full-stack orchestration
 
 ## 60-Second Local Start

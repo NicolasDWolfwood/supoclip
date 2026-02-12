@@ -5,11 +5,10 @@ The canonical cross-agent guide is `AGENTS.md`; keep this file aligned for Claud
 
 ## Project Overview
 
-SupoClip is an open-source alternative to OpusClip - an AI-powered video clipping tool that transforms long-form content into viral short clips. The project consists of three main applications:
+SupoClip is an open-source alternative to OpusClip - an AI-powered video clipping tool that transforms long-form content into viral short clips. The project consists of two main applications:
 
 1. **Backend** (Python/FastAPI) - Video processing, AI analysis, and API
 2. **Frontend** (Next.js 15) - Main application interface
-3. **Waitlist** (Next.js 15) - Landing page for hosted version signups
 
 ## Architecture
 
@@ -19,7 +18,6 @@ SupoClip is an open-source alternative to OpusClip - an AI-powered video clippin
 supoclip/
 ├── backend/       # Python FastAPI backend
 ├── frontend/      # Next.js 15 main app
-├── waitlist/      # Next.js 15 landing page
 ├── docker-compose.yml
 └── init.sql       # PostgreSQL schema
 ```
@@ -112,16 +110,6 @@ npm start
 
 # Lint
 npm run lint
-```
-
-### Waitlist Development
-
-Same commands as frontend:
-
-```bash
-cd waitlist
-npm install
-npm run dev
 ```
 
 ### Docker Development

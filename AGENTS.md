@@ -4,10 +4,9 @@ This file is the canonical guide for AI coding agents working in this repository
 
 ## Purpose
 
-SupoClip is a monorepo with three apps:
+SupoClip is a monorepo with two apps:
 - `backend/` (FastAPI, video processing, AI clip selection)
 - `frontend/` (Next.js main app)
-- `waitlist/` (Next.js landing/waitlist)
 
 Use this file for agent behavior and project-state guidance. `CLAUDE.md` exists for compatibility with Claude-specific workflows and should stay aligned.
 
