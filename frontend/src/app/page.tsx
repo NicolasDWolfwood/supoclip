@@ -755,7 +755,7 @@ export default function Home() {
                     <p
                       style={{
                         color: fontColor,
-                        fontSize: `${Math.min(fontSize, 18)}px`,
+                        fontSize: `${fontSize}px`,
                         fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
                         textAlign: 'center',
                         lineHeight: '1.4'
@@ -768,12 +768,6 @@ export default function Home() {
                 </div>
               )}
             </div>
-
-            <Alert>
-              <AlertDescription className="text-sm">
-                Processing defaults and API keys now live in <Link href="/settings" className="underline">Settings</Link>.
-              </AlertDescription>
-            </Alert>
 
             {isLoading && (
               <div className="space-y-4">
