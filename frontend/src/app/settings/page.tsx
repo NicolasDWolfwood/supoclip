@@ -12,42 +12,103 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
-import { PlayCircle, Type, Palette, CheckCircle, AlertCircle, Settings } from "lucide-react";
+import {
+  PlayCircle,
+  Type,
+  Palette,
+  CheckCircle,
+  AlertCircle,
+  Settings,
+  Settings2,
+  KeyRound,
+  Cloud,
+  Cpu,
+  Bot,
+} from "lucide-react";
+
+const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
+const AI_PROVIDERS = ["openai", "google", "anthropic"] as const;
+
+type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
+type AiProvider = (typeof AI_PROVIDERS)[number];
 
 interface UserPreferences {
   fontFamily: string;
   fontSize: number;
   fontColor: string;
+  transitionsEnabled: boolean;
+  transcriptionProvider: TranscriptionProvider;
+  aiProvider: AiProvider;
 }
 
 function normalizeFontSize(size: number): number {
   return Math.max(24, Math.min(48, size));
 }
 
+function isTranscriptionProvider(value: string): value is TranscriptionProvider {
+  return TRANSCRIPTION_PROVIDERS.includes(value as TranscriptionProvider);
+}
+
+function isAiProvider(value: string): value is AiProvider {
+  return AI_PROVIDERS.includes(value as AiProvider);
+}
+
 export default function SettingsPage() {
   const [fontFamily, setFontFamily] = useState("TikTokSans-Regular");
   const [fontSize, setFontSize] = useState(24);
   const [fontColor, setFontColor] = useState("#FFFFFF");
-  const [availableFonts, setAvailableFonts] = useState<Array<{ name: string, display_name: string }>>([]);
+  const [transitionsEnabled, setTransitionsEnabled] = useState(false);
+  const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider>("local");
+  const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
+
+  const [availableFonts, setAvailableFonts] = useState<Array<{ name: string; display_name: string }>>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+
+  const [assemblyApiKey, setAssemblyApiKey] = useState("");
+  const [hasSavedAssemblyKey, setHasSavedAssemblyKey] = useState(false);
+  const [hasAssemblyEnvFallback, setHasAssemblyEnvFallback] = useState(false);
+  const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
+  const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
+  const [assemblyKeyError, setAssemblyKeyError] = useState<string | null>(null);
+
+  const [aiApiKeys, setAiApiKeys] = useState<Record<AiProvider, string>>({
+    openai: "",
+    google: "",
+    anthropic: "",
+  });
+  const [hasSavedAiKeys, setHasSavedAiKeys] = useState<Record<AiProvider, boolean>>({
+    openai: false,
+    google: false,
+    anthropic: false,
+  });
+  const [hasEnvAiFallback, setHasEnvAiFallback] = useState<Record<AiProvider, boolean>>({
+    openai: false,
+    google: false,
+    anthropic: false,
+  });
+  const [isSavingAiKey, setIsSavingAiKey] = useState(false);
+  const [aiKeyStatus, setAiKeyStatus] = useState<string | null>(null);
+  const [aiKeyError, setAiKeyError] = useState<string | null>(null);
+
   const { data: session, isPending } = useSession();
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
-  // Load available fonts from backend and inject them into the page
   useEffect(() => {
     const loadFonts = async () => {
       try {
         const response = await fetch(`${apiUrl}/fonts`);
-        if (response.ok) {
-          const data = await response.json();
-          setAvailableFonts(data.fonts || []);
+        if (!response.ok) {
+          return;
+        }
 
-          // Dynamically load fonts using @font-face
-          const fontFaceStyles = data.fonts.map((font: { name: string }) => {
+        const data = await response.json();
+        setAvailableFonts(data.fonts || []);
+
+        const fontFaceStyles = (data.fonts || [])
+          .map((font: { name: string }) => {
             return `
               @font-face {
                 font-family: '${font.name}';
@@ -56,45 +117,53 @@ export default function SettingsPage() {
                 font-style: normal;
               }
             `;
-          }).join('\n');
+          })
+          .join("\n");
 
-          // Inject font styles into the page
-          const styleElement = document.createElement('style');
-          styleElement.id = 'custom-fonts';
-          styleElement.innerHTML = fontFaceStyles;
+        const styleElement = document.createElement("style");
+        styleElement.id = "custom-fonts";
+        styleElement.innerHTML = fontFaceStyles;
 
-          // Remove existing custom fonts style if present
-          const existingStyle = document.getElementById('custom-fonts');
-          if (existingStyle) {
-            existingStyle.remove();
-          }
-
-          document.head.appendChild(styleElement);
+        const existingStyle = document.getElementById("custom-fonts");
+        if (existingStyle) {
+          existingStyle.remove();
         }
-      } catch (error) {
-        console.error('Failed to load fonts:', error);
+
+        document.head.appendChild(styleElement);
+      } catch (loadError) {
+        console.error("Failed to load fonts:", loadError);
       }
     };
 
     loadFonts();
   }, [apiUrl]);
 
-  // Load user preferences
   useEffect(() => {
     const loadPreferences = async () => {
-      if (!session?.user?.id) return;
+      if (!session?.user?.id) {
+        return;
+      }
 
       setIsFetching(true);
       try {
-        const response = await fetch('/api/preferences');
+        const response = await fetch("/api/preferences");
         if (response.ok) {
-          const data: UserPreferences = await response.json();
-          setFontFamily(data.fontFamily);
-          setFontSize(normalizeFontSize(data.fontSize));
-          setFontColor(data.fontColor);
+          const data: Partial<UserPreferences> = await response.json();
+          setFontFamily(data.fontFamily || "TikTokSans-Regular");
+          setFontSize(normalizeFontSize(data.fontSize || 24));
+          setFontColor(data.fontColor || "#FFFFFF");
+          setTransitionsEnabled(Boolean(data.transitionsEnabled));
+
+          if (typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)) {
+            setTranscriptionProvider(data.transcriptionProvider);
+          }
+
+          if (typeof data.aiProvider === "string" && isAiProvider(data.aiProvider)) {
+            setAiProvider(data.aiProvider);
+          }
         }
-      } catch (error) {
-        console.error('Failed to load preferences:', error);
+      } catch (loadError) {
+        console.error("Failed to load preferences:", loadError);
       } finally {
         setIsFetching(false);
       }
@@ -103,34 +172,235 @@ export default function SettingsPage() {
     loadPreferences();
   }, [session?.user?.id]);
 
+  useEffect(() => {
+    const loadTranscriptionSettings = async () => {
+      if (!session?.user?.id) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${apiUrl}/tasks/transcription-settings`, {
+          headers: {
+            user_id: session.user.id,
+          },
+        });
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json();
+        setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
+        setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+      } catch (loadError) {
+        console.error("Failed to load transcription settings:", loadError);
+      }
+    };
+
+    loadTranscriptionSettings();
+  }, [apiUrl, session?.user?.id]);
+
+  useEffect(() => {
+    const loadAiSettings = async () => {
+      if (!session?.user?.id) {
+        return;
+      }
+
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings`, {
+          headers: {
+            user_id: session.user.id,
+          },
+        });
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json();
+        setHasSavedAiKeys({
+          openai: Boolean(data.has_openai_key),
+          google: Boolean(data.has_google_key),
+          anthropic: Boolean(data.has_anthropic_key),
+        });
+        setHasEnvAiFallback({
+          openai: Boolean(data.has_env_openai),
+          google: Boolean(data.has_env_google),
+          anthropic: Boolean(data.has_env_anthropic),
+        });
+      } catch (loadError) {
+        console.error("Failed to load AI settings:", loadError);
+      }
+    };
+
+    loadAiSettings();
+  }, [apiUrl, session?.user?.id]);
+
+  const saveAssemblyKey = async (key: string): Promise<boolean> => {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      setAssemblyKeyError("AssemblyAI key cannot be empty.");
+      return false;
+    }
+
+    setIsSavingAssemblyKey(true);
+    setAssemblyKeyError(null);
+    setAssemblyKeyStatus(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/tasks/transcription-settings/assembly-key`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({ assembly_api_key: trimmed }),
+      });
+
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to save AssemblyAI key");
+      }
+
+      setHasSavedAssemblyKey(true);
+      setAssemblyApiKey("");
+      setAssemblyKeyStatus("AssemblyAI key saved.");
+      return true;
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : "Failed to save AssemblyAI key";
+      setAssemblyKeyError(message);
+      return false;
+    } finally {
+      setIsSavingAssemblyKey(false);
+    }
+  };
+
+  const deleteAssemblyKey = async (): Promise<void> => {
+    setIsSavingAssemblyKey(true);
+    setAssemblyKeyError(null);
+    setAssemblyKeyStatus(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/tasks/transcription-settings/assembly-key`, {
+        method: "DELETE",
+        headers: {
+          user_id: session?.user?.id || "",
+        },
+      });
+
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to remove AssemblyAI key");
+      }
+
+      setHasSavedAssemblyKey(false);
+      setAssemblyApiKey("");
+      setAssemblyKeyStatus("AssemblyAI key removed.");
+    } catch (deleteError) {
+      const message = deleteError instanceof Error ? deleteError.message : "Failed to remove AssemblyAI key";
+      setAssemblyKeyError(message);
+    } finally {
+      setIsSavingAssemblyKey(false);
+    }
+  };
+
+  const saveAiProviderKey = async (provider: AiProvider, key: string): Promise<boolean> => {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      setAiKeyError(`${provider} key cannot be empty.`);
+      return false;
+    }
+
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/${provider}/key`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({ api_key: trimmed }),
+      });
+
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || `Failed to save ${provider} key`);
+      }
+
+      setHasSavedAiKeys((prev) => ({ ...prev, [provider]: true }));
+      setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
+      setAiKeyStatus(`${provider} key saved.`);
+      return true;
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : `Failed to save ${provider} key`;
+      setAiKeyError(message);
+      return false;
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  };
+
+  const deleteAiProviderKey = async (provider: AiProvider): Promise<void> => {
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/${provider}/key`, {
+        method: "DELETE",
+        headers: {
+          user_id: session?.user?.id || "",
+        },
+      });
+
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || `Failed to remove ${provider} key`);
+      }
+
+      setHasSavedAiKeys((prev) => ({ ...prev, [provider]: false }));
+      setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
+      setAiKeyStatus(`${provider} key removed.`);
+    } catch (deleteError) {
+      const message = deleteError instanceof Error ? deleteError.message : `Failed to remove ${provider} key`;
+      setAiKeyError(message);
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  };
+
   const handleSavePreferences = async () => {
     setIsLoading(true);
     setError(null);
     setSuccess(false);
 
     try {
-      const response = await fetch('/api/preferences', {
-        method: 'PATCH',
+      const response = await fetch("/api/preferences", {
+        method: "PATCH",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           fontFamily,
           fontSize,
           fontColor,
+          transitionsEnabled,
+          transcriptionProvider,
+          aiProvider,
         }),
       });
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to save preferences');
+        throw new Error(errorData.error || "Failed to save preferences");
       }
 
       setSuccess(true);
       setTimeout(() => setSuccess(false), 3000);
-    } catch (error) {
-      console.error('Error saving preferences:', error);
-      setError(error instanceof Error ? error.message : 'Failed to save preferences');
+    } catch (saveError) {
+      console.error("Error saving preferences:", saveError);
+      setError(saveError instanceof Error ? saveError.message : "Failed to save preferences");
     } finally {
       setIsLoading(false);
     }
@@ -153,12 +423,8 @@ export default function SettingsPage() {
       <div className="min-h-screen bg-white">
         <div className="max-w-4xl mx-auto px-4 py-24">
           <div className="text-center">
-            <h1 className="text-3xl font-bold text-black mb-4">
-              Sign In Required
-            </h1>
-            <p className="text-gray-600 mb-8">
-              You need to sign in to access your settings
-            </p>
+            <h1 className="text-3xl font-bold text-black mb-4">Sign In Required</h1>
+            <p className="text-gray-600 mb-8">You need to sign in to access your settings</p>
             <Link href="/sign-in">
               <Button size="lg">Sign In</Button>
             </Link>
@@ -170,7 +436,6 @@ export default function SettingsPage() {
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Header */}
       <div className="border-b bg-white">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
@@ -197,36 +462,27 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="max-w-4xl mx-auto px-4 py-16">
         <div className="max-w-xl mx-auto">
           <div className="mb-8">
             <div className="flex items-center gap-2 mb-2">
               <Settings className="w-6 h-6 text-black" />
-              <h2 className="text-2xl font-bold text-black">
-                Settings
-              </h2>
+              <h2 className="text-2xl font-bold text-black">Settings</h2>
             </div>
             <p className="text-gray-600">
-              Configure your default preferences for video clip generation
+              Configure your default preferences for video clip generation and per-user API keys.
             </p>
           </div>
 
           <Separator className="my-8" />
 
           <div className="space-y-8">
-            {/* Font Preferences Section */}
             <div className="space-y-6">
               <div>
-                <h3 className="text-lg font-semibold text-black mb-1">
-                  Default Font Settings
-                </h3>
-                <p className="text-sm text-gray-600">
-                  These settings will be applied to all new video processing tasks
-                </p>
+                <h3 className="text-lg font-semibold text-black mb-1">Default Font Settings</h3>
+                <p className="text-sm text-gray-600">These defaults are applied to new video processing tasks.</p>
               </div>
 
-              {/* Font Family Selector */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium text-black flex items-center gap-2">
                   <Type className="w-4 h-4" />
@@ -249,11 +505,8 @@ export default function SettingsPage() {
                 </Select>
               </div>
 
-              {/* Font Size Slider */}
               <div className="space-y-2">
-                <Label className="text-sm font-medium text-black">
-                  Font Size: {fontSize}px
-                </Label>
+                <Label className="text-sm font-medium text-black">Font Size: {fontSize}px</Label>
                 <div className="px-2 pt-5">
                   <Slider
                     value={[fontSize]}
@@ -271,7 +524,6 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {/* Font Color Picker */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium text-black flex items-center gap-2">
                   <Palette className="w-4 h-4" />
@@ -310,7 +562,6 @@ export default function SettingsPage() {
                 </div>
               </div>
 
-              {/* Preview */}
               <div className="space-y-2">
                 <Label className="text-sm font-medium text-black">Preview</Label>
                 <div className="p-6 bg-black rounded-lg flex items-center justify-center min-h-[100px]">
@@ -319,8 +570,8 @@ export default function SettingsPage() {
                       color: fontColor,
                       fontSize: `${Math.min(fontSize, 32)}px`,
                       fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
-                      textAlign: 'center',
-                      lineHeight: '1.4'
+                      textAlign: "center",
+                      lineHeight: "1.4",
                     }}
                     className="font-medium"
                   >
@@ -330,31 +581,236 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            {/* Success/Error Messages */}
+            <Separator />
+
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-black" />
+                <h3 className="text-lg font-semibold text-black">Default Processing Settings</h3>
+              </div>
+
+              <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-black">Enable transitions</p>
+                    <p className="text-xs text-gray-500">Add transition effects between consecutive clips.</p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={transitionsEnabled}
+                    onClick={() => setTransitionsEnabled((prev) => !prev)}
+                    disabled={isLoading}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                      transitionsEnabled ? "bg-blue-600" : "bg-gray-300"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                        transitionsEnabled ? "translate-x-5" : "translate-x-1"
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-black">Transcription Provider</p>
+                    <p className="text-xs text-gray-500">Choose local Whisper or AssemblyAI for transcript generation.</p>
+                  </div>
+                  <KeyRound className="w-4 h-4 text-gray-500 mt-0.5" />
+                </div>
+
+                <Select
+                  value={transcriptionProvider}
+                  onValueChange={(value) => {
+                    if (isTranscriptionProvider(value)) {
+                      setTranscriptionProvider(value);
+                    }
+                    setAssemblyKeyStatus(null);
+                    setAssemblyKeyError(null);
+                  }}
+                  disabled={isLoading || isSavingAssemblyKey}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select transcription provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="local">
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4" />
+                        Local Whisper
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="assemblyai">
+                      <div className="flex items-center gap-2">
+                        <Cloud className="w-4 h-4" />
+                        AssemblyAI
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <p className="text-xs text-gray-500">
+                  {transcriptionProvider === "local"
+                    ? "Local mode uses the local worker queue and can run in parallel across workers."
+                    : "AssemblyAI mode uses a dedicated single-worker queue to avoid overloading remote transcription jobs."}
+                </p>
+
+                {transcriptionProvider === "assemblyai" && (
+                  <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+                    <label htmlFor="assembly-api-key" className="text-xs font-medium text-black">
+                      AssemblyAI API Key
+                    </label>
+                    <Input
+                      id="assembly-api-key"
+                      type="password"
+                      value={assemblyApiKey}
+                      onChange={(e) => setAssemblyApiKey(e.target.value ?? "")}
+                      placeholder={
+                        hasSavedAssemblyKey
+                          ? "Saved key present (enter new key to replace)"
+                          : "Paste your AssemblyAI key"
+                      }
+                      disabled={isLoading || isSavingAssemblyKey}
+                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isLoading || isSavingAssemblyKey || !assemblyApiKey.trim()}
+                        onClick={() => {
+                          void saveAssemblyKey(assemblyApiKey);
+                        }}
+                      >
+                        {isSavingAssemblyKey ? "Saving..." : "Save Key"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={isLoading || isSavingAssemblyKey || !hasSavedAssemblyKey}
+                        onClick={() => {
+                          void deleteAssemblyKey();
+                        }}
+                      >
+                        Remove Saved Key
+                      </Button>
+                      <span className="text-xs text-gray-500">
+                        {hasSavedAssemblyKey
+                          ? "Saved key available"
+                          : hasAssemblyEnvFallback
+                            ? "No saved key; using backend env fallback"
+                            : "No key configured"}
+                      </span>
+                    </div>
+                    {assemblyKeyStatus && <p className="text-xs text-green-600">{assemblyKeyStatus}</p>}
+                    {assemblyKeyError && <p className="text-xs text-red-600">{assemblyKeyError}</p>}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-black">AI Provider</p>
+                    <p className="text-xs text-gray-500">Choose which LLM provider analyzes transcripts to select clips.</p>
+                  </div>
+                  <Bot className="w-4 h-4 text-gray-500 mt-0.5" />
+                </div>
+
+                <Select
+                  value={aiProvider}
+                  onValueChange={(value) => {
+                    if (isAiProvider(value)) {
+                      setAiProvider(value);
+                    }
+                    setAiKeyStatus(null);
+                    setAiKeyError(null);
+                  }}
+                  disabled={isLoading || isSavingAiKey}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select AI provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="openai">OpenAI</SelectItem>
+                    <SelectItem value="google">Google</SelectItem>
+                    <SelectItem value="anthropic">Anthropic</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+                  <label htmlFor="ai-provider-key" className="text-xs font-medium text-black">
+                    {aiProvider.toUpperCase()} API Key
+                  </label>
+                  <Input
+                    id="ai-provider-key"
+                    type="password"
+                    value={aiApiKeys[aiProvider]}
+                    onChange={(e) => setAiApiKeys((prev) => ({ ...prev, [aiProvider]: e.target.value ?? "" }))}
+                    placeholder={
+                      hasSavedAiKeys[aiProvider]
+                        ? `Saved ${aiProvider} key present (enter new key to replace)`
+                        : `Paste your ${aiProvider} API key`
+                    }
+                    disabled={isLoading || isSavingAiKey}
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading || isSavingAiKey || !(aiApiKeys[aiProvider] || "").trim()}
+                      onClick={() => {
+                        void saveAiProviderKey(aiProvider, aiApiKeys[aiProvider]);
+                      }}
+                    >
+                      {isSavingAiKey ? "Saving..." : "Save Key"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isLoading || isSavingAiKey || !hasSavedAiKeys[aiProvider]}
+                      onClick={() => {
+                        void deleteAiProviderKey(aiProvider);
+                      }}
+                    >
+                      Remove Saved Key
+                    </Button>
+                    <span className="text-xs text-gray-500">
+                      {hasSavedAiKeys[aiProvider]
+                        ? "Saved key available"
+                        : hasEnvAiFallback[aiProvider]
+                          ? "No saved key; using backend env fallback"
+                          : "No key configured"}
+                    </span>
+                  </div>
+                  {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
+                  {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
+                </div>
+              </div>
+            </div>
+
             {success && (
               <Alert className="border-green-200 bg-green-50">
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <AlertDescription className="text-sm text-green-700">
-                  Preferences saved successfully!
-                </AlertDescription>
+                <AlertDescription className="text-sm text-green-700">Default preferences saved successfully!</AlertDescription>
               </Alert>
             )}
 
             {error && (
               <Alert className="border-red-200 bg-red-50">
                 <AlertCircle className="h-4 w-4 text-red-500" />
-                <AlertDescription className="text-sm text-red-700">
-                  {error}
-                </AlertDescription>
+                <AlertDescription className="text-sm text-red-700">{error}</AlertDescription>
               </Alert>
             )}
 
-            {/* Save Button */}
-            <Button
-              onClick={handleSavePreferences}
-              disabled={isLoading}
-              className="w-full h-11"
-            >
+            <Button onClick={handleSavePreferences} disabled={isLoading} className="w-full h-11">
               {isLoading ? "Saving..." : "Save Preferences"}
             </Button>
           </div>

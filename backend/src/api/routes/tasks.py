@@ -288,7 +288,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             if not (has_saved_key or has_env_key):
                 raise HTTPException(
                     status_code=400,
-                    detail="AssemblyAI selected but no API key is configured. Save one in Advanced Settings.",
+                    detail="AssemblyAI selected but no API key is configured. Save one in Settings.",
                 )
         ai_settings = await task_service.get_user_ai_settings(user_id)
         has_saved_ai_key = bool(ai_settings.get(f"has_{ai_provider}_key"))
@@ -300,7 +300,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         if not (has_saved_ai_key or has_env_ai_key):
             raise HTTPException(
                 status_code=400,
-                detail=f"{ai_provider} selected but no API key is configured. Save one in Advanced Settings.",
+                detail=f"{ai_provider} selected but no API key is configured. Save one in Settings.",
             )
 
         task_id = await task_service.create_task_with_source(
