@@ -14,7 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
-import { PlayCircle, ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock } from "lucide-react";
+import Image from "next/image";
+import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock } from "lucide-react";
 
 interface LatestTask {
   id: string;
@@ -396,7 +397,7 @@ export default function Home() {
         <div className="max-w-4xl mx-auto px-4 py-24">
           <div className="text-center mb-16">
             <h1 className="text-5xl font-bold text-black mb-4">
-              SupoClip
+              MrglSnips
             </h1>
             <p className="text-lg text-gray-600 mb-8 max-w-2xl mx-auto">
               Professional video clipping platform powered by AI
@@ -450,10 +451,8 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-black flex items-center justify-center">
-                <PlayCircle className="w-5 h-5 text-white" />
-              </div>
-              <h1 className="text-xl font-bold text-black">SupoClip</h1>
+              <Image src="/brand/logo.png" alt="MrglSnips logo" width={96} height={96} className="h-24 w-24 object-contain" />
+              <h1 className="text-xl font-bold text-black">MrglSnips</h1>
             </div>
 
             <div className="flex items-center gap-2">

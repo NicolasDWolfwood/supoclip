@@ -1,4 +1,4 @@
-# SupoClip
+# MrglSnips
 
 Open-source AI video clipping, built as a self-hosted alternative to OpusClip.
 

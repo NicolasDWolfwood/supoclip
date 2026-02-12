@@ -1,6 +1,6 @@
 # Local Host Mappings
 
-This is the quick lookup for SupoClip local host URLs and host port bindings.
+This is the quick lookup for MrglSnips local host URLs and host port bindings.
 
 ## Canonical Edit Location
 

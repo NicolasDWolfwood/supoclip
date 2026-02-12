@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This is the single source of truth for SupoClip runtime environment variables.
+This is the single source of truth for MrglSnips runtime environment variables.
 
 ## Core Variables
 

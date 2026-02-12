@@ -4,7 +4,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import ThemeToggle from "@/components/theme-toggle";
 
 export const metadata: Metadata = {
-  title: "SupoClip",
+  title: "MrglSnips",
   description: "Turn long videos into viral-ready shorts.",
 };
 

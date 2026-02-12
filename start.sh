@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# SupoClip - Quick Start Script
-# This script helps you start SupoClip with a single command
+# MrglSnips - Quick Start Script
+# This script helps you start MrglSnips with a single command
 
 set -e  # Exit on error
 
@@ -12,7 +12,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo "============================================"
-echo "  SupoClip - AI Video Clipping Tool"
+echo "  MrglSnips - AI Video Clipping Tool"
 echo "============================================"
 echo ""
 
@@ -79,7 +79,7 @@ FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-http://${APP_HOST}:${FRONTEND_HOST_PORT}}"
 BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://${APP_HOST}:${BACKEND_HOST_PORT}}"
 API_DOCS_URL="${BACKEND_ORIGIN}/docs"
 
-echo -e "${GREEN}Starting SupoClip...${NC}"
+echo -e "${GREEN}Starting MrglSnips...${NC}"
 echo ""
 
 # Build and start containers
@@ -90,7 +90,7 @@ echo ""
 $DOCKER_COMPOSE up -d --build
 
 echo ""
-echo -e "${GREEN}SupoClip is starting up!${NC}"
+echo -e "${GREEN}MrglSnips is starting up!${NC}"
 echo ""
 echo "Services will be available at:"
 echo "  - Frontend:  ${FRONTEND_ORIGIN}"

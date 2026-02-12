@@ -1,6 +1,6 @@
-# SupoClip Quick Start Guide
+# MrglSnips Quick Start Guide
 
-Run SupoClip with Docker in just one command!
+Run MrglSnips with Docker in just one command!
 
 ## Prerequisites
 
@@ -54,7 +54,7 @@ TRANSCRIPTION_PROVIDER=local
 # ADMIN_API_KEY=your_strong_random_admin_key
 ```
 
-### 2. Start SupoClip
+### 2. Start MrglSnips
 
 ```bash
 ./start.sh
@@ -190,7 +190,7 @@ docker-compose up -d
 
 ## Architecture
 
-SupoClip runs 6 Docker containers by default:
+MrglSnips runs 6 Docker containers by default:
 
 1. **Frontend** (Next.js 15) - Port 3000
 2. **Backend** (FastAPI + Python) - Port 8000
