@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
-import { PlayCircle, ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock } from "lucide-react";
+import { PlayCircle, ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock, Settings2 } from "lucide-react";
 
 interface LatestTask {
   id: string;
@@ -49,6 +49,8 @@ export default function Home() {
   const [fontColor, setFontColor] = useState("#FFFFFF");
   const [availableFonts, setAvailableFonts] = useState<Array<{ name: string, display_name: string }>>([]);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [showProcessingOptions, setShowProcessingOptions] = useState(false);
+  const [transitionsEnabled, setTransitionsEnabled] = useState(false);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -272,7 +274,8 @@ export default function Home() {
           font_options: {
             font_family: fontFamily,
             font_size: fontSize,
-            font_color: fontColor
+            font_color: fontColor,
+            transitions_enabled: transitionsEnabled,
           }
         }),
       });
@@ -682,6 +685,51 @@ export default function Home() {
                     >
                       Preview: Your subtitle will look like this
                     </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Advanced Processing Section */}
+            <div className="space-y-4 border rounded-lg p-4 bg-gray-50">
+              <div
+                className="flex items-center justify-between cursor-pointer"
+                onClick={() => setShowProcessingOptions(!showProcessingOptions)}
+              >
+                <div className="flex items-center gap-2">
+                  <Settings2 className="w-4 h-4" />
+                  <h3 className="text-sm font-medium text-black">Advanced Settings</h3>
+                </div>
+                <button type="button" className="text-xs text-gray-500">
+                  {showProcessingOptions ? "Hide" : "Show"}
+                </button>
+              </div>
+
+              {showProcessingOptions && (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-start justify-between gap-4 rounded-md border border-gray-200 bg-white p-3">
+                    <div>
+                      <p className="text-sm font-medium text-black">Enable transitions</p>
+                      <p className="text-xs text-gray-500">
+                        Add transition effects between consecutive clips.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={transitionsEnabled}
+                      onClick={() => setTransitionsEnabled((prev) => !prev)}
+                      disabled={isLoading}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                        transitionsEnabled ? "bg-blue-600" : "bg-gray-300"
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
+                          transitionsEnabled ? "translate-x-5" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
                   </div>
                 </div>
               )}

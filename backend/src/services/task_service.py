@@ -81,6 +81,7 @@ class TaskService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        transitions_enabled: bool = False,
         progress_callback: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None
     ) -> Dict[str, Any]:
@@ -122,6 +123,7 @@ class TaskService:
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,
+                transitions_enabled=transitions_enabled,
                 progress_callback=update_progress,
                 cancel_check=cancel_check,
             )

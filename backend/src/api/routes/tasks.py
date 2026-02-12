@@ -19,6 +19,22 @@ config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 
+def _coerce_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
 def _require_admin_access(request: Request) -> None:
     """
     Admin guard for destructive task-management endpoints.
@@ -84,6 +100,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_family = font_options.get("font_family", "TikTokSans-Regular")
     font_size = font_options.get("font_size", 24)
     font_color = font_options.get("font_color", "#FFFFFF")
+    transitions_enabled = _coerce_bool(font_options.get("transitions_enabled"), default=False)
 
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
@@ -117,7 +134,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 user_id,
                 font_family,
                 font_size,
-                font_color
+                font_color,
+                transitions_enabled,
             )
         except Exception as enqueue_error:
             logger.error(f"Failed to enqueue job for task {task_id}: {enqueue_error}")

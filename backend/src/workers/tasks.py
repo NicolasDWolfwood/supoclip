@@ -19,7 +19,8 @@ async def process_video_task(
     user_id: str,
     font_family: str = "TikTokSans-Regular",
     font_size: int = 24,
-    font_color: str = "#FFFFFF"
+    font_color: str = "#FFFFFF",
+    transitions_enabled: bool = False,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -33,6 +34,7 @@ async def process_video_task(
         font_family: Font family for subtitles
         font_size: Font size for subtitles
         font_color: Font color for subtitles
+        transitions_enabled: Whether transition effects should be applied
 
     Returns:
         Dict with processing results
@@ -72,6 +74,7 @@ async def process_video_task(
                 font_family=font_family,
                 font_size=font_size,
                 font_color=font_color,
+                transitions_enabled=transitions_enabled,
                 progress_callback=update_progress,
                 cancel_check=ensure_not_cancelled,
             )

@@ -15,7 +15,8 @@ from ..youtube_utils import (
 from ..video_utils import (
     get_video_transcript,
     get_cached_formatted_transcript,
-    create_clips_with_transitions
+    create_clips_with_transitions,
+    create_clips_from_segments,
 )
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import Config
@@ -203,13 +204,18 @@ class VideoService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
     ) -> Dict[str, Any]:
         """
-        Create video clips from segments with transitions and subtitles.
+        Create video clips from segments with subtitles, with optional transitions.
         Runs in thread pool as video processing is CPU-intensive.
         """
-        logger.info(f"Creating {len(segments)} video clips")
+        logger.info(
+            "Creating %s video clips (transitions_enabled=%s)",
+            len(segments),
+            transitions_enabled,
+        )
         clips_output_dir = Path(config.temp_dir) / "clips"
         clips_output_dir.mkdir(parents=True, exist_ok=True)
         render_diagnostics: Dict[str, Any] = {}
@@ -234,8 +240,9 @@ class VideoService:
                 loop,
             )
 
+        clip_builder = create_clips_with_transitions if transitions_enabled else create_clips_from_segments
         clips_info = await run_in_thread(
-            create_clips_with_transitions,
+            clip_builder,
             video_path,
             segments,
             clips_output_dir,
@@ -245,6 +252,8 @@ class VideoService:
             render_diagnostics,
             on_clip_progress,
         )
+        if not transitions_enabled:
+            render_diagnostics["transitions_disabled"] = True
 
         logger.info(f"Successfully created {len(clips_info)} clips")
         return {"clips": clips_info, "diagnostics": render_diagnostics}
@@ -283,6 +292,7 @@ class VideoService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -369,6 +379,7 @@ class VideoService:
                 font_family,
                 font_size,
                 font_color,
+                transitions_enabled,
                 progress_callback=progress_callback,
             )
             await ensure_not_cancelled()
