@@ -7,6 +7,11 @@ from typing import Optional, Dict, Any, List
 import logging
 
 logger = logging.getLogger(__name__)
+LLM_PROVIDER_COLUMNS = {
+    "openai": "openai_api_key_encrypted",
+    "google": "google_api_key_encrypted",
+    "anthropic": "anthropic_api_key_encrypted",
+}
 
 
 class TaskRepository:
@@ -20,13 +25,37 @@ class TaskRepository:
         status: str = "processing",
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
-        font_color: str = "#FFFFFF"
+        font_color: str = "#FFFFFF",
+        transcription_provider: str = "local",
+        ai_provider: str = "openai",
     ) -> str:
         """Create a new task and return its ID."""
         result = await db.execute(
             text("""
-                INSERT INTO tasks (user_id, source_id, status, font_family, font_size, font_color, created_at, updated_at)
-                VALUES (:user_id, :source_id, :status, :font_family, :font_size, :font_color, NOW(), NOW())
+                INSERT INTO tasks (
+                    user_id,
+                    source_id,
+                    status,
+                    font_family,
+                    font_size,
+                    font_color,
+                    transcription_provider,
+                    ai_provider,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :user_id,
+                    :source_id,
+                    :status,
+                    :font_family,
+                    :font_size,
+                    :font_color,
+                    :transcription_provider,
+                    :ai_provider,
+                    NOW(),
+                    NOW()
+                )
                 RETURNING id
             """),
             {
@@ -35,7 +64,9 @@ class TaskRepository:
                 "status": status,
                 "font_family": font_family,
                 "font_size": font_size,
-                "font_color": font_color
+                "font_color": font_color,
+                "transcription_provider": transcription_provider,
+                "ai_provider": ai_provider,
             }
         )
         await db.commit()
@@ -73,6 +104,8 @@ class TaskRepository:
             "font_family": row.font_family,
             "font_size": row.font_size,
             "font_color": row.font_color,
+            "transcription_provider": getattr(row, "transcription_provider", "local"),
+            "ai_provider": getattr(row, "ai_provider", "openai"),
             "created_at": row.created_at,
             "updated_at": row.updated_at
         }
@@ -146,12 +179,136 @@ class TaskRepository:
                 "source_title": row.source_title,
                 "source_type": row.source_type,
                 "status": row.status,
+                "transcription_provider": getattr(row, "transcription_provider", "local"),
+                "ai_provider": getattr(row, "ai_provider", "openai"),
                 "clips_count": row.clips_count,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at
             })
 
         return tasks
+
+    @staticmethod
+    async def get_user_encrypted_assembly_key(db: AsyncSession, user_id: str) -> Optional[str]:
+        """Get encrypted AssemblyAI key for a user."""
+        result = await db.execute(
+            text("SELECT assembly_api_key_encrypted FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            return None
+        return row.assembly_api_key_encrypted
+
+    @staticmethod
+    async def get_user_encrypted_ai_key(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+    ) -> Optional[str]:
+        """Get encrypted LLM provider API key for a user."""
+        column = LLM_PROVIDER_COLUMNS.get(provider)
+        if not column:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        result = await db.execute(
+            text(f"SELECT {column} FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            return None
+        return getattr(row, column)
+
+    @staticmethod
+    async def set_user_encrypted_assembly_key(
+        db: AsyncSession,
+        user_id: str,
+        encrypted_key: str,
+    ) -> None:
+        """Store encrypted AssemblyAI key for a user."""
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET assembly_api_key_encrypted = :encrypted_key,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id, "encrypted_key": encrypted_key},
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+
+    @staticmethod
+    async def clear_user_encrypted_assembly_key(db: AsyncSession, user_id: str) -> None:
+        """Clear stored encrypted AssemblyAI key for a user."""
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET assembly_api_key_encrypted = NULL,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+
+    @staticmethod
+    async def set_user_encrypted_ai_key(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+        encrypted_key: str,
+    ) -> None:
+        """Store encrypted LLM provider API key for a user."""
+        column = LLM_PROVIDER_COLUMNS.get(provider)
+        if not column:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        result = await db.execute(
+            text(
+                f"""
+                UPDATE users
+                SET {column} = :encrypted_key,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id, "encrypted_key": encrypted_key},
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+
+    @staticmethod
+    async def clear_user_encrypted_ai_key(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+    ) -> None:
+        """Clear encrypted LLM provider API key for a user."""
+        column = LLM_PROVIDER_COLUMNS.get(provider)
+        if not column:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        result = await db.execute(
+            text(
+                f"""
+                UPDATE users
+                SET {column} = NULL,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
 
     @staticmethod
     async def user_exists(db: AsyncSession, user_id: str) -> bool:
@@ -171,6 +328,18 @@ class TaskRepository:
         )
         await db.commit()
         logger.info(f"Deleted task {task_id}")
+
+    @staticmethod
+    async def delete_tasks_by_user(db: AsyncSession, user_id: str) -> int:
+        """Delete all tasks for a user. Returns count of deleted tasks."""
+        result = await db.execute(
+            text("DELETE FROM tasks WHERE user_id = :user_id"),
+            {"user_id": user_id},
+        )
+        await db.commit()
+        deleted_count = result.rowcount or 0
+        logger.info(f"Deleted {deleted_count} tasks for user {user_id}")
+        return deleted_count
 
     @staticmethod
     async def cancel_active_tasks(

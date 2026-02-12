@@ -81,18 +81,32 @@ class VideoService:
             return "YouTube Video"
 
     @staticmethod
-    async def generate_transcript(video_path: Path) -> str:
+    async def generate_transcript(
+        video_path: Path,
+        transcription_provider: str = "local",
+        assembly_api_key: Optional[str] = None,
+    ) -> str:
         """
         Generate transcript from video using configured transcription provider.
         Runs in thread pool to avoid blocking.
         """
         logger.info(f"Generating transcript for: {video_path}")
-        transcript = await run_in_thread(get_video_transcript, str(video_path))
+        transcript = await run_in_thread(
+            get_video_transcript,
+            str(video_path),
+            transcription_provider,
+            assembly_api_key,
+        )
         logger.info(f"Transcript generated: {len(transcript)} characters")
         return transcript
 
     @staticmethod
-    async def generate_transcript_with_progress(video_path: Path, progress_callback: Optional[callable] = None) -> str:
+    async def generate_transcript_with_progress(
+        video_path: Path,
+        progress_callback: Optional[callable] = None,
+        transcription_provider: str = "local",
+        assembly_api_key: Optional[str] = None,
+    ) -> str:
         """
         Generate transcript and emit heartbeat progress while waiting for transcription.
         This prevents the UI from appearing stuck during long transcription calls.
@@ -104,7 +118,13 @@ class VideoService:
                 await progress_callback(
                     50,
                     "Found existing transcript, skipping transcription.",
-                    {"stage": "transcript", "stage_progress": 100, "overall_progress": 50, "cached": True},
+                    {
+                        "stage": "transcript",
+                        "stage_progress": 100,
+                        "overall_progress": 50,
+                        "cached": True,
+                        "transcription_provider": transcription_provider,
+                    },
                 )
             return cached_transcript
 
@@ -124,6 +144,7 @@ class VideoService:
                             "stage": "transcript",
                             "stage_progress": min(stage_progress, 95),
                             "overall_progress": min(overall, 49),
+                            "transcription_provider": transcription_provider,
                         },
                     )
                 overall += 1
@@ -136,7 +157,11 @@ class VideoService:
         try:
             if progress_callback:
                 heartbeat_task = asyncio.create_task(heartbeat())
-            transcript = await VideoService.generate_transcript(video_path)
+            transcript = await VideoService.generate_transcript(
+                video_path,
+                transcription_provider=transcription_provider,
+                assembly_api_key=assembly_api_key,
+            )
             return transcript
         finally:
             stop_heartbeat.set()
@@ -144,19 +169,29 @@ class VideoService:
                 await heartbeat_task
 
     @staticmethod
-    async def analyze_transcript(transcript: str) -> Any:
+    async def analyze_transcript(
+        transcript: str,
+        ai_provider: str = "openai",
+        ai_api_key: Optional[str] = None,
+    ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
         This is already async, no need to wrap.
         """
         logger.info("Starting AI analysis of transcript")
-        relevant_parts = await get_most_relevant_parts_by_transcript(transcript)
+        relevant_parts = await get_most_relevant_parts_by_transcript(
+            transcript,
+            ai_provider=ai_provider,
+            ai_api_key=ai_api_key,
+        )
         logger.info(f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found")
         return relevant_parts
 
     @staticmethod
     async def analyze_transcript_with_progress(
         transcript: str,
+        ai_provider: str = "openai",
+        ai_api_key: Optional[str] = None,
         progress_callback: Optional[callable] = None,
     ) -> Any:
         """
@@ -174,11 +209,12 @@ class VideoService:
                 if progress_callback:
                     await progress_callback(
                         min(overall, 69),
-                        "Analyzing content with AI...",
+                        f"Analyzing content with AI ({ai_provider})...",
                         {
                             "stage": "analysis",
                             "stage_progress": min(stage_progress, 95),
                             "overall_progress": min(overall, 69),
+                            "ai_provider": ai_provider,
                         },
                     )
                 overall += 1
@@ -191,7 +227,11 @@ class VideoService:
         try:
             if progress_callback:
                 heartbeat_task = asyncio.create_task(heartbeat())
-            return await VideoService.analyze_transcript(transcript)
+            return await VideoService.analyze_transcript(
+                transcript,
+                ai_provider=ai_provider,
+                ai_api_key=ai_api_key,
+            )
         finally:
             stop_heartbeat.set()
             if heartbeat_task:
@@ -293,6 +333,10 @@ class VideoService:
         font_size: int = 24,
         font_color: str = "#FFFFFF",
         transitions_enabled: bool = False,
+        transcription_provider: str = "local",
+        assembly_api_key: Optional[str] = None,
+        ai_provider: str = "openai",
+        ai_api_key: Optional[str] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -330,13 +374,20 @@ class VideoService:
             if progress_callback:
                 await progress_callback(
                     30,
-                    "Generating transcript...",
-                    {"stage": "transcript", "stage_progress": 0, "overall_progress": 30}
+                    f"Generating transcript ({transcription_provider})...",
+                    {
+                        "stage": "transcript",
+                        "stage_progress": 0,
+                        "overall_progress": 30,
+                        "transcription_provider": transcription_provider,
+                    }
                 )
 
             transcript = await VideoService.generate_transcript_with_progress(
                 video_path,
                 progress_callback=progress_callback,
+                transcription_provider=transcription_provider,
+                assembly_api_key=assembly_api_key,
             )
             await ensure_not_cancelled()
 
@@ -344,12 +395,19 @@ class VideoService:
             if progress_callback:
                 await progress_callback(
                     50,
-                    "Analyzing content with AI...",
-                    {"stage": "analysis", "stage_progress": 0, "overall_progress": 50}
+                    f"Analyzing content with AI ({ai_provider})...",
+                    {
+                        "stage": "analysis",
+                        "stage_progress": 0,
+                        "overall_progress": 50,
+                        "ai_provider": ai_provider,
+                    }
                 )
 
             relevant_parts = await VideoService.analyze_transcript_with_progress(
                 transcript,
+                ai_provider=ai_provider,
+                ai_api_key=ai_api_key,
                 progress_callback=progress_callback,
             )
             await ensure_not_cancelled()

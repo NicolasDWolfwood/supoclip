@@ -22,9 +22,10 @@ class JobQueue:
     """Wrapper for arq job queue operations."""
 
     _pool: Optional[ArqRedis] = None
-    # Use ARQ's default Redis key so backend/worker remain aligned.
-    _queue_name = "arq:queue"
+    _local_queue_name = config.arq_local_queue_name
+    _assembly_queue_name = config.arq_assembly_queue_name
     _legacy_queue_name = "arq:queue:supoclip_tasks"
+    _legacy_default_queue_name = "arq:queue"
     _cancel_key_prefix = "supoclip:task-cancel:"
 
     @classmethod
@@ -44,7 +45,13 @@ class JobQueue:
             logger.info("Closed arq Redis pool")
 
     @classmethod
-    async def enqueue_job(cls, function_name: str, *args, **kwargs) -> str:
+    async def enqueue_job(
+        cls,
+        function_name: str,
+        *args,
+        queue_name: Optional[str] = None,
+        **kwargs
+    ) -> str:
         """
         Enqueue a job to be processed by workers.
 
@@ -57,8 +64,9 @@ class JobQueue:
             job_id: Unique ID for the enqueued job
         """
         pool = await cls.get_pool()
-        job = await pool.enqueue_job(function_name, *args, _queue_name=cls._queue_name, **kwargs)
-        logger.info(f"Enqueued job {job.job_id} on queue '{cls._queue_name}': {function_name}")
+        selected_queue = queue_name or cls._local_queue_name
+        job = await pool.enqueue_job(function_name, *args, _queue_name=selected_queue, **kwargs)
+        logger.info(f"Enqueued job {job.job_id} on queue '{selected_queue}': {function_name}")
         return job.job_id
 
     @classmethod
@@ -122,7 +130,12 @@ class JobQueue:
         Returns a summary of removed queue entries and deleted keys.
         """
         pool = await cls.get_pool()
-        queue_names = [cls._queue_name, cls._legacy_queue_name]
+        queue_names = [
+            cls._local_queue_name,
+            cls._assembly_queue_name,
+            cls._legacy_default_queue_name,
+            cls._legacy_queue_name,
+        ]
         queued_job_ids: set[str] = set()
         queue_removed = 0
 

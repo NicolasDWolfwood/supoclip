@@ -84,6 +84,15 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `DATABASE_URL` - PostgreSQL connection string
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
 - `WHISPER_CACHE_HOST_DIR` - Docker host path for Whisper cache mount (default `./backend/.cache/whisper`)
+- `WORKER_MAX_JOBS` - Max concurrent jobs for primary worker
+- `WORKER2_MAX_JOBS` - Max concurrent jobs for optional second worker profile
+- `WORKER2_WHISPER_DEVICE` - Whisper device target for optional second worker (`auto`, `cuda`, `cpu`)
+- `ARQ_QUEUE_NAME_LOCAL` - Queue used for local Whisper transcription jobs
+- `ARQ_QUEUE_NAME_ASSEMBLY` - Queue used for AssemblyAI transcription jobs
+- `DOCKER_GPU_REQUEST` - GPU request for backend/worker containers (`all` or `0`)
+- `DOCKER_GPU_REQUEST_WORKER2` - GPU request override for optional second worker (`all` or `0`)
+- `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` - GPU request override for dedicated AssemblyAI worker
+- `SECRET_ENCRYPTION_KEY` - Encryption secret for user-stored API keys
 
 Canonical env reference: `docs/config.md`
 
@@ -117,6 +126,9 @@ npm run lint
 ```bash
 # Start all services
 docker-compose up -d
+
+# Start all services with optional second worker
+docker-compose --profile multi-worker up -d
 
 # View logs
 docker-compose logs -f

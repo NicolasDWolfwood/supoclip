@@ -10,8 +10,12 @@ from ..repositories.task_repository import TaskRepository
 from ..repositories.source_repository import SourceRepository
 from ..repositories.clip_repository import ClipRepository
 from .video_service import VideoService
+from .secret_service import SecretService
+from ..config import Config
 
 logger = logging.getLogger(__name__)
+config = Config()
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic"}
 
 
 class TaskService:
@@ -23,6 +27,7 @@ class TaskService:
         self.source_repo = SourceRepository()
         self.clip_repo = ClipRepository()
         self.video_service = VideoService()
+        self.secret_service = SecretService()
 
     async def create_task_with_source(
         self,
@@ -31,7 +36,9 @@ class TaskService:
         title: Optional[str] = None,
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
-        font_color: str = "#FFFFFF"
+        font_color: str = "#FFFFFF",
+        transcription_provider: str = "local",
+        ai_provider: str = "openai",
     ) -> str:
         """
         Create a new task with associated source.
@@ -67,7 +74,9 @@ class TaskService:
             status="queued",  # Changed from "processing" to "queued"
             font_family=font_family,
             font_size=font_size,
-            font_color=font_color
+            font_color=font_color,
+            transcription_provider=transcription_provider,
+            ai_provider=ai_provider,
         )
 
         logger.info(f"Created task {task_id} for user {user_id}")
@@ -82,8 +91,11 @@ class TaskService:
         font_size: int = 24,
         font_color: str = "#FFFFFF",
         transitions_enabled: bool = False,
+        transcription_provider: str = "local",
+        ai_provider: str = "openai",
         progress_callback: Optional[Callable] = None,
-        cancel_check: Optional[Callable[[], Awaitable[None]]] = None
+        cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
+        user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Process a task: download video, analyze, create clips.
@@ -117,6 +129,35 @@ class TaskService:
                         await cancel_check()
 
             # Process video with progress updates
+            assembly_api_key: Optional[str] = None
+            if transcription_provider == "assemblyai":
+                stored_encrypted_key = None
+                if user_id:
+                    stored_encrypted_key = await self.task_repo.get_user_encrypted_assembly_key(self.db, user_id)
+                if stored_encrypted_key:
+                    assembly_api_key = self.secret_service.decrypt(stored_encrypted_key)
+                else:
+                    assembly_api_key = config.assembly_ai_api_key
+
+            ai_api_key: Optional[str] = None
+            selected_ai_provider = (ai_provider or "openai").strip().lower()
+            if selected_ai_provider in SUPPORTED_AI_PROVIDERS:
+                stored_encrypted_ai_key = None
+                if user_id:
+                    stored_encrypted_ai_key = await self.task_repo.get_user_encrypted_ai_key(
+                        self.db,
+                        user_id,
+                        selected_ai_provider,
+                    )
+                if stored_encrypted_ai_key:
+                    ai_api_key = self.secret_service.decrypt(stored_encrypted_ai_key)
+                elif selected_ai_provider == "openai":
+                    ai_api_key = config.openai_api_key
+                elif selected_ai_provider == "google":
+                    ai_api_key = config.google_api_key
+                elif selected_ai_provider == "anthropic":
+                    ai_api_key = config.anthropic_api_key
+
             result = await self.video_service.process_video_complete(
                 url=url,
                 source_type=source_type,
@@ -124,6 +165,10 @@ class TaskService:
                 font_size=font_size,
                 font_color=font_color,
                 transitions_enabled=transitions_enabled,
+                transcription_provider=transcription_provider,
+                assembly_api_key=assembly_api_key,
+                ai_provider=selected_ai_provider,
+                ai_api_key=ai_api_key,
                 progress_callback=update_progress,
                 cancel_check=cancel_check,
             )
@@ -220,6 +265,49 @@ class TaskService:
             )
             raise
 
+    async def get_user_transcription_settings(self, user_id: str) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        encrypted_key = await self.task_repo.get_user_encrypted_assembly_key(self.db, user_id)
+        return {
+            "has_assembly_key": bool(encrypted_key),
+        }
+
+    async def save_user_assembly_key(self, user_id: str, assembly_api_key: str) -> None:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        encrypted = self.secret_service.encrypt(assembly_api_key)
+        await self.task_repo.set_user_encrypted_assembly_key(self.db, user_id, encrypted)
+
+    async def clear_user_assembly_key(self, user_id: str) -> None:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        await self.task_repo.clear_user_encrypted_assembly_key(self.db, user_id)
+
+    async def get_user_ai_settings(self, user_id: str) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        result: Dict[str, Any] = {}
+        for provider in SUPPORTED_AI_PROVIDERS:
+            encrypted = await self.task_repo.get_user_encrypted_ai_key(self.db, user_id, provider)
+            result[f"has_{provider}_key"] = bool(encrypted)
+        return result
+
+    async def save_user_ai_key(self, user_id: str, provider: str, api_key: str) -> None:
+        if provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        encrypted = self.secret_service.encrypt(api_key)
+        await self.task_repo.set_user_encrypted_ai_key(self.db, user_id, provider, encrypted)
+
+    async def clear_user_ai_key(self, user_id: str, provider: str) -> None:
+        if provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        await self.task_repo.clear_user_encrypted_ai_key(self.db, user_id, provider)
+
     async def get_task_with_clips(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Get task details with all clips."""
         task = await self.task_repo.get_task_by_id(self.db, task_id)
@@ -247,3 +335,9 @@ class TaskService:
         await self.task_repo.delete_task(self.db, task_id)
 
         logger.info(f"Deleted task {task_id} and all associated clips")
+
+    async def delete_all_user_tasks(self, user_id: str) -> int:
+        """Delete all tasks that belong to a user."""
+        deleted_count = await self.task_repo.delete_tasks_by_user(self.db, user_id)
+        logger.info(f"Deleted all tasks for user {user_id}: {deleted_count}")
+        return deleted_count

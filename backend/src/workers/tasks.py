@@ -21,6 +21,8 @@ async def process_video_task(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     transitions_enabled: bool = False,
+    transcription_provider: str = "local",
+    ai_provider: str = "openai",
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -35,6 +37,8 @@ async def process_video_task(
         font_size: Font size for subtitles
         font_color: Font color for subtitles
         transitions_enabled: Whether transition effects should be applied
+        transcription_provider: "local" or "assemblyai"
+        ai_provider: "openai", "google", or "anthropic"
 
     Returns:
         Dict with processing results
@@ -75,8 +79,11 @@ async def process_video_task(
                 font_size=font_size,
                 font_color=font_color,
                 transitions_enabled=transitions_enabled,
+                transcription_provider=transcription_provider,
+                ai_provider=ai_provider,
                 progress_callback=update_progress,
                 cancel_check=ensure_not_cancelled,
+                user_id=user_id,
             )
 
             logger.info(f"Task {task_id} completed successfully")
@@ -115,8 +122,9 @@ class WorkerSettings:
 
     # Functions to run
     functions = [process_video_task]
-    # Must match the exact Redis ZSET key used by ArqRedis.enqueue_job.
-    queue_name = "arq:queue"
+    # Queue is configurable so dedicated worker containers can consume
+    # local vs AssemblyAI jobs independently.
+    queue_name = config.arq_queue_name
 
     # Redis settings from environment
     redis_settings = RedisSettings(

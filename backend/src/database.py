@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy import text
 
 # Load environment variables
 load_dotenv()
@@ -46,6 +47,90 @@ async def get_db():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_tasks_transcription_provider'
+                    ) THEN
+                        ALTER TABLE tasks
+                        ADD CONSTRAINT check_tasks_transcription_provider
+                        CHECK (transcription_provider IN ('local', 'assemblyai'));
+                    END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS assembly_api_key_encrypted TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_tasks_ai_provider'
+                    ) THEN
+                        ALTER TABLE tasks
+                        ADD CONSTRAINT check_tasks_ai_provider
+                        CHECK (ai_provider IN ('openai', 'google', 'anthropic'));
+                    END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS openai_api_key_encrypted TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS google_api_key_encrypted TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS anthropic_api_key_encrypted TEXT
+                """
+            )
+        )
 
 # Close database connections
 async def close_db():

@@ -26,6 +26,10 @@ class User(Base):
     first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    assembly_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    openai_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    google_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    anthropic_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     tasks: Mapped[List["Task"]] = relationship("Task", back_populates="user", cascade="all, delete-orphan")
@@ -43,6 +47,8 @@ class Task(Base):
     font_family: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, server_default=text("'TikTokSans-Regular'"))
     font_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, server_default=text("'24'"))
     font_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True, server_default=text("'#FFFFFF'"))  # Hex color code
+    transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
+    ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

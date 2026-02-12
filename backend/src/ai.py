@@ -3,7 +3,7 @@ AI-related functions for transcript analysis with enhanced precision.
 """
 
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 import logging
 import re
@@ -15,6 +15,12 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic"}
+DEFAULT_AI_MODELS = {
+    "openai": "gpt-5-mini",
+    "google": "gemini-2.5-pro",
+    "anthropic": "claude-4-sonnet",
+}
 
 class TranscriptSegment(BaseModel):
     """Represents a relevant segment of transcript with precise timing."""
@@ -64,16 +70,99 @@ TIMESTAMP REQUIREMENTS - EXTREMELY IMPORTANT:
 
 Find 3-7 compelling segments that would work well as standalone clips. Quality over quantity - choose segments that would genuinely engage viewers and have proper time ranges."""
 
-# Create simplified agent
-transcript_agent = Agent(
-    model=config.llm,
-    output_type=TranscriptAnalysis,
-    system_prompt=simplified_system_prompt
-)
+def _parse_llm(value: str) -> Tuple[Optional[str], Optional[str]]:
+    if ":" not in value:
+        return None, value.strip() or None
+    provider, model_name = value.split(":", 1)
+    provider = provider.strip().lower()
+    model_name = model_name.strip()
+    return provider or None, model_name or None
 
-async def get_most_relevant_parts_by_transcript(transcript: str) -> TranscriptAnalysis:
+
+def _default_ai_provider() -> str:
+    configured_provider, _ = _parse_llm(config.llm or "")
+    if configured_provider in SUPPORTED_AI_PROVIDERS:
+        return configured_provider
+    return "openai"
+
+
+def _resolve_ai_model(ai_provider: str, requested_model: Optional[str]) -> str:
+    if requested_model and requested_model.strip():
+        return requested_model.strip()
+    configured_provider, configured_model = _parse_llm(config.llm or "")
+    if configured_provider == ai_provider and configured_model:
+        return configured_model
+    return DEFAULT_AI_MODELS[ai_provider]
+
+
+def _build_transcript_agent(
+    ai_provider: Optional[str] = None,
+    ai_api_key: Optional[str] = None,
+    ai_model: Optional[str] = None,
+) -> tuple[Agent, str, str]:
+    selected_provider = (ai_provider or _default_ai_provider()).strip().lower()
+    if selected_provider not in SUPPORTED_AI_PROVIDERS:
+        selected_provider = _default_ai_provider()
+
+    selected_model = _resolve_ai_model(selected_provider, ai_model)
+    resolved_key = (ai_api_key or "").strip()
+
+    if selected_provider == "openai":
+        from pydantic_ai.models.openai import OpenAIModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        resolved_key = resolved_key or str(config.openai_api_key or "").strip()
+        if not resolved_key:
+            raise ValueError("OpenAI provider selected but no API key is configured")
+        provider = OpenAIProvider(api_key=resolved_key)
+        model = OpenAIModel(selected_model, provider=provider)
+    elif selected_provider == "google":
+        from pydantic_ai.models.google import GoogleModel
+        from pydantic_ai.providers.google_gla import GoogleGLAProvider
+
+        resolved_key = resolved_key or str(config.google_api_key or "").strip()
+        if not resolved_key:
+            raise ValueError("Google provider selected but no API key is configured")
+        provider = GoogleGLAProvider(api_key=resolved_key)
+        model = GoogleModel(selected_model, provider=provider)
+    else:
+        from pydantic_ai.models.anthropic import AnthropicModel
+        from pydantic_ai.providers.anthropic import AnthropicProvider
+
+        resolved_key = resolved_key or str(config.anthropic_api_key or "").strip()
+        if not resolved_key:
+            raise ValueError("Anthropic provider selected but no API key is configured")
+        provider = AnthropicProvider(api_key=resolved_key)
+        model = AnthropicModel(selected_model, provider=provider)
+
+    return (
+        Agent(
+            model=model,
+            output_type=TranscriptAnalysis,
+            system_prompt=simplified_system_prompt,
+        ),
+        selected_provider,
+        selected_model,
+    )
+
+async def get_most_relevant_parts_by_transcript(
+    transcript: str,
+    ai_provider: Optional[str] = None,
+    ai_api_key: Optional[str] = None,
+    ai_model: Optional[str] = None,
+) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript for creating clips - simplified version."""
-    logger.info(f"Starting AI analysis of transcript ({len(transcript)} chars)")
+    transcript_agent, resolved_provider, resolved_model = _build_transcript_agent(
+        ai_provider=ai_provider,
+        ai_api_key=ai_api_key,
+        ai_model=ai_model,
+    )
+    logger.info(
+        "Starting AI analysis of transcript (%s chars) using provider=%s model=%s",
+        len(transcript),
+        resolved_provider,
+        resolved_model,
+    )
 
     try:
         result = await transcript_agent.run(

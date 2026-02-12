@@ -14,9 +14,16 @@ This is the single source of truth for SupoClip runtime environment variables.
 | `ANTHROPIC_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `anthropic:*`. |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
-| `WORKER_MAX_JOBS` | No | `2` | worker | Max concurrent background jobs; lower values reduce CPU contention during local transcription. |
+| `WORKER_MAX_JOBS` | No | `2` | worker | Max concurrent background jobs for primary worker; lower values reduce CPU contention during local transcription. |
+| `WORKER2_MAX_JOBS` | No | `1` | worker2 (optional) | Max concurrent jobs for optional second worker (`multi-worker` profile). |
+| `WORKER2_WHISPER_DEVICE` | No | `auto` | worker2 (optional) | Whisper target device for second worker: `auto`, `cuda`, `cpu`. |
+| `ARQ_QUEUE_NAME_LOCAL` | No | `arq:queue:local` | backend, workers | Queue name for local Whisper jobs. |
+| `ARQ_QUEUE_NAME_ASSEMBLY` | No | `arq:queue:assembly` | backend, workers | Queue name for AssemblyAI jobs. |
 | `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |
 | `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |
+| `DOCKER_GPU_REQUEST_WORKER2` | No | `all` | docker-compose | GPU device request for optional `worker2` profile (`all` or `0`). |
+| `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | No | `all` | docker-compose | GPU device request for dedicated AssemblyAI worker. |
+| `SECRET_ENCRYPTION_KEY` | No | - | backend | Optional encryption secret for user-stored API keys (recommended for production). |
 | `WHISPER_CACHE_HOST_DIR` | No | `./backend/.cache/whisper` | docker-compose | Host bind-mount location for Whisper model cache (`/root/.cache/whisper` in containers). |
 | `TEMP_DIR` | No | `temp` (local) / `/app/uploads` (Docker) | backend, worker | Working directory for uploaded/downloaded files and clip output paths. |
 | `DATABASE_URL` | Yes | compose-provided value | backend, worker | Postgres connection string. |

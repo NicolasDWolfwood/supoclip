@@ -17,6 +17,7 @@ class Config:
         self.google_api_key = os.getenv("GOOGLE_API_KEY")
         self.assembly_ai_api_key = os.getenv("ASSEMBLY_AI_API_KEY")
         self.admin_api_key = os.getenv("ADMIN_API_KEY")
+        self.secret_encryption_key = os.getenv("SECRET_ENCRYPTION_KEY")
 
         self.max_video_duration = int(os.getenv("MAX_VIDEO_DURATION", "3600"))
         self.output_dir = os.getenv("OUTPUT_DIR", "outputs")
@@ -30,3 +31,6 @@ class Config:
         self.redis_host = os.getenv("REDIS_HOST", "localhost")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.worker_max_jobs = int(os.getenv("WORKER_MAX_JOBS", "2"))
+        self.arq_queue_name = (os.getenv("ARQ_QUEUE_NAME", "arq:queue:local") or "arq:queue:local").strip()
+        self.arq_local_queue_name = (os.getenv("ARQ_QUEUE_NAME_LOCAL", "arq:queue:local") or "arq:queue:local").strip()
+        self.arq_assembly_queue_name = (os.getenv("ARQ_QUEUE_NAME_ASSEMBLY", "arq:queue:assembly") or "arq:queue:assembly").strip()

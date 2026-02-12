@@ -69,6 +69,9 @@ If you prefer to use Docker commands directly:
 # Start all services
 docker-compose up -d --build
 
+# Start with optional second worker (parallel job processing)
+docker-compose --profile multi-worker up -d --build
+
 # View logs
 docker-compose logs -f
 
@@ -99,8 +102,15 @@ Canonical reference: `docs/config.md`
 | `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API) |
 | `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
 | `WORKER_MAX_JOBS` | `2` | Max concurrent background jobs (reduce if CPU is saturated) |
+| `WORKER2_MAX_JOBS` | `1` | Max concurrent jobs for optional second worker profile |
+| `WORKER2_WHISPER_DEVICE` | `auto` | Device target for optional second worker (`auto`, `cuda`, `cpu`) |
+| `ARQ_QUEUE_NAME_LOCAL` | `arq:queue:local` | Queue name for local Whisper jobs |
+| `ARQ_QUEUE_NAME_ASSEMBLY` | `arq:queue:assembly` | Queue name for AssemblyAI jobs |
 | `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |
 | `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
+| `DOCKER_GPU_REQUEST_WORKER2` | `all` | Docker GPU request for optional second worker (`all` or `0`) |
+| `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | `all` | Docker GPU request for dedicated AssemblyAI worker |
+| `SECRET_ENCRYPTION_KEY` | - | Encryption secret for user-stored API keys (recommended in production) |
 | `WHISPER_CACHE_HOST_DIR` | `./backend/.cache/whisper` | Host path for Whisper model cache (prevents re-downloads after rebuilds) |
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
@@ -168,12 +178,17 @@ docker-compose up -d
 
 ## Architecture
 
-SupoClip runs 4 Docker containers:
+SupoClip runs 6 Docker containers by default:
 
 1. **Frontend** (Next.js 15) - Port 3000
 2. **Backend** (FastAPI + Python) - Port 8000
-3. **PostgreSQL** - Port 5432
-4. **Redis** - Port 6379
+3. **Worker** (ARQ background processor)
+4. **Worker Assembly** (single-worker queue for AssemblyAI transcription jobs)
+5. **PostgreSQL** - Port 5432
+6. **Redis** - Port 6379
+
+Optional:
+- **Worker 2** (same queue, enabled with `--profile multi-worker`)
 
 All services are connected via a Docker network and start automatically with proper health checks.
 

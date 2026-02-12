@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSession } from "@/lib/auth-client";
-import { ArrowLeft, Clock, PlayCircle, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
+import { ArrowLeft, Clock, PlayCircle, AlertCircle, CheckCircle, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
 
 interface Task {
@@ -27,6 +27,8 @@ export default function ListPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -105,6 +107,62 @@ export default function ListPage() {
     }).format(date);
   };
 
+  const handleDeleteTask = async (taskId: string) => {
+    if (!session?.user?.id || deletingTaskId || isDeletingAll) return;
+    const confirmed = window.confirm("Delete this generation? This cannot be undone.");
+    if (!confirmed) return;
+
+    try {
+      setError(null);
+      setDeletingTaskId(taskId);
+      const response = await fetch(`${apiUrl}/tasks/${taskId}`, {
+        method: "DELETE",
+        headers: {
+          user_id: session.user.id,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete generation: ${response.status}`);
+      }
+
+      setTasks((prev) => prev.filter((task) => task.id !== taskId));
+    } catch (err) {
+      console.error("Error deleting task:", err);
+      setError(err instanceof Error ? err.message : "Failed to delete generation");
+    } finally {
+      setDeletingTaskId(null);
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    if (!session?.user?.id || isDeletingAll || deletingTaskId || tasks.length === 0) return;
+    const confirmed = window.confirm("Delete ALL generations? This cannot be undone.");
+    if (!confirmed) return;
+
+    try {
+      setError(null);
+      setIsDeletingAll(true);
+      const response = await fetch(`${apiUrl}/tasks/`, {
+        method: "DELETE",
+        headers: {
+          user_id: session.user.id,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete all generations: ${response.status}`);
+      }
+
+      setTasks([]);
+    } catch (err) {
+      console.error("Error deleting all tasks:", err);
+      setError(err instanceof Error ? err.message : "Failed to delete all generations");
+    } finally {
+      setIsDeletingAll(false);
+    }
+  };
+
   if (isPending) {
     return (
       <div className="min-h-screen bg-white flex items-center justify-center p-4">
@@ -147,11 +205,32 @@ export default function ListPage() {
             </Link>
           </div>
 
-          <div>
-            <h1 className="text-2xl font-bold text-black mb-2">All Generations</h1>
-            <p className="text-gray-600">
-              View and manage all your video clip generations
-            </p>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-black mb-2">All Generations</h1>
+              <p className="text-gray-600">
+                View and manage all your video clip generations
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteAll}
+              disabled={isLoading || tasks.length === 0 || isDeletingAll || deletingTaskId !== null}
+            >
+              {isDeletingAll ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4" />
+                  Delete All
+                </>
+              )}
+            </Button>
           </div>
         </div>
       </div>
@@ -202,8 +281,8 @@ export default function ListPage() {
             {tasks.map((task) => (
               <Card key={task.id} className="hover:shadow-md transition-shadow">
                 <CardContent className="p-6">
-                  <Link href={`/tasks/${task.id}`}>
-                    <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <Link href={`/tasks/${task.id}`} className="flex-1 min-w-0">
                       <div className="flex-1 min-w-0">
                         <h3 className="text-lg font-semibold text-black mb-2 truncate">
                           {task.source_title}
@@ -221,11 +300,28 @@ export default function ListPage() {
                           </span>
                         </div>
                       </div>
-                      <div className="flex-shrink-0">
+                    </Link>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <div>
                         {getStatusBadge(task.status)}
                       </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-sm"
+                        onClick={() => handleDeleteTask(task.id)}
+                        disabled={isDeletingAll || deletingTaskId !== null}
+                        aria-label={`Delete generation ${task.source_title}`}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        {deletingTaskId === task.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
+                      </Button>
                     </div>
-                  </Link>
+                  </div>
                 </CardContent>
               </Card>
             ))}

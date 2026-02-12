@@ -19,7 +19,12 @@ CREATE TABLE users (
     -- Default font preferences
     default_font_family VARCHAR(100) DEFAULT 'TikTokSans-Regular',
     default_font_size INTEGER DEFAULT 24,
-    default_font_color VARCHAR(7) DEFAULT '#FFFFFF'
+    default_font_color VARCHAR(7) DEFAULT '#FFFFFF',
+    -- Optional user-managed API secret (encrypted)
+    assembly_api_key_encrypted TEXT,
+    openai_api_key_encrypted TEXT,
+    google_api_key_encrypted TEXT,
+    anthropic_api_key_encrypted TEXT
 );
 
 -- Source table (created before tasks since tasks reference sources)
@@ -47,6 +52,8 @@ CREATE TABLE tasks (
     font_family VARCHAR(100) DEFAULT 'TikTokSans-Regular',
     font_size INTEGER DEFAULT 24,
     font_color VARCHAR(7) DEFAULT '#FFFFFF', -- Hex color code
+    transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (transcription_provider IN ('local', 'assemblyai')),
+    ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai' CHECK (ai_provider IN ('openai', 'google', 'anthropic')),
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

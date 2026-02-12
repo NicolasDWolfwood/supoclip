@@ -17,6 +17,8 @@ import redis.asyncio as redis
 logger = logging.getLogger(__name__)
 config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic"}
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -33,6 +35,33 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
         if lowered in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _resolve_transcription_provider(raw: object) -> str:
+    if not isinstance(raw, str):
+        return "local"
+    provider = raw.strip().lower()
+    if provider not in SUPPORTED_TRANSCRIPTION_PROVIDERS:
+        return "local"
+    return provider
+
+
+def _default_ai_provider() -> str:
+    llm_value = (config.llm or "").strip()
+    if ":" in llm_value:
+        provider = llm_value.split(":", 1)[0].strip().lower()
+        if provider in SUPPORTED_AI_PROVIDERS:
+            return provider
+    return "openai"
+
+
+def _resolve_ai_provider(raw: object) -> str:
+    if not isinstance(raw, str):
+        return _default_ai_provider()
+    provider = raw.strip().lower()
+    if provider not in SUPPORTED_AI_PROVIDERS:
+        return _default_ai_provider()
+    return provider
 
 
 def _require_admin_access(request: Request) -> None:
@@ -56,6 +85,13 @@ def _require_admin_access(request: Request) -> None:
             detail="Admin access requires x-admin-key (recommended) or user_id header",
         )
     logger.warning("ADMIN_API_KEY is not configured; allowing admin task cancellation via user_id header.")
+
+
+def _require_user_id(request: Request) -> str:
+    user_id = (request.headers.get("user_id") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+    return user_id
 
 
 @router.get("/")
@@ -83,6 +119,133 @@ async def list_tasks(request: Request, db: AsyncSession = Depends(get_db), limit
         raise HTTPException(status_code=500, detail=f"Error retrieving tasks: {str(e)}")
 
 
+@router.get("/transcription-settings")
+async def get_transcription_settings(request: Request, db: AsyncSession = Depends(get_db)):
+    """Get user transcription settings (key presence only, never returns the key)."""
+    user_id = _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        settings = await task_service.get_user_transcription_settings(user_id)
+        return {
+            "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
+            "has_assembly_key": bool(settings.get("has_assembly_key")),
+            "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error retrieving transcription settings: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving settings: {str(e)}")
+
+
+@router.put("/transcription-settings/assembly-key")
+async def save_assembly_key(request: Request, db: AsyncSession = Depends(get_db)):
+    """Save user AssemblyAI API key (encrypted at rest)."""
+    user_id = _require_user_id(request)
+    data = await request.json()
+    api_key = str(data.get("assembly_api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="assembly_api_key is required")
+
+    try:
+        task_service = TaskService(db)
+        await task_service.save_user_assembly_key(user_id, api_key)
+        return {"message": "AssemblyAI key saved", "has_assembly_key": True}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving AssemblyAI key: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving key: {str(e)}")
+
+
+@router.delete("/transcription-settings/assembly-key")
+async def delete_assembly_key(request: Request, db: AsyncSession = Depends(get_db)):
+    """Delete user AssemblyAI API key."""
+    user_id = _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        await task_service.clear_user_assembly_key(user_id)
+        return {"message": "AssemblyAI key removed", "has_assembly_key": False}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting AssemblyAI key: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
+
+
+@router.get("/ai-settings")
+async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
+    """Get user AI-provider settings (key presence only, never returns keys)."""
+    user_id = _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        settings = await task_service.get_user_ai_settings(user_id)
+        return {
+            "provider_options": sorted(SUPPORTED_AI_PROVIDERS),
+            "default_provider": _default_ai_provider(),
+            "has_openai_key": bool(settings.get("has_openai_key")),
+            "has_google_key": bool(settings.get("has_google_key")),
+            "has_anthropic_key": bool(settings.get("has_anthropic_key")),
+            "has_env_openai": bool((config.openai_api_key or "").strip()),
+            "has_env_google": bool((config.google_api_key or "").strip()),
+            "has_env_anthropic": bool((config.anthropic_api_key or "").strip()),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error retrieving AI settings: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving AI settings: {str(e)}")
+
+
+@router.put("/ai-settings/{provider}/key")
+async def save_ai_provider_key(
+    provider: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save user API key for selected AI provider (encrypted at rest)."""
+    user_id = _require_user_id(request)
+    provider = (provider or "").strip().lower()
+    if provider not in SUPPORTED_AI_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}")
+    data = await request.json()
+    api_key = str(data.get("api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    try:
+        task_service = TaskService(db)
+        await task_service.save_user_ai_key(user_id, provider, api_key)
+        return {"message": f"{provider} key saved", "provider": provider}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving AI provider key: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving key: {str(e)}")
+
+
+@router.delete("/ai-settings/{provider}/key")
+async def delete_ai_provider_key(
+    provider: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete user API key for selected AI provider."""
+    user_id = _require_user_id(request)
+    provider = (provider or "").strip().lower()
+    if provider not in SUPPORTED_AI_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}")
+    try:
+        task_service = TaskService(db)
+        await task_service.clear_user_ai_key(user_id, provider)
+        return {"message": f"{provider} key removed", "provider": provider}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting AI provider key: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
+
+
 @router.post("/")
 async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     """
@@ -101,6 +264,12 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_size = font_options.get("font_size", 24)
     font_color = font_options.get("font_color", "#FFFFFF")
     transitions_enabled = _coerce_bool(font_options.get("transitions_enabled"), default=False)
+    transcription_options = data.get("transcription_options", {})
+    transcription_provider = _resolve_transcription_provider(
+        transcription_options.get("provider", "local")
+    )
+    ai_options = data.get("ai_options", {})
+    ai_provider = _resolve_ai_provider(ai_options.get("provider", _default_ai_provider()))
 
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
@@ -112,17 +281,47 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         task_service = TaskService(db)
 
         # Create task
+        if transcription_provider == "assemblyai":
+            settings = await task_service.get_user_transcription_settings(user_id)
+            has_saved_key = bool(settings.get("has_assembly_key"))
+            has_env_key = bool((config.assembly_ai_api_key or "").strip())
+            if not (has_saved_key or has_env_key):
+                raise HTTPException(
+                    status_code=400,
+                    detail="AssemblyAI selected but no API key is configured. Save one in Advanced Settings.",
+                )
+        ai_settings = await task_service.get_user_ai_settings(user_id)
+        has_saved_ai_key = bool(ai_settings.get(f"has_{ai_provider}_key"))
+        has_env_ai_key = (
+            bool((config.openai_api_key or "").strip()) if ai_provider == "openai"
+            else bool((config.google_api_key or "").strip()) if ai_provider == "google"
+            else bool((config.anthropic_api_key or "").strip())
+        )
+        if not (has_saved_ai_key or has_env_ai_key):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{ai_provider} selected but no API key is configured. Save one in Advanced Settings.",
+            )
+
         task_id = await task_service.create_task_with_source(
             user_id=user_id,
             url=raw_source["url"],
             title=raw_source.get("title"),
             font_family=font_family,
             font_size=font_size,
-            font_color=font_color
+            font_color=font_color,
+            transcription_provider=transcription_provider,
+            ai_provider=ai_provider,
         )
 
         # Get source type for worker
         source_type = task_service.video_service.determine_source_type(raw_source["url"])
+
+        queue_name = (
+            config.arq_assembly_queue_name
+            if transcription_provider == "assemblyai"
+            else config.arq_local_queue_name
+        )
 
         # Enqueue job for worker
         try:
@@ -136,6 +335,9 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 font_size,
                 font_color,
                 transitions_enabled,
+                transcription_provider,
+                ai_provider,
+                queue_name=queue_name,
             )
         except Exception as enqueue_error:
             logger.error(f"Failed to enqueue job for task {task_id}: {enqueue_error}")
@@ -152,6 +354,8 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         return {
             "task_id": task_id,
             "job_id": job_id,
+            "transcription_provider": transcription_provider,
+            "ai_provider": ai_provider,
             "message": "Task created and queued for processing"
         }
 
@@ -201,6 +405,25 @@ async def cancel_all_tasks(request: Request, db: AsyncSession = Depends(get_db))
     except Exception as e:
         logger.error(f"Error cancelling all tasks: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error cancelling tasks: {str(e)}")
+
+
+@router.delete("/")
+async def delete_all_user_tasks(request: Request, db: AsyncSession = Depends(get_db)):
+    """Delete all tasks for the authenticated user."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    try:
+        task_service = TaskService(db)
+        deleted_count = await task_service.delete_all_user_tasks(user_id)
+        return {
+            "message": "All tasks deleted successfully",
+            "deleted_count": deleted_count,
+        }
+    except Exception as e:
+        logger.error(f"Error deleting all user tasks: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting all tasks: {str(e)}")
 
 
 @router.get("/{task_id}")

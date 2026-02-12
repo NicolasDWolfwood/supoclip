@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Slider } from "@/components/ui/slider";
 import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
-import { PlayCircle, ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock, Settings2 } from "lucide-react";
+import { PlayCircle, ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock, Settings2, KeyRound, Cloud, Cpu, Bot } from "lucide-react";
 
 interface LatestTask {
   id: string;
@@ -51,6 +51,32 @@ export default function Home() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [showProcessingOptions, setShowProcessingOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
+  const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
+  const [assemblyApiKey, setAssemblyApiKey] = useState("");
+  const [hasSavedAssemblyKey, setHasSavedAssemblyKey] = useState(false);
+  const [hasAssemblyEnvFallback, setHasAssemblyEnvFallback] = useState(false);
+  const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
+  const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
+  const [assemblyKeyError, setAssemblyKeyError] = useState<string | null>(null);
+  const [aiProvider, setAiProvider] = useState<"openai" | "google" | "anthropic">("openai");
+  const [aiApiKeys, setAiApiKeys] = useState<Record<"openai" | "google" | "anthropic", string>>({
+    openai: "",
+    google: "",
+    anthropic: "",
+  });
+  const [hasSavedAiKeys, setHasSavedAiKeys] = useState<Record<"openai" | "google" | "anthropic", boolean>>({
+    openai: false,
+    google: false,
+    anthropic: false,
+  });
+  const [hasEnvAiFallback, setHasEnvAiFallback] = useState<Record<"openai" | "google" | "anthropic", boolean>>({
+    openai: false,
+    google: false,
+    anthropic: false,
+  });
+  const [isSavingAiKey, setIsSavingAiKey] = useState(false);
+  const [aiKeyStatus, setAiKeyStatus] = useState<string | null>(null);
+  const [aiKeyError, setAiKeyError] = useState<string | null>(null);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -120,6 +146,60 @@ export default function Home() {
 
     loadUserPreferences();
   }, [session?.user?.id]);
+
+  useEffect(() => {
+    const loadTranscriptionSettings = async () => {
+      if (!session?.user?.id) return;
+      try {
+        const response = await fetch(`${apiUrl}/tasks/transcription-settings`, {
+          headers: {
+            user_id: session.user.id,
+          },
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
+        setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+      } catch (err) {
+        console.error("Failed to load transcription settings:", err);
+      }
+    };
+
+    loadTranscriptionSettings();
+  }, [apiUrl, session?.user?.id]);
+
+  useEffect(() => {
+    const loadAiSettings = async () => {
+      if (!session?.user?.id) return;
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings`, {
+          headers: {
+            user_id: session.user.id,
+          },
+        });
+        if (!response.ok) return;
+        const data = await response.json();
+        const defaultProvider = (data.default_provider || "openai") as "openai" | "google" | "anthropic";
+        if (defaultProvider === "openai" || defaultProvider === "google" || defaultProvider === "anthropic") {
+          setAiProvider(defaultProvider);
+        }
+        setHasSavedAiKeys({
+          openai: Boolean(data.has_openai_key),
+          google: Boolean(data.has_google_key),
+          anthropic: Boolean(data.has_anthropic_key),
+        });
+        setHasEnvAiFallback({
+          openai: Boolean(data.has_env_openai),
+          google: Boolean(data.has_env_google),
+          anthropic: Boolean(data.has_env_anthropic),
+        });
+      } catch (err) {
+        console.error("Failed to load AI settings:", err);
+      }
+    };
+
+    loadAiSettings();
+  }, [apiUrl, session?.user?.id]);
 
   // Load latest task
   useEffect(() => {
@@ -211,6 +291,133 @@ export default function Home() {
     });
   };
 
+  const saveAssemblyKey = async (key: string): Promise<boolean> => {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      setAssemblyKeyError("AssemblyAI key cannot be empty.");
+      return false;
+    }
+
+    setIsSavingAssemblyKey(true);
+    setAssemblyKeyError(null);
+    setAssemblyKeyStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/transcription-settings/assembly-key`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({ assembly_api_key: trimmed }),
+      });
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to save AssemblyAI key");
+      }
+      setHasSavedAssemblyKey(true);
+      setAssemblyApiKey("");
+      setAssemblyKeyStatus("AssemblyAI key saved.");
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to save AssemblyAI key";
+      setAssemblyKeyError(message);
+      return false;
+    } finally {
+      setIsSavingAssemblyKey(false);
+    }
+  };
+
+  const deleteAssemblyKey = async (): Promise<void> => {
+    setIsSavingAssemblyKey(true);
+    setAssemblyKeyError(null);
+    setAssemblyKeyStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/transcription-settings/assembly-key`, {
+        method: "DELETE",
+        headers: {
+          user_id: session?.user?.id || "",
+        },
+      });
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to remove AssemblyAI key");
+      }
+      setHasSavedAssemblyKey(false);
+      setAssemblyKeyStatus("AssemblyAI key removed.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to remove AssemblyAI key";
+      setAssemblyKeyError(message);
+    } finally {
+      setIsSavingAssemblyKey(false);
+    }
+  };
+
+  const saveAiProviderKey = async (
+    provider: "openai" | "google" | "anthropic",
+    key: string,
+  ): Promise<boolean> => {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      setAiKeyError(`${provider} key cannot be empty.`);
+      return false;
+    }
+
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/${provider}/key`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({ api_key: trimmed }),
+      });
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || `Failed to save ${provider} key`);
+      }
+      setHasSavedAiKeys((prev) => ({ ...prev, [provider]: true }));
+      setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
+      setAiKeyStatus(`${provider} key saved.`);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to save ${provider} key`;
+      setAiKeyError(message);
+      return false;
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  };
+
+  const deleteAiProviderKey = async (
+    provider: "openai" | "google" | "anthropic",
+  ): Promise<void> => {
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/${provider}/key`, {
+        method: "DELETE",
+        headers: {
+          user_id: session?.user?.id || "",
+        },
+      });
+      const responseData = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || `Failed to remove ${provider} key`);
+      }
+      setHasSavedAiKeys((prev) => ({ ...prev, [provider]: false }));
+      setAiKeyStatus(`${provider} key removed.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Failed to remove ${provider} key`;
+      setAiKeyError(message);
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  };
+
   const getStepIcon = (step: string) => {
     const iconMap: Record<string, React.ReactElement> = {
       validation: <Loader2 className="w-4 h-4 animate-spin text-blue-500" />,
@@ -260,6 +467,26 @@ export default function Home() {
       }
 
       // Step 1: Start the task (using new refactored endpoint)
+      if (transcriptionProvider === "assemblyai" && !hasSavedAssemblyKey) {
+        if (!assemblyApiKey.trim()) {
+          throw new Error("AssemblyAI key required. Enter and save your key in Advanced Settings.");
+        }
+        const saved = await saveAssemblyKey(assemblyApiKey);
+        if (!saved) {
+          throw new Error("Could not save AssemblyAI key.");
+        }
+      }
+      const selectedAiKey = aiApiKeys[aiProvider] || "";
+      if (aiProvider && !hasSavedAiKeys[aiProvider] && !hasEnvAiFallback[aiProvider]) {
+        if (!selectedAiKey.trim()) {
+          throw new Error(`${aiProvider} key required. Enter and save your key in Advanced Settings.`);
+        }
+        const savedAiKey = await saveAiProviderKey(aiProvider, selectedAiKey);
+        if (!savedAiKey) {
+          throw new Error(`Could not save ${aiProvider} key.`);
+        }
+      }
+
       const startResponse = await fetch(`${apiUrl}/tasks/`, {
         method: 'POST',
         headers: {
@@ -276,6 +503,12 @@ export default function Home() {
             font_size: fontSize,
             font_color: fontColor,
             transitions_enabled: transitionsEnabled,
+          },
+          transcription_options: {
+            provider: transcriptionProvider,
+          },
+          ai_options: {
+            provider: aiProvider,
           }
         }),
       });
@@ -394,7 +627,7 @@ export default function Home() {
                   All Generations
                 </Button>
               </Link>
-              <Link href="/settings" className="flex items-center gap-3 hover:bg-gray-50 rounded-lg px-3 py-2 transition-colors cursor-pointer">
+              <Link href="/settings" className="flex items-center gap-3 hover:bg-accent rounded-lg px-3 py-2 transition-colors cursor-pointer">
                 <Avatar className="w-8 h-8">
                   <AvatarImage src={session.user.image || ""} />
                   <AvatarFallback className="bg-gray-100 text-black text-sm">
@@ -731,6 +964,189 @@ export default function Home() {
                       />
                     </button>
                   </div>
+
+                  <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-black">Transcription Provider</p>
+                        <p className="text-xs text-gray-500">
+                          Choose local Whisper or AssemblyAI for transcript generation.
+                        </p>
+                      </div>
+                      <KeyRound className="w-4 h-4 text-gray-500 mt-0.5" />
+                    </div>
+
+                    <Select
+                      value={transcriptionProvider}
+                      onValueChange={(value: "local" | "assemblyai") => {
+                        setTranscriptionProvider(value);
+                        setAssemblyKeyStatus(null);
+                        setAssemblyKeyError(null);
+                      }}
+                      disabled={isLoading || isSavingAssemblyKey}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select transcription provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="local">
+                          <div className="flex items-center gap-2">
+                            <Cpu className="w-4 h-4" />
+                            Local Whisper
+                          </div>
+                        </SelectItem>
+                        <SelectItem value="assemblyai">
+                          <div className="flex items-center gap-2">
+                            <Cloud className="w-4 h-4" />
+                            AssemblyAI
+                          </div>
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <p className="text-xs text-gray-500">
+                      {transcriptionProvider === "local"
+                        ? "Local mode uses the local worker queue and can run in parallel across workers."
+                        : "AssemblyAI mode uses a dedicated single-worker queue to avoid overloading remote transcription jobs."}
+                    </p>
+
+                    {transcriptionProvider === "assemblyai" && (
+                      <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+                        <label htmlFor="assembly-api-key" className="text-xs font-medium text-black">
+                          AssemblyAI API Key
+                        </label>
+                        <Input
+                          id="assembly-api-key"
+                          type="password"
+                          value={assemblyApiKey}
+                          onChange={(e) => setAssemblyApiKey(e.target.value ?? "")}
+                          placeholder={hasSavedAssemblyKey ? "Saved key present (enter new key to replace)" : "Paste your AssemblyAI key"}
+                          disabled={isLoading || isSavingAssemblyKey}
+                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isLoading || isSavingAssemblyKey || !assemblyApiKey.trim()}
+                            onClick={() => {
+                              void saveAssemblyKey(assemblyApiKey);
+                            }}
+                          >
+                            {isSavingAssemblyKey ? "Saving..." : "Save Key"}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={isLoading || isSavingAssemblyKey || !hasSavedAssemblyKey}
+                            onClick={() => {
+                              void deleteAssemblyKey();
+                            }}
+                          >
+                            Remove Saved Key
+                          </Button>
+                          <span className="text-xs text-gray-500">
+                            {hasSavedAssemblyKey
+                              ? "Saved key available"
+                              : hasAssemblyEnvFallback
+                                ? "No saved key; using backend env fallback"
+                                : "No key configured"}
+                          </span>
+                        </div>
+                        {assemblyKeyStatus && (
+                          <p className="text-xs text-green-600">{assemblyKeyStatus}</p>
+                        )}
+                        {assemblyKeyError && (
+                          <p className="text-xs text-red-600">{assemblyKeyError}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-sm font-medium text-black">AI Provider</p>
+                        <p className="text-xs text-gray-500">
+                          Choose which LLM provider analyzes transcripts to select clips.
+                        </p>
+                      </div>
+                      <Bot className="w-4 h-4 text-gray-500 mt-0.5" />
+                    </div>
+
+                    <Select
+                      value={aiProvider}
+                      onValueChange={(value: "openai" | "google" | "anthropic") => {
+                        setAiProvider(value);
+                        setAiKeyStatus(null);
+                        setAiKeyError(null);
+                      }}
+                      disabled={isLoading || isSavingAiKey}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select AI provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="openai">OpenAI</SelectItem>
+                        <SelectItem value="google">Google</SelectItem>
+                        <SelectItem value="anthropic">Anthropic</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+                      <label htmlFor="ai-provider-key" className="text-xs font-medium text-black">
+                        {aiProvider.toUpperCase()} API Key
+                      </label>
+                      <Input
+                        id="ai-provider-key"
+                        type="password"
+                        value={aiApiKeys[aiProvider]}
+                        onChange={(e) =>
+                          setAiApiKeys((prev) => ({ ...prev, [aiProvider]: e.target.value ?? "" }))
+                        }
+                        placeholder={
+                          hasSavedAiKeys[aiProvider]
+                            ? `Saved ${aiProvider} key present (enter new key to replace)`
+                            : `Paste your ${aiProvider} API key`
+                        }
+                        disabled={isLoading || isSavingAiKey}
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isLoading || isSavingAiKey || !(aiApiKeys[aiProvider] || "").trim()}
+                          onClick={() => {
+                            void saveAiProviderKey(aiProvider, aiApiKeys[aiProvider]);
+                          }}
+                        >
+                          {isSavingAiKey ? "Saving..." : "Save Key"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          disabled={isLoading || isSavingAiKey || !hasSavedAiKeys[aiProvider]}
+                          onClick={() => {
+                            void deleteAiProviderKey(aiProvider);
+                          }}
+                        >
+                          Remove Saved Key
+                        </Button>
+                        <span className="text-xs text-gray-500">
+                          {hasSavedAiKeys[aiProvider]
+                            ? "Saved key available"
+                            : hasEnvAiFallback[aiProvider]
+                              ? "No saved key; using backend env fallback"
+                              : "No key configured"}
+                        </span>
+                      </div>
+                      {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
+                      {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -824,6 +1240,14 @@ export default function Home() {
               disabled={
                 (sourceType === "youtube" && !url.trim()) ||
                 (sourceType === "upload" && !fileRef.current) ||
+                (transcriptionProvider === "assemblyai" &&
+                  !hasSavedAssemblyKey &&
+                  !hasAssemblyEnvFallback &&
+                  !assemblyApiKey.trim()) ||
+                (aiProvider &&
+                  !hasSavedAiKeys[aiProvider] &&
+                  !hasEnvAiFallback[aiProvider] &&
+                  !(aiApiKeys[aiProvider] || "").trim()) ||
                 isLoading
               }
             >

@@ -63,8 +63,8 @@ class VideoProcessor:
         }
         return settings.get(target_quality, settings["high"])
 
-def _get_transcription_provider() -> str:
-    provider = (config.transcription_provider or "local").strip().lower()
+def _get_transcription_provider(provider_override: Optional[str] = None) -> str:
+    provider = (provider_override or config.transcription_provider or "local").strip().lower()
     if provider not in {"local", "assemblyai"}:
         logger.warning(f"Unknown transcription provider '{provider}', falling back to local")
         return "local"
@@ -187,13 +187,14 @@ def _transcribe_with_local_whisper(video_path: Path) -> Dict[str, Any]:
     return {"words": words_data, "text": transcript_text}
 
 
-def _transcribe_with_assemblyai(video_path: Path) -> Dict[str, Any]:
+def _transcribe_with_assemblyai(video_path: Path, api_key: Optional[str] = None) -> Dict[str, Any]:
     if aai is None:
         raise Exception("AssemblyAI provider selected but assemblyai package is not installed")
-    if not config.assembly_ai_api_key:
-        raise Exception("AssemblyAI provider selected but ASSEMBLY_AI_API_KEY is not set")
+    resolved_api_key = (api_key or config.assembly_ai_api_key or "").strip()
+    if not resolved_api_key:
+        raise Exception("AssemblyAI provider selected but no API key is available")
 
-    aai.settings.api_key = config.assembly_ai_api_key
+    aai.settings.api_key = resolved_api_key
     transcriber = aai.Transcriber()
     config_obj = aai.TranscriptionConfig(
         speaker_labels=False,
@@ -229,17 +230,21 @@ def _transcribe_with_assemblyai(video_path: Path) -> Dict[str, Any]:
     return {"words": words_data, "text": str(getattr(transcript, "text", "") or "").strip()}
 
 
-def get_video_transcript(video_path: Union[Path, str]) -> str:
+def get_video_transcript(
+    video_path: Union[Path, str],
+    transcription_provider: Optional[str] = None,
+    assembly_api_key: Optional[str] = None,
+) -> str:
     """Get transcript using configured provider with word-level timings."""
     video_path = Path(video_path)
     logger.info(f"Getting transcript for: {video_path}")
 
-    provider = _get_transcription_provider()
+    provider = _get_transcription_provider(transcription_provider)
     logger.info(f"Transcription provider: {provider}")
 
     try:
         if provider == "assemblyai":
-            transcript_data = _transcribe_with_assemblyai(video_path)
+            transcript_data = _transcribe_with_assemblyai(video_path, assembly_api_key)
         else:
             transcript_data = _transcribe_with_local_whisper(video_path)
 
@@ -1175,8 +1180,8 @@ def create_clips_with_transitions(
 
 # Backward compatibility functions
 def get_video_transcript_with_assemblyai(path: Path) -> str:
-    """Backward compatibility wrapper; uses configured transcription provider."""
-    return get_video_transcript(path)
+    """Backward compatibility wrapper for older call sites."""
+    return get_video_transcript(path, transcription_provider="assemblyai")
 
 def create_9_16_clip(video_path: Path, start_time: float, end_time: float, output_path: Path, subtitle_text: str = "") -> bool:
     """Backward compatibility wrapper."""
