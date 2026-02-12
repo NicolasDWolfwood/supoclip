@@ -560,8 +560,9 @@ def parse_timestamp_to_seconds(timestamp_str: str) -> float:
         logger.error(f"Failed to parse timestamp '{timestamp_str}': {e}")
         return 0.0
 
-def create_assemblyai_subtitles(video_path: Path, clip_start: float, clip_end: float, video_width: int, video_height: int, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> List[TextClip]:
+def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float, clip_end: float, video_width: int, video_height: int, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> List[TextClip]:
     """Create subtitles using AssemblyAI's precise word timing."""
+    video_path = Path(video_path)
     transcript_data = load_cached_transcript_data(video_path)
 
     if not transcript_data or not transcript_data.get('words'):
@@ -650,9 +651,21 @@ def create_assemblyai_subtitles(video_path: Path, clip_start: float, clip_end: f
     logger.info(f"Created {len(subtitle_clips)} subtitle elements from AssemblyAI data")
     return subtitle_clips
 
-def create_optimized_clip(video_path: Path, start_time: float, end_time: float, output_path: Path, add_subtitles: bool = True, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> bool:
+def create_optimized_clip(
+    video_path: Union[Path, str],
+    start_time: float,
+    end_time: float,
+    output_path: Union[Path, str],
+    add_subtitles: bool = True,
+    font_family: str = "THEBOLDFONT-FREEVERSION",
+    font_size: int = 24,
+    font_color: str = "#FFFFFF",
+    error_collector: Optional[List[str]] = None,
+) -> bool:
     """Create optimized 9:16 clip with AssemblyAI subtitles."""
     try:
+        video_path = Path(video_path)
+        output_path = Path(output_path)
         duration = end_time - start_time
         if duration <= 0:
             logger.error(f"Invalid clip duration: {duration:.1f}s")
@@ -714,14 +727,27 @@ def create_optimized_clip(video_path: Path, start_time: float, end_time: float, 
 
     except Exception as e:
         logger.error(f"Failed to create clip: {e}")
+        if error_collector is not None:
+            error_collector.append(str(e))
         return False
 
-def create_clips_from_segments(video_path: Path, segments: List[Dict[str, Any]], output_dir: Path, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> List[Dict[str, Any]]:
+def create_clips_from_segments(
+    video_path: Union[Path, str],
+    segments: List[Dict[str, Any]],
+    output_dir: Union[Path, str],
+    font_family: str = "THEBOLDFONT-FREEVERSION",
+    font_size: int = 24,
+    font_color: str = "#FFFFFF",
+    diagnostics: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """Create optimized video clips from segments."""
+    video_path = Path(video_path)
+    output_dir = Path(output_dir)
     logger.info(f"Creating {len(segments)} clips")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     clips_info = []
+    clip_failures: List[Dict[str, Any]] = []
 
     for i, segment in enumerate(segments):
         try:
@@ -741,7 +767,18 @@ def create_clips_from_segments(video_path: Path, segments: List[Dict[str, Any]],
             clip_filename = f"clip_{i+1}_{segment['start_time'].replace(':', '')}-{segment['end_time'].replace(':', '')}.mp4"
             clip_path = output_dir / clip_filename
 
-            success = create_optimized_clip(video_path, start_seconds, end_seconds, clip_path, True, font_family, font_size, font_color)
+            clip_errors: List[str] = []
+            success = create_optimized_clip(
+                video_path,
+                start_seconds,
+                end_seconds,
+                clip_path,
+                True,
+                font_family,
+                font_size,
+                font_color,
+                error_collector=clip_errors,
+            )
 
             if success:
                 clip_info = {
@@ -759,11 +796,36 @@ def create_clips_from_segments(video_path: Path, segments: List[Dict[str, Any]],
                 logger.info(f"Created clip {i+1}: {duration:.1f}s")
             else:
                 logger.error(f"Failed to create clip {i+1}")
+                clip_failures.append(
+                    {
+                        "clip_index": i + 1,
+                        "start_time": segment.get("start_time"),
+                        "end_time": segment.get("end_time"),
+                        "error": clip_errors[-1] if clip_errors else "unknown_error",
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Error processing clip {i+1}: {e}")
+            clip_failures.append(
+                {
+                    "clip_index": i + 1,
+                    "start_time": segment.get("start_time"),
+                    "end_time": segment.get("end_time"),
+                    "error": str(e),
+                }
+            )
 
     logger.info(f"Successfully created {len(clips_info)}/{len(segments)} clips")
+    if diagnostics is not None:
+        diagnostics.update(
+            {
+                "attempted_segments": len(segments),
+                "created_clips": len(clips_info),
+                "failed_segments": len(clip_failures),
+                "failure_samples": clip_failures[:3],
+            }
+        )
     return clips_info
 
 def get_available_transitions() -> List[str]:
@@ -839,15 +901,37 @@ def apply_transition_effect(clip1_path: Path, clip2_path: Path, transition_path:
         logger.error(f"Error applying transition effect: {e}")
         return False
 
-def create_clips_with_transitions(video_path: Path, segments: List[Dict[str, Any]], output_dir: Path, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> List[Dict[str, Any]]:
+def create_clips_with_transitions(
+    video_path: Union[Path, str],
+    segments: List[Dict[str, Any]],
+    output_dir: Union[Path, str],
+    font_family: str = "THEBOLDFONT-FREEVERSION",
+    font_size: int = 24,
+    font_color: str = "#FFFFFF",
+    diagnostics: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
     """Create video clips with transition effects between them."""
+    video_path = Path(video_path)
+    output_dir = Path(output_dir)
     logger.info(f"Creating {len(segments)} clips with transitions")
 
     # First create individual clips
-    clips_info = create_clips_from_segments(video_path, segments, output_dir, font_family, font_size, font_color)
+    render_diagnostics: Dict[str, Any] = {}
+    clips_info = create_clips_from_segments(
+        video_path,
+        segments,
+        output_dir,
+        font_family,
+        font_size,
+        font_color,
+        diagnostics=render_diagnostics,
+    )
 
     if len(clips_info) < 2:
         logger.info("Not enough clips to apply transitions")
+        if diagnostics is not None:
+            diagnostics.update(render_diagnostics)
+            diagnostics["transitions_applied"] = 0
         return clips_info
 
     # Get available transitions
@@ -861,6 +945,7 @@ def create_clips_with_transitions(video_path: Path, segments: List[Dict[str, Any
     transition_output_dir.mkdir(parents=True, exist_ok=True)
 
     enhanced_clips = []
+    transition_failures = 0
 
     for i, clip_info in enumerate(clips_info):
         if i == 0:
@@ -896,9 +981,15 @@ def create_clips_with_transitions(video_path: Path, segments: List[Dict[str, Any
             else:
                 # Fallback to original clip if transition fails
                 enhanced_clips.append(clip_info)
+                transition_failures += 1
                 logger.warning(f"Failed to add transition to clip {i+1}, using original")
 
     logger.info(f"Successfully created {len(enhanced_clips)} clips with transitions")
+    if diagnostics is not None:
+        diagnostics.update(render_diagnostics)
+        diagnostics["transitions_attempted"] = max(0, len(clips_info) - 1)
+        diagnostics["transitions_failed"] = transition_failures
+        diagnostics["transitions_applied"] = max(0, len(clips_info) - 1 - transition_failures)
     return enhanced_clips
 
 # Backward compatibility functions

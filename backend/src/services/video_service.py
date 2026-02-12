@@ -203,7 +203,7 @@ class VideoService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF"
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         """
         Create video clips from segments with transitions and subtitles.
         Runs in thread pool as video processing is CPU-intensive.
@@ -211,19 +211,21 @@ class VideoService:
         logger.info(f"Creating {len(segments)} video clips")
         clips_output_dir = Path(config.temp_dir) / "clips"
         clips_output_dir.mkdir(parents=True, exist_ok=True)
+        render_diagnostics: Dict[str, Any] = {}
 
         clips_info = await run_in_thread(
             create_clips_with_transitions,
-            str(video_path),
+            video_path,
             segments,
             clips_output_dir,
             font_family,
             font_size,
-            font_color
+            font_color,
+            render_diagnostics,
         )
 
         logger.info(f"Successfully created {len(clips_info)} clips")
-        return clips_info
+        return {"clips": clips_info, "diagnostics": render_diagnostics}
 
     @staticmethod
     def determine_source_type(url: str) -> str:
@@ -329,13 +331,15 @@ class VideoService:
                 for segment in relevant_parts.most_relevant_segments
             ]
 
-            clips_info = await VideoService.create_video_clips(
+            clip_result = await VideoService.create_video_clips(
                 video_path,
                 segments_json,
                 font_family,
                 font_size,
                 font_color
             )
+            clips_info = clip_result.get("clips", [])
+            clip_generation_diagnostics = clip_result.get("diagnostics", {})
 
             if progress_callback:
                 await progress_callback(
@@ -350,6 +354,7 @@ class VideoService:
                 "summary": relevant_parts.summary if relevant_parts else None,
                 "key_topics": relevant_parts.key_topics if relevant_parts else None,
                 "analysis_diagnostics": relevant_parts.diagnostics if relevant_parts else None,
+                "clip_generation_diagnostics": clip_generation_diagnostics,
             }
 
         except Exception as e:

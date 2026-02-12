@@ -110,6 +110,28 @@ function deriveStageProgress(
   return next;
 }
 
+function deriveStageNotesFromMessage(
+  message: string,
+  sourceType?: string
+): Partial<Record<StageKey, string>> {
+  const notes: Partial<Record<StageKey, string>> = {};
+  const lower = (message || "").toLowerCase();
+
+  if (lower.includes("found existing download") || lower.includes("skipping download")) {
+    notes.download = "previous download found";
+  }
+
+  if (lower.includes("found existing transcript") || lower.includes("skipping transcription")) {
+    notes.transcript = "previous transcript found";
+    // If transcript is cached for YouTube, download was necessarily reused too.
+    if (sourceType === "youtube") {
+      notes.download = "previous download found";
+    }
+  }
+
+  return notes;
+}
+
 export default function TaskPage() {
   const params = useParams();
   const router = useRouter();
@@ -161,14 +183,9 @@ export default function TaskPage() {
       setProgress(nextProgress);
       setProgressMessage(nextMessage);
       setStageProgress((prev) => deriveStageProgress(nextProgress, nextMessage, prev));
-      if (typeof nextMessage === "string") {
-        const lower = nextMessage.toLowerCase();
-        if (lower.includes("found existing download") || lower.includes("skipping download")) {
-          setStageNotes((prev) => ({ ...prev, download: "previous download found" }));
-        }
-        if (lower.includes("found existing transcript") || lower.includes("skipping transcription")) {
-          setStageNotes((prev) => ({ ...prev, transcript: "previous transcript found" }));
-        }
+      const inferredNotes = deriveStageNotesFromMessage(nextMessage, taskData?.source_type);
+      if (Object.keys(inferredNotes).length > 0) {
+        setStageNotes((prev) => ({ ...prev, ...inferredNotes }));
       }
       setError(null);
 
@@ -246,12 +263,9 @@ export default function TaskPage() {
         if (typeof data.progress === "number") setProgress(data.progress);
         if (typeof data.message === "string") setProgressMessage(data.message);
         if (typeof data.message === "string") {
-          const lowerMessage = data.message.toLowerCase();
-          if (lowerMessage.includes("found existing download") || lowerMessage.includes("skipping download")) {
-            setStageNotes((prev) => ({ ...prev, download: "previous download found" }));
-          }
-          if (lowerMessage.includes("found existing transcript") || lowerMessage.includes("skipping transcription")) {
-            setStageNotes((prev) => ({ ...prev, transcript: "previous transcript found" }));
+          const inferredNotes = deriveStageNotesFromMessage(data.message, task?.source_type);
+          if (Object.keys(inferredNotes).length > 0) {
+            setStageNotes((prev) => ({ ...prev, ...inferredNotes }));
           }
         }
         const metadata = (data?.metadata ?? {}) as { stage?: StageKey; stage_progress?: number; cached?: boolean };
@@ -418,6 +432,16 @@ export default function TaskPage() {
       progress < 70
     ) {
       return "previous transcript found";
+    }
+
+    // Mirror behavior for download if the transcript cache signal is present.
+    if (
+      stage === "download" &&
+      stageProgress.download >= 100 &&
+      stageNotes.transcript === "previous transcript found" &&
+      (task?.source_type === "youtube")
+    ) {
+      return "previous download found";
     }
 
     return `${stageProgress[stage]}%`;

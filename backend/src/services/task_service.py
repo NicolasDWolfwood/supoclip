@@ -145,33 +145,48 @@ class TaskService:
 
             completion_message = "Complete!"
             if len(clip_ids) == 0:
-                diagnostics = result.get("analysis_diagnostics") or {}
-                raw_segments = diagnostics.get("raw_segments")
-                validated_segments = diagnostics.get("validated_segments")
-                error_text = diagnostics.get("error")
+                analysis_diagnostics = result.get("analysis_diagnostics") or {}
+                clip_diagnostics = result.get("clip_generation_diagnostics") or {}
+                raw_segments = analysis_diagnostics.get("raw_segments")
+                validated_segments = analysis_diagnostics.get("validated_segments")
+                error_text = analysis_diagnostics.get("error")
 
                 if error_text:
                     completion_message = f"No clips generated: AI analysis failed ({error_text})"
-                elif raw_segments is not None and validated_segments is not None:
-                    rejected_counts = diagnostics.get("rejected_counts") or {}
+                elif validated_segments == 0:
+                    rejected_counts = analysis_diagnostics.get("rejected_counts") or {}
+                    human_labels = {
+                        "insufficient_text": "too little text",
+                        "identical_timestamps": "same start/end timestamp",
+                        "invalid_duration": "invalid duration",
+                        "too_short": "segment too short",
+                        "invalid_timestamp_format": "bad timestamp format",
+                    }
                     reject_bits = []
-                    for key in [
-                        "insufficient_text",
-                        "identical_timestamps",
-                        "invalid_duration",
-                        "too_short",
-                        "invalid_timestamp_format",
-                    ]:
+                    for key, label in human_labels.items():
                         count = rejected_counts.get(key, 0)
                         if count:
-                            reject_bits.append(f"{key}={count}")
-                    rejection_summary = f" Rejections: {', '.join(reject_bits)}." if reject_bits else ""
+                            reject_bits.append(f"{label}: {count}")
+                    rejection_summary = " ".join(reject_bits) if reject_bits else "no valid segments met timing/quality checks."
                     completion_message = (
-                        f"No clips generated: AI returned {raw_segments} segments, "
-                        f"{validated_segments} passed validation.{rejection_summary}"
+                        "No clips generated: transcript did not contain strong standalone moments "
+                        f"(hooks, value, emotion, complete thought, 10-45s). {rejection_summary}"
                     )
                 else:
-                    completion_message = "No clips generated: no valid highlight segments were detected."
+                    created_clips = clip_diagnostics.get("created_clips", 0)
+                    attempted_segments = clip_diagnostics.get("attempted_segments", validated_segments or 0)
+                    sample_failures = clip_diagnostics.get("failure_samples") or []
+                    if attempted_segments > 0 and created_clips == 0:
+                        sample_error = sample_failures[0].get("error") if sample_failures else "rendering error"
+                        completion_message = (
+                            f"No clips generated: AI found {validated_segments} clip-worthy segments, "
+                            f"but rendering failed for all {attempted_segments}. Example error: {sample_error}"
+                        )
+                    else:
+                        completion_message = (
+                            f"No clips generated: AI returned {raw_segments or 0} segments, "
+                            f"{validated_segments or 0} passed validation, but none were rendered successfully."
+                        )
 
             # Mark as completed
             await self.task_repo.update_task_status(
