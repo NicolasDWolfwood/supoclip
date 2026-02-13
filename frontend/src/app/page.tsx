@@ -26,12 +26,19 @@ interface LatestTask {
   created_at: string;
 }
 
+const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
+type AiProvider = (typeof AI_PROVIDERS)[number];
+
 const DEFAULT_AI_MODELS = {
   openai: "gpt-5",
   google: "gemini-2.5-pro",
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
-} as const;
+} as const satisfies Record<AiProvider, string>;
+
+function isAiProvider(value: unknown): value is AiProvider {
+  return typeof value === "string" && AI_PROVIDERS.includes(value as AiProvider);
+}
 
 function normalizeFontSize(size: number): number {
   return Math.max(24, Math.min(48, size));
@@ -62,8 +69,8 @@ export default function Home() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
-  const [aiProvider, setAiProvider] = useState<"openai" | "google" | "anthropic" | "zai">("openai");
-  const [aiModel, setAiModel] = useState(DEFAULT_AI_MODELS.openai);
+  const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
+  const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODELS.openai);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -124,10 +131,18 @@ export default function Home() {
       try {
         const response = await fetch('/api/preferences');
         if (response.ok) {
-          const data = await response.json();
-          setFontFamily(data.fontFamily || "TikTokSans-Regular");
-          setFontSize(normalizeFontSize(data.fontSize || 24));
-          setFontColor(data.fontColor || "#FFFFFF");
+          const data: {
+            fontFamily?: unknown;
+            fontSize?: unknown;
+            fontColor?: unknown;
+            transitionsEnabled?: unknown;
+            transcriptionProvider?: unknown;
+            aiProvider?: unknown;
+            aiModel?: unknown;
+          } = await response.json();
+          setFontFamily(typeof data.fontFamily === "string" ? data.fontFamily : "TikTokSans-Regular");
+          setFontSize(normalizeFontSize(typeof data.fontSize === "number" ? data.fontSize : 24));
+          setFontColor(typeof data.fontColor === "string" ? data.fontColor : "#FFFFFF");
           setTransitionsEnabled(Boolean(data.transitionsEnabled));
 
           const savedTranscriptionProvider = data.transcriptionProvider;
@@ -135,23 +150,12 @@ export default function Home() {
             setTranscriptionProvider(savedTranscriptionProvider);
           }
 
-          const savedAiProvider = data.aiProvider;
-          if (
-            savedAiProvider === "openai" ||
-            savedAiProvider === "google" ||
-            savedAiProvider === "anthropic" ||
-            savedAiProvider === "zai"
-          ) {
+          const savedAiProvider = isAiProvider(data.aiProvider) ? data.aiProvider : undefined;
+          if (savedAiProvider) {
             setAiProvider(savedAiProvider);
           }
 
-          const providerForModel =
-            savedAiProvider === "openai" ||
-            savedAiProvider === "google" ||
-            savedAiProvider === "anthropic" ||
-            savedAiProvider === "zai"
-              ? savedAiProvider
-              : "openai";
+          const providerForModel: AiProvider = savedAiProvider ?? "openai";
           const storedAiModel = typeof data.aiModel === "string" ? data.aiModel.trim() : "";
           setAiModel(storedAiModel || DEFAULT_AI_MODELS[providerForModel]);
         }
