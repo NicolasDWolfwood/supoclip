@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,7 +34,7 @@ const DEFAULT_AI_MODELS: Record<(typeof AI_PROVIDERS)[number], string> = {
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
 };
-const AI_MODEL_OPTIONS: Record<(typeof AI_PROVIDERS)[number], string[]> = {
+const FALLBACK_AI_MODEL_OPTIONS: Record<(typeof AI_PROVIDERS)[number], string[]> = {
   openai: ["gpt-5", "gpt-5-mini", "gpt-4.1"],
   google: ["gemini-2.5-pro", "gemini-2.5-flash"],
   anthropic: ["claude-4-sonnet", "claude-3-5-haiku"],
@@ -112,6 +112,23 @@ export default function SettingsPage() {
   const [isSavingAiKey, setIsSavingAiKey] = useState(false);
   const [aiKeyStatus, setAiKeyStatus] = useState<string | null>(null);
   const [aiKeyError, setAiKeyError] = useState<string | null>(null);
+  const [aiModelOptions, setAiModelOptions] = useState<Record<AiProvider, string[]>>({
+    openai: FALLBACK_AI_MODEL_OPTIONS.openai,
+    google: FALLBACK_AI_MODEL_OPTIONS.google,
+    anthropic: FALLBACK_AI_MODEL_OPTIONS.anthropic,
+    zai: FALLBACK_AI_MODEL_OPTIONS.zai,
+  });
+  const [hasLoadedAiModels, setHasLoadedAiModels] = useState<Record<AiProvider, boolean>>({
+    openai: false,
+    google: false,
+    anthropic: false,
+    zai: false,
+  });
+  const [isLoadingAiModels, setIsLoadingAiModels] = useState(false);
+  const [aiModelStatus, setAiModelStatus] = useState<string | null>(null);
+  const [aiModelError, setAiModelError] = useState<string | null>(null);
+  const activeAiProviderRef = useRef<AiProvider>(aiProvider);
+  const latestAiModelsRequestRef = useRef(0);
 
   const { data: session, isPending } = useSession();
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -199,6 +216,10 @@ export default function SettingsPage() {
   }, [session?.user?.id]);
 
   useEffect(() => {
+    activeAiProviderRef.current = aiProvider;
+  }, [aiProvider]);
+
+  useEffect(() => {
     const loadTranscriptionSettings = async () => {
       if (!session?.user?.id) {
         return;
@@ -261,6 +282,94 @@ export default function SettingsPage() {
 
     loadAiSettings();
   }, [apiUrl, session?.user?.id]);
+
+  const fetchAiModels = useCallback(
+    async (provider: AiProvider, options?: { showStatus?: boolean }): Promise<boolean> => {
+      const showStatus = options?.showStatus ?? true;
+      if (!session?.user?.id) {
+        return false;
+      }
+
+      if (showStatus) {
+        setAiModelStatus(null);
+      }
+      setAiModelError(null);
+      setIsLoadingAiModels(true);
+      latestAiModelsRequestRef.current += 1;
+      const requestId = latestAiModelsRequestRef.current;
+
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings/${provider}/models`, {
+          headers: {
+            user_id: session.user.id,
+          },
+        });
+
+        const responseData = await response
+          .json()
+          .catch(() => ({} as { detail?: string; models?: unknown }));
+        if (!response.ok) {
+          throw new Error(responseData?.detail || `Failed to load ${provider} models`);
+        }
+
+        const rawModels = Array.isArray(responseData.models)
+          ? responseData.models.filter((value): value is string => typeof value === "string")
+          : [];
+        const models = Array.from(new Set(rawModels.map((value) => value.trim()).filter((value) => value.length > 0)));
+        if (models.length === 0) {
+          throw new Error(`No models were returned for ${provider}`);
+        }
+
+        setAiModelOptions((prev) => ({ ...prev, [provider]: models }));
+        setHasLoadedAiModels((prev) => ({ ...prev, [provider]: true }));
+        const isActiveProvider = activeAiProviderRef.current === provider;
+        if (isActiveProvider) {
+          setAiModel((prevModel) => {
+            const trimmed = prevModel.trim();
+            if (trimmed && models.includes(trimmed)) {
+              return prevModel;
+            }
+            if (models.includes(DEFAULT_AI_MODELS[provider])) {
+              return DEFAULT_AI_MODELS[provider];
+            }
+            return models[0];
+          });
+          if (showStatus) {
+            setAiModelStatus(`Loaded ${models.length} models from ${provider}.`);
+          }
+        }
+        return true;
+      } catch (loadError) {
+        const message = loadError instanceof Error ? loadError.message : `Failed to load ${provider} models`;
+        setAiModelOptions((prev) => ({ ...prev, [provider]: FALLBACK_AI_MODEL_OPTIONS[provider] }));
+        setHasLoadedAiModels((prev) => ({ ...prev, [provider]: false }));
+        if (activeAiProviderRef.current === provider) {
+          setAiModelError(message);
+        }
+        return false;
+      } finally {
+        if (latestAiModelsRequestRef.current === requestId) {
+          setIsLoadingAiModels(false);
+        }
+      }
+    },
+    [apiUrl, session?.user?.id],
+  );
+
+  useEffect(() => {
+    if (!session?.user?.id) {
+      return;
+    }
+    const hasProviderKey = hasSavedAiKeys[aiProvider] || hasEnvAiFallback[aiProvider];
+    if (!hasProviderKey) {
+      setAiModelOptions((prev) => ({ ...prev, [aiProvider]: FALLBACK_AI_MODEL_OPTIONS[aiProvider] }));
+      setHasLoadedAiModels((prev) => ({ ...prev, [aiProvider]: false }));
+      setAiModelStatus(null);
+      setAiModelError(null);
+      return;
+    }
+    void fetchAiModels(aiProvider, { showStatus: false });
+  }, [aiProvider, fetchAiModels, hasEnvAiFallback, hasSavedAiKeys, session?.user?.id]);
 
   const saveAssemblyKey = async (key: string): Promise<boolean> => {
     const trimmed = key.trim();
@@ -359,6 +468,7 @@ export default function SettingsPage() {
       setHasSavedAiKeys((prev) => ({ ...prev, [provider]: true }));
       setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
       setAiKeyStatus(`${provider} key saved.`);
+      void fetchAiModels(provider);
       return true;
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : `Failed to save ${provider} key`;
@@ -390,6 +500,12 @@ export default function SettingsPage() {
       setHasSavedAiKeys((prev) => ({ ...prev, [provider]: false }));
       setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
       setAiKeyStatus(`${provider} key removed.`);
+      if (!hasEnvAiFallback[provider]) {
+        setAiModelOptions((prev) => ({ ...prev, [provider]: FALLBACK_AI_MODEL_OPTIONS[provider] }));
+        setHasLoadedAiModels((prev) => ({ ...prev, [provider]: false }));
+        setAiModelStatus(null);
+        setAiModelError(null);
+      }
     } catch (deleteError) {
       const message = deleteError instanceof Error ? deleteError.message : `Failed to remove ${provider} key`;
       setAiKeyError(message);
@@ -511,6 +627,8 @@ export default function SettingsPage() {
       </div>
     );
   }
+
+  const hasAiKeyForSelectedProvider = hasSavedAiKeys[aiProvider] || hasEnvAiFallback[aiProvider];
 
   return (
     <div className="min-h-screen bg-white">
@@ -829,6 +947,8 @@ export default function SettingsPage() {
                     }
                     setAiKeyStatus(null);
                     setAiKeyError(null);
+                    setAiModelStatus(null);
+                    setAiModelError(null);
                   }}
                   disabled={isLoading || isSavingAiKey}
                 >
@@ -898,6 +1018,22 @@ export default function SettingsPage() {
                   <label htmlFor="ai-provider-model" className="text-xs font-medium text-black">
                     {aiProvider.toUpperCase()} Model
                   </label>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={isLoading || isLoadingAiModels || isSavingAiKey || !hasAiKeyForSelectedProvider}
+                      onClick={() => {
+                        void fetchAiModels(aiProvider);
+                      }}
+                    >
+                      {isLoadingAiModels ? "Loading Models..." : "Refresh Models"}
+                    </Button>
+                    {!hasAiKeyForSelectedProvider && (
+                      <span className="text-xs text-gray-500">Save a key (or configure env fallback) to load models.</span>
+                    )}
+                  </div>
                   <Input
                     id="ai-provider-model"
                     list={`ai-model-options-${aiProvider}`}
@@ -907,13 +1043,20 @@ export default function SettingsPage() {
                     disabled={isLoading}
                   />
                   <datalist id={`ai-model-options-${aiProvider}`}>
-                    {AI_MODEL_OPTIONS[aiProvider].map((model) => (
+                    {aiModelOptions[aiProvider].map((model) => (
                       <option key={model} value={model} />
                     ))}
                   </datalist>
                   <p className="text-xs text-gray-500">
                     Clear the field to revert to the default model: {DEFAULT_AI_MODELS[aiProvider]}.
                   </p>
+                  {hasLoadedAiModels[aiProvider] && (
+                    <p className="text-xs text-gray-500">
+                      Loaded {aiModelOptions[aiProvider].length} model options directly from {aiProvider}.
+                    </p>
+                  )}
+                  {aiModelStatus && <p className="text-xs text-green-600">{aiModelStatus}</p>}
+                  {aiModelError && <p className="text-xs text-red-600">{aiModelError}</p>}
                 </div>
               </div>
             </div>

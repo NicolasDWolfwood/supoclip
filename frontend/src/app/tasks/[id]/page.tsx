@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -149,9 +149,24 @@ export default function TaskPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const progressRef = useRef(progress);
+  const progressMessageRef = useRef(progressMessage);
+  const sourceTypeRef = useRef<string | undefined>(task?.source_type);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const taskId = Array.isArray(params.id) ? params.id[0] : params.id;
   const userId = session?.user?.id;
+
+  useEffect(() => {
+    progressRef.current = progress;
+  }, [progress]);
+
+  useEffect(() => {
+    progressMessageRef.current = progressMessage;
+  }, [progressMessage]);
+
+  useEffect(() => {
+    sourceTypeRef.current = task?.source_type;
+  }, [task?.source_type]);
 
   const fetchTaskStatus = useCallback(async (retryCount = 0, maxRetries = 5) => {
     if (!taskId || !userId) return false;
@@ -263,7 +278,7 @@ export default function TaskPage() {
         if (typeof data.progress === "number") setProgress(data.progress);
         if (typeof data.message === "string") setProgressMessage(data.message);
         if (typeof data.message === "string") {
-          const inferredNotes = deriveStageNotesFromMessage(data.message, task?.source_type);
+          const inferredNotes = deriveStageNotesFromMessage(data.message, sourceTypeRef.current);
           if (Object.keys(inferredNotes).length > 0) {
             setStageNotes((prev) => ({ ...prev, ...inferredNotes }));
           }
@@ -289,8 +304,8 @@ export default function TaskPage() {
             });
           }
         } else {
-          const nextProgress = typeof data.progress === "number" ? data.progress : progress;
-          const nextMessage = typeof data.message === "string" ? data.message : progressMessage;
+          const nextProgress = typeof data.progress === "number" ? data.progress : progressRef.current;
+          const nextMessage = typeof data.message === "string" ? data.message : progressMessageRef.current;
           setStageProgress((prev) => deriveStageProgress(nextProgress, nextMessage, prev));
         }
         if (typeof data.status === "string") {

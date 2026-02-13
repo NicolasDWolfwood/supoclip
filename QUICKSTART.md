@@ -137,6 +137,8 @@ Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the
 
 ## Supported AI Models
 
+Tip: in the Settings page, after selecting a provider and saving its API key, the model field can auto-load the provider's current model list.
+
 ### OpenAI (Recommended)
 ```bash
 LLM=openai:gpt-5

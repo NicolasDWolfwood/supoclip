@@ -11,11 +11,18 @@ from ..repositories.source_repository import SourceRepository
 from ..repositories.clip_repository import ClipRepository
 from .video_service import VideoService
 from .secret_service import SecretService
+from .ai_model_catalog_service import list_models_for_provider
 from ..config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+DEFAULT_AI_MODELS = {
+    "openai": "gpt-5-mini",
+    "google": "gemini-2.5-pro",
+    "anthropic": "claude-4-sonnet",
+    "zai": "glm-5",
+}
 
 
 class TaskService:
@@ -311,6 +318,52 @@ class TaskService:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
         await self.task_repo.clear_user_encrypted_ai_key(self.db, user_id, provider)
+
+    async def get_effective_user_ai_api_key(self, user_id: str, provider: str) -> Optional[str]:
+        normalized_provider = (provider or "").strip().lower()
+        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+
+        stored_encrypted_ai_key = await self.task_repo.get_user_encrypted_ai_key(
+            self.db,
+            user_id,
+            normalized_provider,
+        )
+        if stored_encrypted_ai_key:
+            return self.secret_service.decrypt(stored_encrypted_ai_key)
+
+        if normalized_provider == "openai":
+            return (config.openai_api_key or "").strip() or None
+        if normalized_provider == "google":
+            return (config.google_api_key or "").strip() or None
+        if normalized_provider == "anthropic":
+            return (config.anthropic_api_key or "").strip() or None
+        if normalized_provider == "zai":
+            return (config.zai_api_key or "").strip() or None
+        return None
+
+    async def list_available_ai_models(self, user_id: str, provider: str) -> Dict[str, Any]:
+        normalized_provider = (provider or "").strip().lower()
+        api_key = await self.get_effective_user_ai_api_key(user_id, normalized_provider)
+        if not api_key:
+            raise ValueError(
+                f"{normalized_provider} selected but no API key is configured. Save one in Settings."
+            )
+
+        models = await asyncio.to_thread(
+            list_models_for_provider,
+            normalized_provider,
+            api_key,
+        )
+        default_model = DEFAULT_AI_MODELS[normalized_provider]
+        return {
+            "provider": normalized_provider,
+            "models": models,
+            "default_model": default_model,
+            "count": len(models),
+        }
 
     async def get_task_with_clips(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Get task details with all clips."""

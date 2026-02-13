@@ -9,6 +9,7 @@ import logging
 
 from ...database import get_db
 from ...services.task_service import TaskService
+from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import Config
@@ -246,6 +247,34 @@ async def delete_ai_provider_key(
     except Exception as e:
         logger.error(f"Error deleting AI provider key: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
+
+
+@router.get("/ai-settings/{provider}/models")
+async def list_ai_provider_models(
+    provider: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List provider models using a saved user key (or env fallback)."""
+    user_id = _require_user_id(request)
+    provider = (provider or "").strip().lower()
+    if provider not in SUPPORTED_AI_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}")
+
+    try:
+        task_service = TaskService(db)
+        result = await task_service.list_available_ai_models(user_id, provider)
+        return result
+    except ModelCatalogError as e:
+        raise HTTPException(status_code=e.status_code, detail=str(e))
+    except ValueError as e:
+        message = str(e)
+        if "not found" in message.lower():
+            raise HTTPException(status_code=404, detail=message)
+        raise HTTPException(status_code=400, detail=message)
+    except Exception as e:
+        logger.error(f"Error listing AI provider models for provider={provider}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error listing models: {str(e)}")
 
 
 @router.post("/")

@@ -66,6 +66,7 @@ Backend is started by `docker-compose.yml` with:
 
 When running locally or via Docker:
 - Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
+- AI model discovery: `GET /tasks/ai-settings/{provider}/models` (uses saved user key first, then env fallback)
 
 ## Fonts
 
