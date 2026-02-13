@@ -11,6 +11,7 @@ LLM_PROVIDER_COLUMNS = {
     "openai": "openai_api_key_encrypted",
     "google": "google_api_key_encrypted",
     "anthropic": "anthropic_api_key_encrypted",
+    "zai": "zai_api_key_encrypted",
 }
 
 

@@ -94,15 +94,16 @@ async def init_db():
                 """
                 DO $$
                 BEGIN
-                    IF NOT EXISTS (
+                    IF EXISTS (
                         SELECT 1
                         FROM pg_constraint
                         WHERE conname = 'check_tasks_ai_provider'
                     ) THEN
-                        ALTER TABLE tasks
-                        ADD CONSTRAINT check_tasks_ai_provider
-                        CHECK (ai_provider IN ('openai', 'google', 'anthropic'));
+                        ALTER TABLE tasks DROP CONSTRAINT check_tasks_ai_provider;
                     END IF;
+                    ALTER TABLE tasks
+                    ADD CONSTRAINT check_tasks_ai_provider
+                    CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
                 END $$;
                 """
             )
@@ -128,6 +129,14 @@ async def init_db():
                 """
                 ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS anthropic_api_key_encrypted TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS zai_api_key_encrypted TEXT
                 """
             )
         )
@@ -178,15 +187,16 @@ async def init_db():
                 """
                 DO $$
                 BEGIN
-                    IF NOT EXISTS (
+                    IF EXISTS (
                         SELECT 1
                         FROM pg_constraint
                         WHERE conname = 'check_users_default_ai_provider'
                     ) THEN
-                        ALTER TABLE users
-                        ADD CONSTRAINT check_users_default_ai_provider
-                        CHECK (default_ai_provider IN ('openai', 'google', 'anthropic'));
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_ai_provider;
                     END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_ai_provider
+                    CHECK (default_ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
                 END $$;
                 """
             )

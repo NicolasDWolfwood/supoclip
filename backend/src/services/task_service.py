@@ -15,7 +15,7 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 
 
 class TaskService:
@@ -157,6 +157,8 @@ class TaskService:
                     ai_api_key = config.google_api_key
                 elif selected_ai_provider == "anthropic":
                     ai_api_key = config.anthropic_api_key
+                elif selected_ai_provider == "zai":
+                    ai_api_key = config.zai_api_key
 
             result = await self.video_service.process_video_complete(
                 url=url,

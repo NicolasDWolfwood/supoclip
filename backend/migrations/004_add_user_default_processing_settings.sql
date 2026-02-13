@@ -52,13 +52,15 @@ END $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (
+    IF EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'check_users_default_ai_provider'
     ) THEN
         ALTER TABLE users
-        ADD CONSTRAINT check_users_default_ai_provider
-        CHECK (default_ai_provider IN ('openai', 'google', 'anthropic'));
+        DROP CONSTRAINT check_users_default_ai_provider;
     END IF;
+    ALTER TABLE users
+    ADD CONSTRAINT check_users_default_ai_provider
+    CHECK (default_ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
 END $$;

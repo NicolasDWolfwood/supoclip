@@ -12,7 +12,7 @@ Open-source AI video clipping, built as a self-hosted alternative to OpusClip.
 
 ```bash
 cp .env.sample .env
-# edit .env and add one model provider key (OPENAI_API_KEY or GOOGLE_API_KEY or ANTHROPIC_API_KEY)
+# edit .env and add one model provider key (OPENAI_API_KEY or GOOGLE_API_KEY or ANTHROPIC_API_KEY or ZAI_API_KEY)
 # transcription defaults to local Whisper; set TRANSCRIPTION_PROVIDER=assemblyai only if you want remote transcription
 ./start.sh
 ```

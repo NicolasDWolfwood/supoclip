@@ -55,7 +55,7 @@ export default function Home() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
-  const [aiProvider, setAiProvider] = useState<"openai" | "google" | "anthropic">("openai");
+  const [aiProvider, setAiProvider] = useState<"openai" | "google" | "anthropic" | "zai">("openai");
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -128,7 +128,12 @@ export default function Home() {
           }
 
           const savedAiProvider = data.aiProvider;
-          if (savedAiProvider === "openai" || savedAiProvider === "google" || savedAiProvider === "anthropic") {
+          if (
+            savedAiProvider === "openai" ||
+            savedAiProvider === "google" ||
+            savedAiProvider === "anthropic" ||
+            savedAiProvider === "zai"
+          ) {
             setAiProvider(savedAiProvider);
           }
         }

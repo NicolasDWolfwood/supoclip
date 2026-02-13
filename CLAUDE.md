@@ -79,8 +79,8 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `ASSEMBLY_AI_API_KEY` - Required only when `TRANSCRIPTION_PROVIDER=assemblyai`
 - `WHISPER_MODEL_SIZE` - Whisper model size used for local transcription
 - `WHISPER_DEVICE` - Whisper execution target (`auto`, `cuda`, `cpu`)
-- `LLM` - AI model identifier (e.g., "openai:gpt-5-mini", "anthropic:claude-4-sonnet")
-- `OPENAI_API_KEY`, `GOOGLE_API_KEY`, or `ANTHROPIC_API_KEY` - Depending on LLM choice
+- `LLM` - AI model identifier (e.g., "openai:gpt-5-mini", "anthropic:claude-4-sonnet", "zai:glm-5")
+- `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `ZAI_API_KEY` - Depending on LLM choice
 - `DATABASE_URL` - PostgreSQL connection string
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
 - `WHISPER_CACHE_HOST_DIR` - Docker host path for Whisper cache mount (default `./backend/.cache/whisper`)

@@ -51,6 +51,7 @@ Use the root env file and canonical config reference:
 Backend compatibility behavior:
 - preferred model var: `LLM`
 - legacy model var: `LLM_MODEL`
+- AI provider keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
 - legacy Whisper var: `WHISPER_MODEL`
 - transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)

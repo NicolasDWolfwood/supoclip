@@ -12,6 +12,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `OPENAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `openai:*`. |
 | `GOOGLE_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `google:*`. |
 | `ANTHROPIC_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `anthropic:*`. |
+| `ZAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `zai:*`. |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
 | `WORKER_MAX_JOBS` | No | `2` | worker | Max concurrent background jobs for primary worker; lower values reduce CPU contention during local transcription. |
@@ -69,6 +70,7 @@ Examples:
 - `openai:gpt-4.1`
 - `anthropic:claude-4-sonnet`
 - `google:gemini-2.5-pro`
+- `zai:glm-5`
 
 ## Entrypoint Alignment
 

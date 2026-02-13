@@ -10,6 +10,7 @@ Run MrglSnips with Docker in just one command!
      - [OpenAI API Key](https://platform.openai.com/api-keys) (recommended)
      - [Google AI API Key](https://makersuite.google.com/app/apikey)
      - [Anthropic API Key](https://console.anthropic.com/)
+     - [z.ai API Key](https://docs.z.ai/api-reference/introduction)
 3. **For local frontend development (non-Docker):**
    - Node.js 20+
    - npm 10+
@@ -40,6 +41,9 @@ BACKEND_HOST_PORT=8000
 
 # Choose one AI provider for clip selection
 OPENAI_API_KEY=your_openai_key_here
+# or: GOOGLE_API_KEY=...
+# or: ANTHROPIC_API_KEY=...
+# or: ZAI_API_KEY=...
 
 # Configure which AI model to use
 LLM=openai:gpt-5-mini
@@ -96,7 +100,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 
 | Variable | Description | Where to Get |
 |----------|-------------|--------------|
-| `OPENAI_API_KEY` | OpenAI GPT models | https://platform.openai.com/api-keys |
+| One of `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY` | Provider key for transcript analysis | Provider docs |
 | `LLM` | AI model identifier | e.g., `openai:gpt-5-mini` |
 
 ### Optional Variables
@@ -127,6 +131,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
 | `ANTHROPIC_API_KEY` | - | For Claude models |
+| `ZAI_API_KEY` | - | For z.ai GLM models |
 
 Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
 
@@ -149,6 +154,11 @@ LLM=anthropic:claude-3-5-haiku
 ```bash
 LLM=google:gemini-2.5-pro
 LLM=google:gemini-2.5-flash
+```
+
+### z.ai
+```bash
+LLM=zai:glm-5
 ```
 
 ## Troubleshooting

@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import prisma from "@/lib/prisma";
 
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
-const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic"]);
+const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai"]);
 
 // GET /api/preferences - Get user preferences
 export async function GET() {
@@ -125,7 +125,7 @@ export async function PATCH(request: NextRequest) {
       (typeof aiProvider !== "string" || !SUPPORTED_AI_PROVIDERS.has(aiProvider))
     ) {
       return NextResponse.json(
-        { error: "Invalid aiProvider (must be openai, google, or anthropic)" },
+        { error: "Invalid aiProvider (must be openai, google, anthropic, or zai)" },
         { status: 400 }
       );
     }

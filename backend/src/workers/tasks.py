@@ -38,7 +38,7 @@ async def process_video_task(
         font_color: Font color for subtitles
         transitions_enabled: Whether transition effects should be applied
         transcription_provider: "local" or "assemblyai"
-        ai_provider: "openai", "google", or "anthropic"
+        ai_provider: "openai", "google", "anthropic", or "zai"
 
     Returns:
         Dict with processing results

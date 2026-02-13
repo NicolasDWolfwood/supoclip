@@ -15,15 +15,17 @@ END $$;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (
+    IF EXISTS (
         SELECT 1
         FROM pg_constraint
         WHERE conname = 'check_tasks_ai_provider'
     ) THEN
         ALTER TABLE tasks
-        ADD CONSTRAINT check_tasks_ai_provider
-        CHECK (ai_provider IN ('openai', 'google', 'anthropic'));
+        DROP CONSTRAINT check_tasks_ai_provider;
     END IF;
+    ALTER TABLE tasks
+    ADD CONSTRAINT check_tasks_ai_provider
+    CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
 END $$;
 
 DO $$
@@ -62,3 +64,14 @@ BEGIN
     END IF;
 END $$;
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'zai_api_key_encrypted'
+    ) THEN
+        ALTER TABLE users
+        ADD COLUMN zai_api_key_encrypted TEXT;
+    END IF;
+END $$;

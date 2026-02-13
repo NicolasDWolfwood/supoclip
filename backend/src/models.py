@@ -30,6 +30,7 @@ class User(Base):
     openai_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     google_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     anthropic_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    zai_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     default_transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     default_transcription_provider: Mapped[str] = mapped_column(
         String(20),

@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 
 const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
-const AI_PROVIDERS = ["openai", "google", "anthropic"] as const;
+const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
 
 type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 type AiProvider = (typeof AI_PROVIDERS)[number];
@@ -81,16 +81,19 @@ export default function SettingsPage() {
     openai: "",
     google: "",
     anthropic: "",
+    zai: "",
   });
   const [hasSavedAiKeys, setHasSavedAiKeys] = useState<Record<AiProvider, boolean>>({
     openai: false,
     google: false,
     anthropic: false,
+    zai: false,
   });
   const [hasEnvAiFallback, setHasEnvAiFallback] = useState<Record<AiProvider, boolean>>({
     openai: false,
     google: false,
     anthropic: false,
+    zai: false,
   });
   const [isSavingAiKey, setIsSavingAiKey] = useState(false);
   const [aiKeyStatus, setAiKeyStatus] = useState<string | null>(null);
@@ -224,11 +227,13 @@ export default function SettingsPage() {
           openai: Boolean(data.has_openai_key),
           google: Boolean(data.has_google_key),
           anthropic: Boolean(data.has_anthropic_key),
+          zai: Boolean(data.has_zai_key),
         });
         setHasEnvAiFallback({
           openai: Boolean(data.has_env_openai),
           google: Boolean(data.has_env_google),
           anthropic: Boolean(data.has_env_anthropic),
+          zai: Boolean(data.has_env_zai),
         });
       } catch (loadError) {
         console.error("Failed to load AI settings:", loadError);
@@ -799,6 +804,7 @@ export default function SettingsPage() {
                     <SelectItem value="openai">OpenAI</SelectItem>
                     <SelectItem value="google">Google</SelectItem>
                     <SelectItem value="anthropic">Anthropic</SelectItem>
+                    <SelectItem value="zai">z.ai (GLM)</SelectItem>
                   </SelectContent>
                 </Select>
 

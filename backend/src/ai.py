@@ -15,12 +15,14 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 DEFAULT_AI_MODELS = {
     "openai": "gpt-5-mini",
     "google": "gemini-2.5-pro",
     "anthropic": "claude-4-sonnet",
+    "zai": "glm-5",
 }
+ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/paas/v4"
 
 class TranscriptSegment(BaseModel):
     """Represents a relevant segment of transcript with precise timing."""
@@ -115,6 +117,15 @@ def _build_transcript_agent(
         if not resolved_key:
             raise ValueError("OpenAI provider selected but no API key is configured")
         provider = OpenAIProvider(api_key=resolved_key)
+        model = OpenAIModel(selected_model, provider=provider)
+    elif selected_provider == "zai":
+        from pydantic_ai.models.openai import OpenAIModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        resolved_key = resolved_key or str(config.zai_api_key or "").strip()
+        if not resolved_key:
+            raise ValueError("z.ai provider selected but no API key is configured")
+        provider = OpenAIProvider(api_key=resolved_key, base_url=ZAI_OPENAI_BASE_URL)
         model = OpenAIModel(selected_model, provider=provider)
     elif selected_provider == "google":
         from pydantic_ai.models.google import GoogleModel

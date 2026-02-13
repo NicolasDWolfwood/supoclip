@@ -15,6 +15,7 @@ class Config:
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         self.google_api_key = os.getenv("GOOGLE_API_KEY")
+        self.zai_api_key = os.getenv("ZAI_API_KEY")
         self.assembly_ai_api_key = os.getenv("ASSEMBLY_AI_API_KEY")
         self.admin_api_key = os.getenv("ADMIN_API_KEY")
         self.secret_encryption_key = os.getenv("SECRET_ENCRYPTION_KEY")

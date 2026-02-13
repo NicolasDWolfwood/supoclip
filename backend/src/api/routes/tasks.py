@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -186,9 +186,11 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
             "has_openai_key": bool(settings.get("has_openai_key")),
             "has_google_key": bool(settings.get("has_google_key")),
             "has_anthropic_key": bool(settings.get("has_anthropic_key")),
+            "has_zai_key": bool(settings.get("has_zai_key")),
             "has_env_openai": bool((config.openai_api_key or "").strip()),
             "has_env_google": bool((config.google_api_key or "").strip()),
             "has_env_anthropic": bool((config.anthropic_api_key or "").strip()),
+            "has_env_zai": bool((config.zai_api_key or "").strip()),
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -292,11 +294,13 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 )
         ai_settings = await task_service.get_user_ai_settings(user_id)
         has_saved_ai_key = bool(ai_settings.get(f"has_{ai_provider}_key"))
-        has_env_ai_key = (
-            bool((config.openai_api_key or "").strip()) if ai_provider == "openai"
-            else bool((config.google_api_key or "").strip()) if ai_provider == "google"
-            else bool((config.anthropic_api_key or "").strip())
-        )
+        env_ai_keys = {
+            "openai": bool((config.openai_api_key or "").strip()),
+            "google": bool((config.google_api_key or "").strip()),
+            "anthropic": bool((config.anthropic_api_key or "").strip()),
+            "zai": bool((config.zai_api_key or "").strip()),
+        }
+        has_env_ai_key = env_ai_keys.get(ai_provider, False)
         if not (has_saved_ai_key or has_env_ai_key):
             raise HTTPException(
                 status_code=400,
