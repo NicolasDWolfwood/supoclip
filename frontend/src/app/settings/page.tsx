@@ -15,6 +15,7 @@ import { useSession } from "@/lib/auth-client";
 import { SettingsSaveStatus } from "./components/settings-save-status";
 import { SettingsSectionFont } from "./components/settings-section-font";
 import { SettingsSectionProcessing } from "./components/settings-section-processing";
+import { SettingsSectionVideo } from "./components/settings-section-video";
 import { SettingsSidebar } from "./components/settings-sidebar";
 import {
   normalizeFontStyleOptions,
@@ -49,6 +50,9 @@ interface SavePreferencesOptions {
 }
 
 function getActiveSection(sectionValue: string | null): SettingsSection {
+  if (sectionValue === "processing") {
+    return "ai";
+  }
   return isSettingsSection(sectionValue) ? sectionValue : "font";
 }
 
@@ -880,10 +884,17 @@ function SettingsPageContent() {
                 }}
                 onFontUpload={handleFontUpload}
               />
+            ) : activeSection === "video" ? (
+              <SettingsSectionVideo
+                isSaving={isSavingPreferences}
+                transitionsEnabled={preferencesDraft.transitionsEnabled}
+                onToggleTransitions={() => {
+                  setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
+                }}
+              />
             ) : (
               <SettingsSectionProcessing
                 isSaving={isSavingPreferences}
-                transitionsEnabled={preferencesDraft.transitionsEnabled}
                 transcriptionProvider={preferencesDraft.transcriptionProvider}
                 aiProvider={preferencesDraft.aiProvider}
                 aiModel={preferencesDraft.aiModel}
@@ -905,9 +916,6 @@ function SettingsPageContent() {
                 aiKeyError={aiKeyError}
                 aiModelStatus={aiModelStatus}
                 aiModelError={aiModelError}
-                onToggleTransitions={() => {
-                  setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
-                }}
                 onTranscriptionProviderChange={(provider) => {
                   if (isTranscriptionProvider(provider)) {
                     setPreferencesDraft((prev) => ({ ...prev, transcriptionProvider: provider }));
@@ -982,7 +990,9 @@ function SettingsPageContent() {
                   ? "Saving..."
                   : activeSection === "font"
                     ? "Save Font Defaults"
-                    : "Save Processing Defaults"}
+                    : activeSection === "video"
+                      ? "Save Video Defaults"
+                      : "Save AI Defaults"}
               </Button>
             </div>
           </section>

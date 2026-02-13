@@ -7,7 +7,6 @@ import { AI_PROVIDERS, DEFAULT_AI_MODELS } from "../settings-section-types";
 
 interface SettingsSectionProcessingProps {
   isSaving: boolean;
-  transitionsEnabled: boolean;
   transcriptionProvider: TranscriptionProvider;
   aiProvider: AiProvider;
   aiModel: string;
@@ -29,7 +28,6 @@ interface SettingsSectionProcessingProps {
   aiKeyError: string | null;
   aiModelStatus: string | null;
   aiModelError: string | null;
-  onToggleTransitions: () => void;
   onTranscriptionProviderChange: (provider: TranscriptionProvider) => void;
   onAiProviderChange: (provider: AiProvider) => void;
   onAiModelChange: (model: string) => void;
@@ -44,7 +42,6 @@ interface SettingsSectionProcessingProps {
 
 export function SettingsSectionProcessing({
   isSaving,
-  transitionsEnabled,
   transcriptionProvider,
   aiProvider,
   aiModel,
@@ -66,7 +63,6 @@ export function SettingsSectionProcessing({
   aiKeyError,
   aiModelStatus,
   aiModelError,
-  onToggleTransitions,
   onTranscriptionProviderChange,
   onAiProviderChange,
   onAiModelChange,
@@ -83,34 +79,9 @@ export function SettingsSectionProcessing({
       <div>
         <div className="flex items-center gap-2">
           <Settings2 className="w-4 h-4 text-black" />
-          <h3 className="text-lg font-semibold text-black">Default Processing Settings</h3>
+          <h3 className="text-lg font-semibold text-black">Default AI Settings</h3>
         </div>
         <p className="mt-1 text-xs text-gray-500">API keys require explicit Save Key.</p>
-      </div>
-
-      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-black">Enable transitions</p>
-            <p className="text-xs text-gray-500">Add transition effects between consecutive clips.</p>
-          </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={transitionsEnabled}
-            onClick={onToggleTransitions}
-            disabled={isSaving}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
-              transitionsEnabled ? "bg-blue-600" : "bg-gray-300"
-            }`}
-          >
-            <span
-              className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
-                transitionsEnabled ? "translate-x-5" : "translate-x-1"
-              }`}
-            />
-          </button>
-        </div>
       </div>
 
       <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">

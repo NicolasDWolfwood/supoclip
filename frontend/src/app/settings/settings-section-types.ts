@@ -4,7 +4,7 @@ import {
   type FontStyleOptions,
 } from "@/lib/font-style-options";
 
-export const SETTINGS_SECTIONS = ["font", "processing"] as const;
+export const SETTINGS_SECTIONS = ["font", "video", "ai"] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
@@ -48,9 +48,13 @@ export const SETTINGS_SECTION_META: Record<SettingsSection, { label: string; des
     label: "Default Font Settings",
     description: "Defaults for subtitle style on new tasks.",
   },
-  processing: {
-    label: "Default Processing Settings",
-    description: "Providers, models, transitions, and API keys.",
+  video: {
+    label: "Default Video Settings",
+    description: "Defaults for clip composition and transitions.",
+  },
+  ai: {
+    label: "Default AI Settings",
+    description: "Providers, models, transcription, and API keys.",
   },
 };
 
