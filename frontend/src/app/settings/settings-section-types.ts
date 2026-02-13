@@ -1,3 +1,9 @@
+import {
+  DEFAULT_FONT_STYLE_OPTIONS,
+  normalizeFontSize,
+  type FontStyleOptions,
+} from "@/lib/font-style-options";
+
 export const SETTINGS_SECTIONS = ["font", "processing"] as const;
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -8,10 +14,7 @@ export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
 export type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 
-export interface UserPreferences {
-  fontFamily: string;
-  fontSize: number;
-  fontColor: string;
+export interface UserPreferences extends FontStyleOptions {
   transitionsEnabled: boolean;
   transcriptionProvider: TranscriptionProvider;
   aiProvider: AiProvider;
@@ -19,9 +22,7 @@ export interface UserPreferences {
 }
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
-  fontFamily: "TikTokSans-Regular",
-  fontSize: 24,
-  fontColor: "#FFFFFF",
+  ...DEFAULT_FONT_STYLE_OPTIONS,
   transitionsEnabled: false,
   transcriptionProvider: "local",
   aiProvider: "openai",
@@ -53,10 +54,6 @@ export const SETTINGS_SECTION_META: Record<SettingsSection, { label: string; des
   },
 };
 
-export function normalizeFontSize(size: number): number {
-  return Math.max(24, Math.min(48, size));
-}
-
 export function isTranscriptionProvider(value: string): value is TranscriptionProvider {
   return TRANSCRIPTION_PROVIDERS.includes(value as TranscriptionProvider);
 }
@@ -74,9 +71,23 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.fontFamily === b.fontFamily &&
     a.fontSize === b.fontSize &&
     a.fontColor === b.fontColor &&
+    a.fontWeight === b.fontWeight &&
+    a.lineHeight === b.lineHeight &&
+    a.letterSpacing === b.letterSpacing &&
+    a.textTransform === b.textTransform &&
+    a.textAlign === b.textAlign &&
+    a.strokeColor === b.strokeColor &&
+    a.strokeWidth === b.strokeWidth &&
+    a.shadowColor === b.shadowColor &&
+    a.shadowOpacity === b.shadowOpacity &&
+    a.shadowBlur === b.shadowBlur &&
+    a.shadowOffsetX === b.shadowOffsetX &&
+    a.shadowOffsetY === b.shadowOffsetY &&
     a.transitionsEnabled === b.transitionsEnabled &&
     a.transcriptionProvider === b.transcriptionProvider &&
     a.aiProvider === b.aiProvider &&
     a.aiModel === b.aiModel
   );
 }
+
+export { normalizeFontSize };

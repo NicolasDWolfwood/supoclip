@@ -31,6 +31,18 @@ class User(Base):
     google_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     anthropic_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     zai_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    default_font_weight: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("600"))
+    default_line_height: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("1.4"))
+    default_letter_spacing: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    default_text_transform: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'none'"))
+    default_text_align: Mapped[str] = mapped_column(String(10), nullable=False, server_default=text("'center'"))
+    default_stroke_color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#000000'"))
+    default_stroke_width: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
+    default_shadow_color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#000000'"))
+    default_shadow_opacity: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("0.5"))
+    default_shadow_blur: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
+    default_shadow_offset_x: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    default_shadow_offset_y: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
     default_transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     default_transcription_provider: Mapped[str] = mapped_column(
         String(20),

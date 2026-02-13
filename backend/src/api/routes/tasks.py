@@ -13,6 +13,7 @@ from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import Config
+from ...subtitle_style import normalize_subtitle_style
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
@@ -289,11 +290,14 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     raw_source = data.get("source")
     user_id = headers.get("user_id")
 
-    # Get font options
+    # Get and normalize subtitle options
     font_options = data.get("font_options", {})
-    font_family = font_options.get("font_family", "TikTokSans-Regular")
-    font_size = font_options.get("font_size", 24)
-    font_color = font_options.get("font_color", "#FFFFFF")
+    if not isinstance(font_options, dict):
+        font_options = {}
+    subtitle_style = normalize_subtitle_style(font_options)
+    font_family = subtitle_style["font_family"]
+    font_size = subtitle_style["font_size"]
+    font_color = subtitle_style["font_color"]
     transitions_enabled = _coerce_bool(font_options.get("transitions_enabled"), default=False)
     transcription_options = data.get("transcription_options", {})
     transcription_provider = _resolve_transcription_provider(
@@ -378,6 +382,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 transcription_provider,
                 ai_provider,
                 ai_model,
+                subtitle_style,
                 queue_name=queue_name,
             )
         except Exception as enqueue_error:

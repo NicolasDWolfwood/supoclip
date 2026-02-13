@@ -248,6 +248,7 @@ class VideoService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        subtitle_style: Optional[Dict[str, Any]] = None,
         transitions_enabled: bool = False,
         progress_callback: Optional[callable] = None,
     ) -> Dict[str, Any]:
@@ -293,6 +294,7 @@ class VideoService:
             font_family,
             font_size,
             font_color,
+            subtitle_style,
             render_diagnostics,
             on_clip_progress,
         )
@@ -336,6 +338,7 @@ class VideoService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        subtitle_style: Optional[Dict[str, Any]] = None,
         transitions_enabled: bool = False,
         transcription_provider: str = "local",
         assembly_api_key: Optional[str] = None,
@@ -443,6 +446,7 @@ class VideoService:
                 font_family,
                 font_size,
                 font_color,
+                subtitle_style,
                 transitions_enabled,
                 progress_callback=progress_callback,
             )

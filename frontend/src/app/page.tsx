@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -16,6 +16,21 @@ import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock } from "lucide-react";
+import {
+  normalizeFontSize,
+  normalizeFontStyleOptions,
+  normalizeFontWeight,
+  normalizeLetterSpacing,
+  normalizeLineHeight,
+  normalizeShadowBlur,
+  normalizeShadowOffset,
+  normalizeShadowOpacity,
+  normalizeStrokeWidth,
+  TEXT_ALIGN_OPTIONS,
+  TEXT_TRANSFORM_OPTIONS,
+  type TextAlignOption,
+  type TextTransformOption,
+} from "@/lib/font-style-options";
 
 interface LatestTask {
   id: string;
@@ -40,8 +55,32 @@ function isAiProvider(value: unknown): value is AiProvider {
   return typeof value === "string" && AI_PROVIDERS.includes(value as AiProvider);
 }
 
-function normalizeFontSize(size: number): number {
-  return Math.max(24, Math.min(48, size));
+function applyTextTransform(text: string, mode: TextTransformOption): string {
+  if (mode === "uppercase") {
+    return text.toUpperCase();
+  }
+  if (mode === "lowercase") {
+    return text.toLowerCase();
+  }
+  if (mode === "capitalize") {
+    return text.replace(/\b\p{L}/gu, (match) => match.toUpperCase());
+  }
+  return text;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const sanitized = hex.replace("#", "");
+  if (sanitized.length !== 6) {
+    return `rgba(0, 0, 0, ${alpha})`;
+  }
+  const r = Number.parseInt(sanitized.slice(0, 2), 16);
+  const g = Number.parseInt(sanitized.slice(2, 4), 16);
+  const b = Number.parseInt(sanitized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function formatTextOption(option: string): string {
+  return option.charAt(0).toUpperCase() + option.slice(1);
 }
 
 export default function Home() {
@@ -62,6 +101,18 @@ export default function Home() {
   const [fontFamily, setFontFamily] = useState("TikTokSans-Regular");
   const [fontSize, setFontSize] = useState(24);
   const [fontColor, setFontColor] = useState("#FFFFFF");
+  const [fontWeight, setFontWeight] = useState(600);
+  const [lineHeight, setLineHeight] = useState(1.4);
+  const [letterSpacing, setLetterSpacing] = useState(0);
+  const [textTransform, setTextTransform] = useState<TextTransformOption>("none");
+  const [textAlign, setTextAlign] = useState<TextAlignOption>("center");
+  const [strokeColor, setStrokeColor] = useState("#000000");
+  const [strokeWidth, setStrokeWidth] = useState(2);
+  const [shadowColor, setShadowColor] = useState("#000000");
+  const [shadowOpacity, setShadowOpacity] = useState(0.5);
+  const [shadowBlur, setShadowBlur] = useState(2);
+  const [shadowOffsetX, setShadowOffsetX] = useState(0);
+  const [shadowOffsetY, setShadowOffsetY] = useState(2);
   const [availableFonts, setAvailableFonts] = useState<Array<{ name: string, display_name: string }>>([]);
   const [isUploadingFont, setIsUploadingFont] = useState(false);
   const [fontUploadMessage, setFontUploadMessage] = useState<string | null>(null);
@@ -135,14 +186,39 @@ export default function Home() {
             fontFamily?: unknown;
             fontSize?: unknown;
             fontColor?: unknown;
+            fontWeight?: unknown;
+            lineHeight?: unknown;
+            letterSpacing?: unknown;
+            textTransform?: unknown;
+            textAlign?: unknown;
+            strokeColor?: unknown;
+            strokeWidth?: unknown;
+            shadowColor?: unknown;
+            shadowOpacity?: unknown;
+            shadowBlur?: unknown;
+            shadowOffsetX?: unknown;
+            shadowOffsetY?: unknown;
             transitionsEnabled?: unknown;
             transcriptionProvider?: unknown;
             aiProvider?: unknown;
             aiModel?: unknown;
           } = await response.json();
-          setFontFamily(typeof data.fontFamily === "string" ? data.fontFamily : "TikTokSans-Regular");
-          setFontSize(normalizeFontSize(typeof data.fontSize === "number" ? data.fontSize : 24));
-          setFontColor(typeof data.fontColor === "string" ? data.fontColor : "#FFFFFF");
+          const normalizedFontStyle = normalizeFontStyleOptions(data);
+          setFontFamily(normalizedFontStyle.fontFamily);
+          setFontSize(normalizedFontStyle.fontSize);
+          setFontColor(normalizedFontStyle.fontColor);
+          setFontWeight(normalizedFontStyle.fontWeight);
+          setLineHeight(normalizedFontStyle.lineHeight);
+          setLetterSpacing(normalizedFontStyle.letterSpacing);
+          setTextTransform(normalizedFontStyle.textTransform);
+          setTextAlign(normalizedFontStyle.textAlign);
+          setStrokeColor(normalizedFontStyle.strokeColor);
+          setStrokeWidth(normalizedFontStyle.strokeWidth);
+          setShadowColor(normalizedFontStyle.shadowColor);
+          setShadowOpacity(normalizedFontStyle.shadowOpacity);
+          setShadowBlur(normalizedFontStyle.shadowBlur);
+          setShadowOffsetX(normalizedFontStyle.shadowOffsetX);
+          setShadowOffsetY(normalizedFontStyle.shadowOffsetY);
           setTransitionsEnabled(Boolean(data.transitionsEnabled));
 
           const savedTranscriptionProvider = data.transcriptionProvider;
@@ -364,6 +440,18 @@ export default function Home() {
             font_family: fontFamily,
             font_size: fontSize,
             font_color: fontColor,
+            font_weight: fontWeight,
+            line_height: lineHeight,
+            letter_spacing: letterSpacing,
+            text_transform: textTransform,
+            text_align: textAlign,
+            stroke_color: strokeColor,
+            stroke_width: strokeWidth,
+            shadow_color: shadowColor,
+            shadow_opacity: shadowOpacity,
+            shadow_blur: shadowBlur,
+            shadow_offset_x: shadowOffsetX,
+            shadow_offset_y: shadowOffsetY,
             transitions_enabled: transitionsEnabled,
           },
           transcription_options: {
@@ -405,6 +493,21 @@ export default function Home() {
         fileInputRef.current.value = "";
       }
     }
+  };
+
+  const previewTextStyle: CSSProperties = {
+    color: fontColor,
+    fontSize: `${fontSize}px`,
+    fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
+    fontWeight,
+    textAlign,
+    lineHeight,
+    letterSpacing: `${letterSpacing}px`,
+    WebkitTextStroke: strokeWidth > 0 ? `${strokeWidth}px ${strokeColor}` : undefined,
+    textShadow:
+      shadowOpacity > 0
+        ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px ${hexToRgba(shadowColor, shadowOpacity)}`
+        : undefined,
   };
 
   if (isPending) {
@@ -717,29 +820,108 @@ export default function Home() {
                     {fontUploadError && <p className="text-xs text-red-600">{fontUploadError}</p>}
                   </div>
 
-                  {/* Font Size Slider */}
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-black">
-                      Font Size: {fontSize}px
-                    </label>
+                    <label className="text-sm font-medium text-black">Font Size: {fontSize}px</label>
                     <div className="px-2 pt-5">
                       <Slider
                         value={[fontSize]}
                         onValueChange={(value) => setFontSize(normalizeFontSize(value[0]))}
                         max={48}
                         min={24}
-                        step={2}
+                        step={1}
                         disabled={isLoading}
                         className="w-full"
                       />
                     </div>
-                    <div className="flex justify-between text-xs text-gray-500">
-                      <span>24px</span>
-                      <span>48px</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-black">Font Weight: {fontWeight}</label>
+                    <div className="px-2 pt-5">
+                      <Slider
+                        value={[fontWeight]}
+                        onValueChange={(value) => setFontWeight(normalizeFontWeight(value[0]))}
+                        max={900}
+                        min={300}
+                        step={100}
+                        disabled={isLoading}
+                        className="w-full"
+                      />
                     </div>
                   </div>
 
-                  {/* Font Color Picker */}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Line Height: {lineHeight.toFixed(1)}</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[lineHeight]}
+                          onValueChange={(value) => setLineHeight(normalizeLineHeight(value[0]))}
+                          min={1}
+                          max={2}
+                          step={0.1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Letter Spacing: {letterSpacing}px</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[letterSpacing]}
+                          onValueChange={(value) => setLetterSpacing(normalizeLetterSpacing(value[0]))}
+                          min={0}
+                          max={6}
+                          step={1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Text Transform</label>
+                      <Select
+                        value={textTransform}
+                        onValueChange={(value) => setTextTransform(value as TextTransformOption)}
+                        disabled={isLoading}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select transform" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TEXT_TRANSFORM_OPTIONS.map((option) => (
+                            <SelectItem key={option} value={option}>
+                              {formatTextOption(option)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Text Align</label>
+                      <Select
+                        value={textAlign}
+                        onValueChange={(value) => setTextAlign(value as TextAlignOption)}
+                        disabled={isLoading}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select alignment" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TEXT_ALIGN_OPTIONS.map((option) => (
+                            <SelectItem key={option} value={option}>
+                              {formatTextOption(option)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-sm font-medium text-black flex items-center gap-2">
                       <Palette className="w-4 h-4" />
@@ -778,19 +960,133 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Preview */}
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Stroke Color</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={strokeColor}
+                          onChange={(e) => setStrokeColor(e.target.value)}
+                          disabled={isLoading}
+                          className="w-12 h-8 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <Input
+                          type="text"
+                          value={strokeColor}
+                          onChange={(e) => setStrokeColor(e.target.value)}
+                          disabled={isLoading}
+                          placeholder="#000000"
+                          className="flex-1 h-8"
+                          pattern="^#[0-9A-Fa-f]{6}$"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Stroke Width: {strokeWidth}px</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[strokeWidth]}
+                          onValueChange={(value) => setStrokeWidth(normalizeStrokeWidth(value[0]))}
+                          min={0}
+                          max={8}
+                          step={1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Shadow Color</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="color"
+                          value={shadowColor}
+                          onChange={(e) => setShadowColor(e.target.value)}
+                          disabled={isLoading}
+                          className="w-12 h-8 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <Input
+                          type="text"
+                          value={shadowColor}
+                          onChange={(e) => setShadowColor(e.target.value)}
+                          disabled={isLoading}
+                          placeholder="#000000"
+                          className="flex-1 h-8"
+                          pattern="^#[0-9A-Fa-f]{6}$"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">
+                        Shadow Opacity: {Math.round(shadowOpacity * 100)}%
+                      </label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[shadowOpacity]}
+                          onValueChange={(value) => setShadowOpacity(normalizeShadowOpacity(value[0]))}
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Shadow Blur: {shadowBlur}px</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[shadowBlur]}
+                          onValueChange={(value) => setShadowBlur(normalizeShadowBlur(value[0]))}
+                          min={0}
+                          max={8}
+                          step={1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Shadow X: {shadowOffsetX}px</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[shadowOffsetX]}
+                          onValueChange={(value) => setShadowOffsetX(normalizeShadowOffset(value[0]))}
+                          min={-12}
+                          max={12}
+                          step={1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Shadow Y: {shadowOffsetY}px</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[shadowOffsetY]}
+                          onValueChange={(value) => setShadowOffsetY(normalizeShadowOffset(value[0]))}
+                          min={-12}
+                          max={12}
+                          step={1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="mt-4 p-3 bg-black rounded-lg">
-                    <p
-                      style={{
-                        color: fontColor,
-                        fontSize: `${fontSize}px`,
-                        fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
-                        textAlign: 'center',
-                        lineHeight: '1.4'
-                      }}
-                      className="font-medium"
-                    >
-                      Preview: Your subtitle will look like this
+                    <p style={previewTextStyle} className="w-full">
+                      Preview: {applyTextTransform("Your subtitle will look like this", textTransform)}
                     </p>
                   </div>
                 </div>

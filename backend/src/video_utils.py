@@ -23,6 +23,7 @@ import srt
 from datetime import timedelta
 
 from .config import Config
+from .subtitle_style import normalize_subtitle_style
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -714,12 +715,75 @@ def parse_timestamp_to_seconds(timestamp_str: str) -> float:
         logger.error(f"Failed to parse timestamp '{timestamp_str}': {e}")
         return 0.0
 
-def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float, clip_end: float, video_width: int, video_height: int, font_family: str = "THEBOLDFONT-FREEVERSION", font_size: int = 24, font_color: str = "#FFFFFF") -> List[TextClip]:
+def _apply_text_transform(text: str, transform: str) -> str:
+    if transform == "uppercase":
+        return text.upper()
+    if transform == "lowercase":
+        return text.lower()
+    if transform == "capitalize":
+        return " ".join(word.capitalize() for word in text.split(" "))
+    return text
+
+
+def _apply_letter_spacing(text: str, spacing: int) -> str:
+    if spacing <= 0:
+        return text
+    joiner = " " * spacing
+    spaced_words = []
+    for word in text.split(" "):
+        if len(word) <= 1:
+            spaced_words.append(word)
+        else:
+            spaced_words.append(joiner.join(list(word)))
+    return " ".join(spaced_words)
+
+
+def _shadow_offsets(base_x: int, base_y: int, blur: int) -> List[Tuple[int, int]]:
+    offsets = [(base_x, base_y)]
+    if blur <= 0:
+        return offsets
+
+    spread = min(3, blur)
+    offsets.extend(
+        [
+            (base_x - spread, base_y),
+            (base_x + spread, base_y),
+            (base_x, base_y - spread),
+            (base_x, base_y + spread),
+        ]
+    )
+    if blur >= 2:
+        offsets.extend(
+            [
+                (base_x - spread, base_y - spread),
+                (base_x + spread, base_y - spread),
+                (base_x - spread, base_y + spread),
+                (base_x + spread, base_y + spread),
+            ]
+        )
+    return offsets
+
+
+def create_assemblyai_subtitles(
+    video_path: Union[Path, str],
+    clip_start: float,
+    clip_end: float,
+    video_width: int,
+    video_height: int,
+    font_family: str = "THEBOLDFONT-FREEVERSION",
+    font_size: int = 24,
+    font_color: str = "#FFFFFF",
+    subtitle_style: Optional[Dict[str, Any]] = None,
+) -> List[TextClip]:
     """Create subtitles using cached word timings."""
     video_path = Path(video_path)
     transcript_data = load_cached_transcript_data(video_path)
+    style = normalize_subtitle_style(subtitle_style)
+    style["font_family"] = font_family or style["font_family"]
+    style["font_size"] = int(font_size or style["font_size"])
+    style["font_color"] = font_color or style["font_color"]
 
-    if not transcript_data or not transcript_data.get('words'):
+    if not transcript_data or not transcript_data.get("words"):
         logger.warning("No cached transcript data available for subtitles")
         return []
 
@@ -729,9 +793,9 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
 
     # Find words that fall within our clip timerange
     relevant_words = []
-    for word_data in transcript_data['words']:
-        word_start = word_data['start']
-        word_end = word_data['end']
+    for word_data in transcript_data["words"]:
+        word_start = word_data["start"]
+        word_end = word_data["end"]
 
         # Check if word overlaps with clip
         if word_start < clip_end_ms and word_end > clip_start_ms:
@@ -740,27 +804,41 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
             relative_end = min((clip_end_ms - clip_start_ms) / 1000.0, (word_end - clip_start_ms) / 1000.0)
 
             if relative_end > relative_start:
-                relevant_words.append({
-                    'text': word_data['text'],
-                    'start': relative_start,
-                    'end': relative_end,
-                    'confidence': word_data.get('confidence', 1.0)
-                })
+                relevant_words.append(
+                    {
+                        "text": word_data["text"],
+                        "start": relative_start,
+                        "end": relative_end,
+                        "confidence": word_data.get("confidence", 1.0),
+                    }
+                )
 
     if not relevant_words:
         logger.warning("No words found in clip timerange")
         return []
 
-    # Group words into subtitle segments (3-4 words per subtitle for readability)
+    # Group words into short subtitle segments for readability.
     subtitle_clips = []
-    processor = VideoProcessor(font_family, font_size, font_color)
+    processor = VideoProcessor(style["font_family"], style["font_size"], style["font_color"])
 
-    # Readability tuning:
-    # - slightly larger base size
-    # - stronger outline for busy backgrounds
-    calculated_font_size = max(24, min(48, int(font_size * (video_width / 640) * 1.15)))
+    calculated_font_size = max(24, min(48, int(style["font_size"] * (video_width / 640) * 1.15)))
     final_font_size = calculated_font_size
-    stroke_width = max(2, int(final_font_size * 0.09))
+    base_stroke_width = max(0, int(style["stroke_width"]))
+    if style["font_size"] > 0:
+        stroke_scale = final_font_size / style["font_size"]
+        stroke_width = max(0, int(round(base_stroke_width * stroke_scale)))
+    else:
+        stroke_width = base_stroke_width
+    interline = max(0, int(round((style["line_height"] - 1.0) * final_font_size)))
+    letter_spacing = int(style["letter_spacing"])
+    text_transform = str(style["text_transform"])
+    text_align = str(style["text_align"])
+    shadow_color = str(style["shadow_color"])
+    shadow_opacity = float(style["shadow_opacity"])
+    shadow_blur = int(style["shadow_blur"])
+    shadow_offset_x = int(style["shadow_offset_x"])
+    shadow_offset_y = int(style["shadow_offset_y"])
+    font_weight = int(style["font_weight"])
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
@@ -770,15 +848,16 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
             continue
 
         # Calculate segment timing
-        segment_start = word_group[0]['start']
-        segment_end = word_group[-1]['end']
+        segment_start = word_group[0]["start"]
+        segment_end = word_group[-1]["end"]
         segment_duration = segment_end - segment_start
 
         if segment_duration < 0.1:  # Skip very short segments
             continue
 
-        # Create text
-        text = ' '.join(word['text'] for word in word_group)
+        text = " ".join(word["text"] for word in word_group)
+        text = _apply_text_transform(text, text_transform)
+        text = _apply_letter_spacing(text, letter_spacing)
 
         try:
             # Reserve a consistent subtitle box to avoid glyph clipping that can
@@ -786,40 +865,87 @@ def create_assemblyai_subtitles(video_path: Union[Path, str], clip_start: float,
             subtitle_box_width = max(240, int(video_width * 0.92))
             subtitle_box_height = max(62, int(final_font_size * 2.8))
 
+            text_clip_kwargs = {
+                "text": text,
+                "font": processor.font_path,
+                "font_size": final_font_size,
+                "color": style["font_color"],
+                "stroke_color": style["stroke_color"],
+                "stroke_width": stroke_width,
+                "text_align": text_align,
+                "interline": interline,
+            }
+
+            render_method = "caption"
             try:
                 text_clip = TextClip(
-                    text=text,
-                    font=processor.font_path,
-                    font_size=final_font_size,
-                    color=font_color,
-                    stroke_color='black',
-                    stroke_width=stroke_width,
-                    method='caption',
+                    **text_clip_kwargs,
+                    method="caption",
                     size=(subtitle_box_width, subtitle_box_height),
-                    text_align='center'
                 )
             except Exception:
                 # Fallback when caption rendering is unavailable in the runtime.
-                text_clip = TextClip(
-                    text=text,
-                    font=processor.font_path,
-                    font_size=final_font_size,
-                    color=font_color,
-                    stroke_color='black',
-                    stroke_width=stroke_width,
-                    method='label',
-                    text_align='center'
-                )
+                render_method = "label"
+                text_clip = TextClip(**text_clip_kwargs, method="label")
 
             text_clip = text_clip.with_duration(segment_duration).with_start(segment_start)
 
-            # Position in lower middle with clamped bounds.
             text_height = text_clip.size[1] if text_clip.size else subtitle_box_height
-            vertical_position = int(video_height * 0.70 - text_height // 2)
-            vertical_position = max(0, min(vertical_position, max(0, video_height - text_height)))
-            text_clip = text_clip.with_position(('center', vertical_position))
+            base_y = int(video_height * 0.70 - text_height // 2)
+            max_y = max(0, video_height - text_height)
+            base_y = max(0, min(base_y, max_y))
 
-            subtitle_clips.extend([text_clip])
+            max_x = max(0, video_width - subtitle_box_width)
+            horizontal_padding = int(video_width * 0.04)
+            if text_align == "left":
+                base_x = max(0, min(horizontal_padding, max_x))
+            elif text_align == "right":
+                base_x = max(0, min(video_width - subtitle_box_width - horizontal_padding, max_x))
+            else:
+                base_x = max(0, min((video_width - subtitle_box_width) // 2, max_x))
+
+            layered_clips: List[TextClip] = []
+
+            if shadow_opacity > 0:
+                try:
+                    shadow_kwargs = {
+                        "text": text,
+                        "font": processor.font_path,
+                        "font_size": final_font_size,
+                        "color": shadow_color,
+                        "stroke_color": shadow_color,
+                        "stroke_width": 0,
+                        "method": render_method,
+                        "text_align": text_align,
+                        "interline": interline,
+                    }
+                    if render_method == "caption":
+                        shadow_kwargs["size"] = (subtitle_box_width, subtitle_box_height)
+                    shadow_clip = TextClip(**shadow_kwargs).with_duration(segment_duration).with_start(segment_start)
+
+                    offsets = _shadow_offsets(shadow_offset_x, shadow_offset_y, shadow_blur)
+                    per_layer_opacity = max(0.02, min(1.0, shadow_opacity / max(1, len(offsets))))
+                    for offset_x, offset_y in offsets:
+                        layer_x = max(0, min(base_x + offset_x, max_x))
+                        layer_y = max(0, min(base_y + offset_y, max_y))
+                        layered_clips.append(
+                            shadow_clip.with_position((layer_x, layer_y)).with_opacity(per_layer_opacity)
+                        )
+                except Exception as shadow_error:
+                    logger.warning(f"Failed to create subtitle shadow for '{text}': {shadow_error}")
+
+            weight_offsets: List[Tuple[int, int]] = []
+            if font_weight >= 600:
+                weight_offsets.append((1, 0))
+            if font_weight >= 800:
+                weight_offsets.extend([(0, 1), (-1, 0)])
+            for offset_x, offset_y in weight_offsets:
+                layer_x = max(0, min(base_x + offset_x, max_x))
+                layer_y = max(0, min(base_y + offset_y, max_y))
+                layered_clips.append(text_clip.with_position((layer_x, layer_y)).with_opacity(0.8))
+
+            layered_clips.append(text_clip.with_position((base_x, base_y)))
+            subtitle_clips.extend(layered_clips)
 
         except Exception as e:
             logger.warning(f"Failed to create subtitle for '{text}': {e}")
@@ -837,6 +963,7 @@ def create_optimized_clip(
     font_family: str = "THEBOLDFONT-FREEVERSION",
     font_size: int = 24,
     font_color: str = "#FFFFFF",
+    subtitle_style: Optional[Dict[str, Any]] = None,
     error_collector: Optional[List[str]] = None,
 ) -> bool:
     """Create optimized 9:16 clip with word-timed subtitles."""
@@ -876,7 +1003,15 @@ def create_optimized_clip(
 
         if add_subtitles:
             subtitle_clips = create_assemblyai_subtitles(
-                video_path, start_time, end_time, new_width, new_height, font_family, font_size, font_color
+                video_path,
+                start_time,
+                end_time,
+                new_width,
+                new_height,
+                font_family,
+                font_size,
+                font_color,
+                subtitle_style=subtitle_style,
             )
             final_clips.extend(subtitle_clips)
 
@@ -915,6 +1050,7 @@ def create_clips_from_segments(
     font_family: str = "THEBOLDFONT-FREEVERSION",
     font_size: int = 24,
     font_color: str = "#FFFFFF",
+    subtitle_style: Optional[Dict[str, Any]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
@@ -958,6 +1094,7 @@ def create_clips_from_segments(
                 font_family,
                 font_size,
                 font_color,
+                subtitle_style,
                 error_collector=clip_errors,
             )
 
@@ -1092,6 +1229,7 @@ def create_clips_with_transitions(
     font_family: str = "THEBOLDFONT-FREEVERSION",
     font_size: int = 24,
     font_color: str = "#FFFFFF",
+    subtitle_style: Optional[Dict[str, Any]] = None,
     diagnostics: Optional[Dict[str, Any]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[Dict[str, Any]]:
@@ -1109,6 +1247,7 @@ def create_clips_with_transitions(
         font_family,
         font_size,
         font_color,
+        subtitle_style,
         diagnostics=render_diagnostics,
         progress_callback=progress_callback,
     )

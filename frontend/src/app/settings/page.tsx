@@ -17,6 +17,18 @@ import { SettingsSectionFont } from "./components/settings-section-font";
 import { SettingsSectionProcessing } from "./components/settings-section-processing";
 import { SettingsSidebar } from "./components/settings-sidebar";
 import {
+  normalizeFontStyleOptions,
+  normalizeFontWeight,
+  normalizeLetterSpacing,
+  normalizeLineHeight,
+  normalizeShadowBlur,
+  normalizeShadowOffset,
+  normalizeShadowOpacity,
+  normalizeStrokeWidth,
+  type TextAlignOption,
+  type TextTransformOption,
+} from "@/lib/font-style-options";
+import {
   arePreferencesEqual,
   DEFAULT_AI_MODELS,
   DEFAULT_USER_PREFERENCES,
@@ -552,10 +564,10 @@ function SettingsPageContent() {
         const resolvedAiProvider =
           typeof data.aiProvider === "string" && isAiProvider(data.aiProvider) ? data.aiProvider : "openai";
 
+        const normalizedFontStyle = normalizeFontStyleOptions(data);
+
         const nextPreferences: UserPreferences = {
-          fontFamily: data.fontFamily || DEFAULT_USER_PREFERENCES.fontFamily,
-          fontSize: normalizeFontSize(data.fontSize || DEFAULT_USER_PREFERENCES.fontSize),
-          fontColor: data.fontColor || DEFAULT_USER_PREFERENCES.fontColor,
+          ...normalizedFontStyle,
           transitionsEnabled: Boolean(data.transitionsEnabled),
           transcriptionProvider:
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
@@ -806,6 +818,18 @@ function SettingsPageContent() {
                 fontFamily={preferencesDraft.fontFamily}
                 fontSize={preferencesDraft.fontSize}
                 fontColor={preferencesDraft.fontColor}
+                fontWeight={preferencesDraft.fontWeight}
+                lineHeight={preferencesDraft.lineHeight}
+                letterSpacing={preferencesDraft.letterSpacing}
+                textTransform={preferencesDraft.textTransform}
+                textAlign={preferencesDraft.textAlign}
+                strokeColor={preferencesDraft.strokeColor}
+                strokeWidth={preferencesDraft.strokeWidth}
+                shadowColor={preferencesDraft.shadowColor}
+                shadowOpacity={preferencesDraft.shadowOpacity}
+                shadowBlur={preferencesDraft.shadowBlur}
+                shadowOffsetX={preferencesDraft.shadowOffsetX}
+                shadowOffsetY={preferencesDraft.shadowOffsetY}
                 isUploadingFont={isUploadingFont}
                 fontUploadMessage={fontUploadMessage}
                 fontUploadError={fontUploadError}
@@ -817,6 +841,42 @@ function SettingsPageContent() {
                 }}
                 onFontColorChange={(color) => {
                   setPreferencesDraft((prev) => ({ ...prev, fontColor: color }));
+                }}
+                onFontWeightChange={(weight) => {
+                  setPreferencesDraft((prev) => ({ ...prev, fontWeight: normalizeFontWeight(weight) }));
+                }}
+                onLineHeightChange={(lineHeight) => {
+                  setPreferencesDraft((prev) => ({ ...prev, lineHeight: normalizeLineHeight(lineHeight) }));
+                }}
+                onLetterSpacingChange={(spacing) => {
+                  setPreferencesDraft((prev) => ({ ...prev, letterSpacing: normalizeLetterSpacing(spacing) }));
+                }}
+                onTextTransformChange={(textTransform) => {
+                  setPreferencesDraft((prev) => ({ ...prev, textTransform: textTransform as TextTransformOption }));
+                }}
+                onTextAlignChange={(textAlign) => {
+                  setPreferencesDraft((prev) => ({ ...prev, textAlign: textAlign as TextAlignOption }));
+                }}
+                onStrokeColorChange={(strokeColor) => {
+                  setPreferencesDraft((prev) => ({ ...prev, strokeColor }));
+                }}
+                onStrokeWidthChange={(strokeWidth) => {
+                  setPreferencesDraft((prev) => ({ ...prev, strokeWidth: normalizeStrokeWidth(strokeWidth) }));
+                }}
+                onShadowColorChange={(shadowColor) => {
+                  setPreferencesDraft((prev) => ({ ...prev, shadowColor }));
+                }}
+                onShadowOpacityChange={(shadowOpacity) => {
+                  setPreferencesDraft((prev) => ({ ...prev, shadowOpacity: normalizeShadowOpacity(shadowOpacity) }));
+                }}
+                onShadowBlurChange={(shadowBlur) => {
+                  setPreferencesDraft((prev) => ({ ...prev, shadowBlur: normalizeShadowBlur(shadowBlur) }));
+                }}
+                onShadowOffsetXChange={(shadowOffsetX) => {
+                  setPreferencesDraft((prev) => ({ ...prev, shadowOffsetX: normalizeShadowOffset(shadowOffsetX) }));
+                }}
+                onShadowOffsetYChange={(shadowOffsetY) => {
+                  setPreferencesDraft((prev) => ({ ...prev, shadowOffsetY: normalizeShadowOffset(shadowOffsetY) }));
                 }}
                 onFontUpload={handleFontUpload}
               />

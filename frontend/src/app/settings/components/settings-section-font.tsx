@@ -1,9 +1,10 @@
-import type { ChangeEvent } from "react";
+import type { ChangeEvent, CSSProperties } from "react";
 import { Palette, Type } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
+import { TEXT_ALIGN_OPTIONS, TEXT_TRANSFORM_OPTIONS, type TextAlignOption, type TextTransformOption } from "@/lib/font-style-options";
 
 interface SettingsSectionFontProps {
   isSaving: boolean;
@@ -11,16 +12,69 @@ interface SettingsSectionFontProps {
   fontFamily: string;
   fontSize: number;
   fontColor: string;
+  fontWeight: number;
+  lineHeight: number;
+  letterSpacing: number;
+  textTransform: TextTransformOption;
+  textAlign: TextAlignOption;
+  strokeColor: string;
+  strokeWidth: number;
+  shadowColor: string;
+  shadowOpacity: number;
+  shadowBlur: number;
+  shadowOffsetX: number;
+  shadowOffsetY: number;
   isUploadingFont: boolean;
   fontUploadMessage: string | null;
   fontUploadError: string | null;
   onFontFamilyChange: (value: string) => void;
   onFontSizeChange: (size: number) => void;
   onFontColorChange: (color: string) => void;
+  onFontWeightChange: (weight: number) => void;
+  onLineHeightChange: (lineHeight: number) => void;
+  onLetterSpacingChange: (spacing: number) => void;
+  onTextTransformChange: (transform: TextTransformOption) => void;
+  onTextAlignChange: (align: TextAlignOption) => void;
+  onStrokeColorChange: (color: string) => void;
+  onStrokeWidthChange: (width: number) => void;
+  onShadowColorChange: (color: string) => void;
+  onShadowOpacityChange: (opacity: number) => void;
+  onShadowBlurChange: (blur: number) => void;
+  onShadowOffsetXChange: (offset: number) => void;
+  onShadowOffsetYChange: (offset: number) => void;
   onFontUpload: (event: ChangeEvent<HTMLInputElement>) => void;
 }
 
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
+const PREVIEW_TEXT = "Your subtitle will look like this";
+
+function applyTextTransform(text: string, mode: TextTransformOption): string {
+  if (mode === "uppercase") {
+    return text.toUpperCase();
+  }
+  if (mode === "lowercase") {
+    return text.toLowerCase();
+  }
+  if (mode === "capitalize") {
+    return text.replace(/\b\p{L}/gu, (match) => match.toUpperCase());
+  }
+  return text;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const sanitized = hex.replace("#", "");
+  if (sanitized.length !== 6) {
+    return `rgba(0, 0, 0, ${alpha})`;
+  }
+  const r = Number.parseInt(sanitized.slice(0, 2), 16);
+  const g = Number.parseInt(sanitized.slice(2, 4), 16);
+  const b = Number.parseInt(sanitized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function formatTextOption(option: string): string {
+  return option.charAt(0).toUpperCase() + option.slice(1);
+}
 
 export function SettingsSectionFont({
   isSaving,
@@ -28,14 +82,53 @@ export function SettingsSectionFont({
   fontFamily,
   fontSize,
   fontColor,
+  fontWeight,
+  lineHeight,
+  letterSpacing,
+  textTransform,
+  textAlign,
+  strokeColor,
+  strokeWidth,
+  shadowColor,
+  shadowOpacity,
+  shadowBlur,
+  shadowOffsetX,
+  shadowOffsetY,
   isUploadingFont,
   fontUploadMessage,
   fontUploadError,
   onFontFamilyChange,
   onFontSizeChange,
   onFontColorChange,
+  onFontWeightChange,
+  onLineHeightChange,
+  onLetterSpacingChange,
+  onTextTransformChange,
+  onTextAlignChange,
+  onStrokeColorChange,
+  onStrokeWidthChange,
+  onShadowColorChange,
+  onShadowOpacityChange,
+  onShadowBlurChange,
+  onShadowOffsetXChange,
+  onShadowOffsetYChange,
   onFontUpload,
 }: SettingsSectionFontProps) {
+  const previewStyle: CSSProperties = {
+    color: fontColor,
+    fontSize: `${Math.min(fontSize, 34)}px`,
+    fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
+    fontWeight,
+    textAlign,
+    lineHeight,
+    letterSpacing: `${letterSpacing}px`,
+    WebkitTextStroke: strokeWidth > 0 ? `${strokeWidth}px ${strokeColor}` : undefined,
+    textShadow:
+      shadowOpacity > 0
+        ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px ${hexToRgba(shadowColor, shadowOpacity)}`
+        : undefined,
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -83,14 +176,99 @@ export function SettingsSectionFont({
             onValueChange={(value) => onFontSizeChange(value[0])}
             max={48}
             min={24}
-            step={2}
+            step={1}
             disabled={isSaving || isUploadingFont}
             className="w-full"
           />
         </div>
-        <div className="flex justify-between text-xs text-gray-500">
-          <span>24px</span>
-          <span>48px</span>
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-sm font-medium text-black">Font Weight: {fontWeight}</Label>
+        <div className="px-2 pt-5">
+          <Slider
+            value={[fontWeight]}
+            onValueChange={(value) => onFontWeightChange(value[0])}
+            max={900}
+            min={300}
+            step={100}
+            disabled={isSaving || isUploadingFont}
+            className="w-full"
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Line Height: {lineHeight.toFixed(1)}</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[lineHeight]}
+              onValueChange={(value) => onLineHeightChange(value[0])}
+              min={1}
+              max={2}
+              step={0.1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Letter Spacing: {letterSpacing}px</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[letterSpacing]}
+              onValueChange={(value) => onLetterSpacingChange(value[0])}
+              min={0}
+              max={6}
+              step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Text Transform</Label>
+          <Select
+            value={textTransform}
+            onValueChange={(value) => onTextTransformChange(value as TextTransformOption)}
+            disabled={isSaving || isUploadingFont}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select transform" />
+            </SelectTrigger>
+            <SelectContent>
+              {TEXT_TRANSFORM_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {formatTextOption(option)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Text Align</Label>
+          <Select
+            value={textAlign}
+            onValueChange={(value) => onTextAlignChange(value as TextAlignOption)}
+            disabled={isSaving || isUploadingFont}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select alignment" />
+            </SelectTrigger>
+            <SelectContent>
+              {TEXT_ALIGN_OPTIONS.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {formatTextOption(option)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 
@@ -132,20 +310,138 @@ export function SettingsSectionFont({
         </div>
       </div>
 
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Stroke Color</Label>
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={strokeColor}
+              onChange={(event) => onStrokeColorChange(event.target.value)}
+              disabled={isSaving || isUploadingFont}
+              className="w-12 h-10 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed"
+            />
+            <Input
+              type="text"
+              value={strokeColor}
+              onChange={(event) => onStrokeColorChange(event.target.value)}
+              disabled={isSaving || isUploadingFont}
+              placeholder="#000000"
+              className="flex-1 h-10"
+              pattern="^#[0-9A-Fa-f]{6}$"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Stroke Width: {strokeWidth}px</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[strokeWidth]}
+              onValueChange={(value) => onStrokeWidthChange(value[0])}
+              min={0}
+              max={8}
+              step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Shadow Color</Label>
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              value={shadowColor}
+              onChange={(event) => onShadowColorChange(event.target.value)}
+              disabled={isSaving || isUploadingFont}
+              className="w-12 h-10 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed"
+            />
+            <Input
+              type="text"
+              value={shadowColor}
+              onChange={(event) => onShadowColorChange(event.target.value)}
+              disabled={isSaving || isUploadingFont}
+              placeholder="#000000"
+              className="flex-1 h-10"
+              pattern="^#[0-9A-Fa-f]{6}$"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">
+            Shadow Opacity: {Math.round(shadowOpacity * 100)}%
+          </Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[shadowOpacity]}
+              onValueChange={(value) => onShadowOpacityChange(value[0])}
+              min={0}
+              max={1}
+              step={0.05}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Shadow Blur: {shadowBlur}px</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[shadowBlur]}
+              onValueChange={(value) => onShadowBlurChange(value[0])}
+              min={0}
+              max={8}
+              step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Shadow X: {shadowOffsetX}px</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[shadowOffsetX]}
+              onValueChange={(value) => onShadowOffsetXChange(value[0])}
+              min={-12}
+              max={12}
+              step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Shadow Y: {shadowOffsetY}px</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[shadowOffsetY]}
+              onValueChange={(value) => onShadowOffsetYChange(value[0])}
+              min={-12}
+              max={12}
+              step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+      </div>
+
       <div className="space-y-2">
         <Label className="text-sm font-medium text-black">Preview</Label>
-        <div className="p-6 bg-black rounded-lg flex items-center justify-center min-h-[100px]">
-          <p
-            style={{
-              color: fontColor,
-              fontSize: `${Math.min(fontSize, 32)}px`,
-              fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
-              textAlign: "center",
-              lineHeight: "1.4",
-            }}
-            className="font-medium"
-          >
-            Your subtitle will look like this
+        <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center">
+          <p style={previewStyle} className="w-full">
+            {applyTextTransform(PREVIEW_TEXT, textTransform)}
           </p>
         </div>
       </div>

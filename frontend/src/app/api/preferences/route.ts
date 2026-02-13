@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import prisma from "@/lib/prisma";
+import {
+  DEFAULT_FONT_STYLE_OPTIONS,
+  isHexColor,
+  isTextAlign,
+  isTextTransform,
+  normalizeFontSize,
+  normalizeFontWeight,
+  normalizeLetterSpacing,
+  normalizeLineHeight,
+  normalizeShadowBlur,
+  normalizeShadowOffset,
+  normalizeShadowOpacity,
+  normalizeStrokeWidth,
+} from "@/lib/font-style-options";
 
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai"]);
@@ -14,10 +28,7 @@ export async function GET() {
     });
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const user = await prisma.user.findUnique({
@@ -26,6 +37,18 @@ export async function GET() {
         default_font_family: true,
         default_font_size: true,
         default_font_color: true,
+        default_font_weight: true,
+        default_line_height: true,
+        default_letter_spacing: true,
+        default_text_transform: true,
+        default_text_align: true,
+        default_stroke_color: true,
+        default_stroke_width: true,
+        default_shadow_color: true,
+        default_shadow_opacity: true,
+        default_shadow_blur: true,
+        default_shadow_offset_x: true,
+        default_shadow_offset_y: true,
         default_transitions_enabled: true,
         default_transcription_provider: true,
         default_ai_provider: true,
@@ -34,16 +57,38 @@ export async function GET() {
     });
 
     if (!user) {
-      return NextResponse.json(
-        { error: "User not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
+    const textTransform = isTextTransform(user.default_text_transform)
+      ? user.default_text_transform
+      : DEFAULT_FONT_STYLE_OPTIONS.textTransform;
+    const textAlign = isTextAlign(user.default_text_align)
+      ? user.default_text_align
+      : DEFAULT_FONT_STYLE_OPTIONS.textAlign;
+
     return NextResponse.json({
-      fontFamily: user.default_font_family || "TikTokSans-Regular",
-      fontSize: user.default_font_size || 24,
-      fontColor: user.default_font_color || "#FFFFFF",
+      fontFamily: user.default_font_family || DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
+      fontSize: normalizeFontSize(user.default_font_size || DEFAULT_FONT_STYLE_OPTIONS.fontSize),
+      fontColor: isHexColor(user.default_font_color)
+        ? user.default_font_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.fontColor,
+      fontWeight: normalizeFontWeight(user.default_font_weight),
+      lineHeight: normalizeLineHeight(user.default_line_height),
+      letterSpacing: normalizeLetterSpacing(user.default_letter_spacing),
+      textTransform,
+      textAlign,
+      strokeColor: isHexColor(user.default_stroke_color)
+        ? user.default_stroke_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.strokeColor,
+      strokeWidth: normalizeStrokeWidth(user.default_stroke_width),
+      shadowColor: isHexColor(user.default_shadow_color)
+        ? user.default_shadow_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.shadowColor,
+      shadowOpacity: normalizeShadowOpacity(user.default_shadow_opacity),
+      shadowBlur: normalizeShadowBlur(user.default_shadow_blur),
+      shadowOffsetX: normalizeShadowOffset(user.default_shadow_offset_x),
+      shadowOffsetY: normalizeShadowOffset(user.default_shadow_offset_y),
       transitionsEnabled: user.default_transitions_enabled ?? false,
       transcriptionProvider: user.default_transcription_provider || "local",
       aiProvider: user.default_ai_provider || "openai",
@@ -51,11 +96,16 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Error fetching preferences:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
+}
+
+function isIntegerInRange(value: unknown, min: number, max: number): boolean {
+  return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
+}
+
+function isNumberInRange(value: unknown, min: number, max: number): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
 }
 
 // PATCH /api/preferences - Update user preferences
@@ -66,10 +116,7 @@ export async function PATCH(request: NextRequest) {
     });
 
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: "Unauthorized" },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await request.json();
@@ -77,74 +124,118 @@ export async function PATCH(request: NextRequest) {
       fontFamily,
       fontSize,
       fontColor,
+      fontWeight,
+      lineHeight,
+      letterSpacing,
+      textTransform,
+      textAlign,
+      strokeColor,
+      strokeWidth,
+      shadowColor,
+      shadowOpacity,
+      shadowBlur,
+      shadowOffsetX,
+      shadowOffsetY,
       transitionsEnabled,
       transcriptionProvider,
       aiProvider,
       aiModel,
     } = body;
 
-    // Validate inputs
     if (fontFamily !== undefined && typeof fontFamily !== "string") {
+      return NextResponse.json({ error: "Invalid fontFamily" }, { status: 400 });
+    }
+    if (fontSize !== undefined && !isNumberInRange(fontSize, 24, 48)) {
+      return NextResponse.json({ error: "Invalid fontSize (must be between 24 and 48)" }, { status: 400 });
+    }
+    if (fontColor !== undefined && !isHexColor(fontColor)) {
+      return NextResponse.json({ error: "Invalid fontColor (must be hex format like #FFFFFF)" }, { status: 400 });
+    }
+    if (fontWeight !== undefined && !isIntegerInRange(fontWeight, 300, 900)) {
+      return NextResponse.json({ error: "Invalid fontWeight (must be an integer from 300 to 900)" }, { status: 400 });
+    }
+    if (lineHeight !== undefined && !isNumberInRange(lineHeight, 1, 2)) {
+      return NextResponse.json({ error: "Invalid lineHeight (must be between 1.0 and 2.0)" }, { status: 400 });
+    }
+    if (letterSpacing !== undefined && !isIntegerInRange(letterSpacing, 0, 6)) {
+      return NextResponse.json({ error: "Invalid letterSpacing (must be an integer from 0 to 6)" }, { status: 400 });
+    }
+    if (textTransform !== undefined && !isTextTransform(textTransform)) {
       return NextResponse.json(
-        { error: "Invalid fontFamily" },
-        { status: 400 }
+        { error: "Invalid textTransform (must be none, uppercase, lowercase, or capitalize)" },
+        { status: 400 },
       );
     }
-
-    if (fontSize !== undefined && (typeof fontSize !== "number" || fontSize < 12 || fontSize > 48)) {
+    if (textAlign !== undefined && !isTextAlign(textAlign)) {
+      return NextResponse.json({ error: "Invalid textAlign (must be left, center, or right)" }, { status: 400 });
+    }
+    if (strokeColor !== undefined && !isHexColor(strokeColor)) {
+      return NextResponse.json({ error: "Invalid strokeColor (must be hex format like #000000)" }, { status: 400 });
+    }
+    if (strokeWidth !== undefined && !isIntegerInRange(strokeWidth, 0, 8)) {
+      return NextResponse.json({ error: "Invalid strokeWidth (must be an integer from 0 to 8)" }, { status: 400 });
+    }
+    if (shadowColor !== undefined && !isHexColor(shadowColor)) {
+      return NextResponse.json({ error: "Invalid shadowColor (must be hex format like #000000)" }, { status: 400 });
+    }
+    if (shadowOpacity !== undefined && !isNumberInRange(shadowOpacity, 0, 1)) {
+      return NextResponse.json({ error: "Invalid shadowOpacity (must be between 0 and 1)" }, { status: 400 });
+    }
+    if (shadowBlur !== undefined && !isIntegerInRange(shadowBlur, 0, 8)) {
+      return NextResponse.json({ error: "Invalid shadowBlur (must be an integer from 0 to 8)" }, { status: 400 });
+    }
+    if (shadowOffsetX !== undefined && !isIntegerInRange(shadowOffsetX, -12, 12)) {
       return NextResponse.json(
-        { error: "Invalid fontSize (must be between 12 and 48)" },
-        { status: 400 }
+        { error: "Invalid shadowOffsetX (must be an integer from -12 to 12)" },
+        { status: 400 },
       );
     }
-
-    if (fontColor !== undefined && !/^#[0-9A-Fa-f]{6}$/.test(fontColor)) {
+    if (shadowOffsetY !== undefined && !isIntegerInRange(shadowOffsetY, -12, 12)) {
       return NextResponse.json(
-        { error: "Invalid fontColor (must be hex format like #FFFFFF)" },
-        { status: 400 }
+        { error: "Invalid shadowOffsetY (must be an integer from -12 to 12)" },
+        { status: 400 },
       );
     }
-
     if (transitionsEnabled !== undefined && typeof transitionsEnabled !== "boolean") {
-      return NextResponse.json(
-        { error: "Invalid transitionsEnabled" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid transitionsEnabled" }, { status: 400 });
     }
-
     if (
       transcriptionProvider !== undefined &&
-      (typeof transcriptionProvider !== "string" ||
-        !SUPPORTED_TRANSCRIPTION_PROVIDERS.has(transcriptionProvider))
+      (typeof transcriptionProvider !== "string" || !SUPPORTED_TRANSCRIPTION_PROVIDERS.has(transcriptionProvider))
     ) {
       return NextResponse.json(
         { error: "Invalid transcriptionProvider (must be local or assemblyai)" },
-        { status: 400 }
+        { status: 400 },
       );
     }
-
-    if (
-      aiProvider !== undefined &&
-      (typeof aiProvider !== "string" || !SUPPORTED_AI_PROVIDERS.has(aiProvider))
-    ) {
+    if (aiProvider !== undefined && (typeof aiProvider !== "string" || !SUPPORTED_AI_PROVIDERS.has(aiProvider))) {
       return NextResponse.json(
         { error: "Invalid aiProvider (must be openai, google, anthropic, or zai)" },
-        { status: 400 }
+        { status: 400 },
       );
     }
     if (aiModel !== undefined && aiModel !== null && typeof aiModel !== "string") {
-      return NextResponse.json(
-        { error: "Invalid aiModel (must be a string or null)" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid aiModel (must be a string or null)" }, { status: 400 });
     }
 
     const updatedUser = await prisma.user.update({
       where: { id: session.user.id },
       data: {
-        ...(fontFamily !== undefined && { default_font_family: fontFamily }),
-        ...(fontSize !== undefined && { default_font_size: fontSize }),
-        ...(fontColor !== undefined && { default_font_color: fontColor }),
+        ...(fontFamily !== undefined && { default_font_family: fontFamily.trim() || DEFAULT_FONT_STYLE_OPTIONS.fontFamily }),
+        ...(fontSize !== undefined && { default_font_size: normalizeFontSize(fontSize) }),
+        ...(fontColor !== undefined && { default_font_color: fontColor.toUpperCase() }),
+        ...(fontWeight !== undefined && { default_font_weight: normalizeFontWeight(fontWeight) }),
+        ...(lineHeight !== undefined && { default_line_height: normalizeLineHeight(lineHeight) }),
+        ...(letterSpacing !== undefined && { default_letter_spacing: normalizeLetterSpacing(letterSpacing) }),
+        ...(textTransform !== undefined && { default_text_transform: textTransform }),
+        ...(textAlign !== undefined && { default_text_align: textAlign }),
+        ...(strokeColor !== undefined && { default_stroke_color: strokeColor.toUpperCase() }),
+        ...(strokeWidth !== undefined && { default_stroke_width: normalizeStrokeWidth(strokeWidth) }),
+        ...(shadowColor !== undefined && { default_shadow_color: shadowColor.toUpperCase() }),
+        ...(shadowOpacity !== undefined && { default_shadow_opacity: normalizeShadowOpacity(shadowOpacity) }),
+        ...(shadowBlur !== undefined && { default_shadow_blur: normalizeShadowBlur(shadowBlur) }),
+        ...(shadowOffsetX !== undefined && { default_shadow_offset_x: normalizeShadowOffset(shadowOffsetX) }),
+        ...(shadowOffsetY !== undefined && { default_shadow_offset_y: normalizeShadowOffset(shadowOffsetY) }),
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
         ...(transcriptionProvider !== undefined && { default_transcription_provider: transcriptionProvider }),
         ...(aiProvider !== undefined && { default_ai_provider: aiProvider }),
@@ -154,6 +245,18 @@ export async function PATCH(request: NextRequest) {
         default_font_family: true,
         default_font_size: true,
         default_font_color: true,
+        default_font_weight: true,
+        default_line_height: true,
+        default_letter_spacing: true,
+        default_text_transform: true,
+        default_text_align: true,
+        default_stroke_color: true,
+        default_stroke_width: true,
+        default_shadow_color: true,
+        default_shadow_opacity: true,
+        default_shadow_blur: true,
+        default_shadow_offset_x: true,
+        default_shadow_offset_y: true,
         default_transitions_enabled: true,
         default_transcription_provider: true,
         default_ai_provider: true,
@@ -162,9 +265,31 @@ export async function PATCH(request: NextRequest) {
     });
 
     return NextResponse.json({
-      fontFamily: updatedUser.default_font_family,
-      fontSize: updatedUser.default_font_size,
-      fontColor: updatedUser.default_font_color,
+      fontFamily: updatedUser.default_font_family || DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
+      fontSize: normalizeFontSize(updatedUser.default_font_size || DEFAULT_FONT_STYLE_OPTIONS.fontSize),
+      fontColor: isHexColor(updatedUser.default_font_color)
+        ? updatedUser.default_font_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.fontColor,
+      fontWeight: normalizeFontWeight(updatedUser.default_font_weight),
+      lineHeight: normalizeLineHeight(updatedUser.default_line_height),
+      letterSpacing: normalizeLetterSpacing(updatedUser.default_letter_spacing),
+      textTransform: isTextTransform(updatedUser.default_text_transform)
+        ? updatedUser.default_text_transform
+        : DEFAULT_FONT_STYLE_OPTIONS.textTransform,
+      textAlign: isTextAlign(updatedUser.default_text_align)
+        ? updatedUser.default_text_align
+        : DEFAULT_FONT_STYLE_OPTIONS.textAlign,
+      strokeColor: isHexColor(updatedUser.default_stroke_color)
+        ? updatedUser.default_stroke_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.strokeColor,
+      strokeWidth: normalizeStrokeWidth(updatedUser.default_stroke_width),
+      shadowColor: isHexColor(updatedUser.default_shadow_color)
+        ? updatedUser.default_shadow_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.shadowColor,
+      shadowOpacity: normalizeShadowOpacity(updatedUser.default_shadow_opacity),
+      shadowBlur: normalizeShadowBlur(updatedUser.default_shadow_blur),
+      shadowOffsetX: normalizeShadowOffset(updatedUser.default_shadow_offset_x),
+      shadowOffsetY: normalizeShadowOffset(updatedUser.default_shadow_offset_y),
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
       aiProvider: updatedUser.default_ai_provider || "openai",
@@ -172,9 +297,6 @@ export async function PATCH(request: NextRequest) {
     });
   } catch (error) {
     console.error("Error updating preferences:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
