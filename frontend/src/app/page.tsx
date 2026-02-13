@@ -50,6 +50,7 @@ const DEFAULT_AI_MODELS = {
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
 } as const satisfies Record<AiProvider, string>;
+const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 
 function isAiProvider(value: unknown): value is AiProvider {
   return typeof value === "string" && AI_PROVIDERS.includes(value as AiProvider);
@@ -946,7 +947,7 @@ export default function Home() {
                       />
                     </div>
                     <div className="flex gap-2 mt-2">
-                      {["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"].map((color) => (
+                      {SWATCH_COLORS.map((color) => (
                         <button
                           key={color}
                           type="button"
@@ -980,6 +981,19 @@ export default function Home() {
                           className="flex-1 h-8"
                           pattern="^#[0-9A-Fa-f]{6}$"
                         />
+                      </div>
+                      <div className="flex gap-2 mt-2">
+                        {SWATCH_COLORS.map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            onClick={() => setStrokeColor(color)}
+                            disabled={isLoading}
+                            className="w-6 h-6 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
+                            style={{ backgroundColor: color }}
+                            title={color}
+                          />
+                        ))}
                       </div>
                     </div>
 
@@ -1019,6 +1033,19 @@ export default function Home() {
                           className="flex-1 h-8"
                           pattern="^#[0-9A-Fa-f]{6}$"
                         />
+                      </div>
+                      <div className="flex gap-2 mt-2">
+                        {SWATCH_COLORS.map((color) => (
+                          <button
+                            key={color}
+                            type="button"
+                            onClick={() => setShadowColor(color)}
+                            disabled={isLoading}
+                            className="w-6 h-6 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
+                            style={{ backgroundColor: color }}
+                            title={color}
+                          />
+                        ))}
                       </div>
                     </div>
                     <div className="space-y-2">

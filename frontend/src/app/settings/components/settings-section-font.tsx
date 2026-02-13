@@ -116,7 +116,7 @@ export function SettingsSectionFont({
 }: SettingsSectionFontProps) {
   const previewStyle: CSSProperties = {
     color: fontColor,
-    fontSize: `${Math.min(fontSize, 34)}px`,
+    fontSize: `${fontSize}px`,
     fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
     fontWeight,
     textAlign,
@@ -328,8 +328,21 @@ export function SettingsSectionFont({
               disabled={isSaving || isUploadingFont}
               placeholder="#000000"
               className="flex-1 h-10"
-              pattern="^#[0-9A-Fa-f]{6}$"
+            pattern="^#[0-9A-Fa-f]{6}$"
             />
+          </div>
+          <div className="flex gap-2 mt-2">
+            {SWATCH_COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                onClick={() => onStrokeColorChange(color)}
+                disabled={isSaving || isUploadingFont}
+                className="w-8 h-8 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
+                style={{ backgroundColor: color }}
+                title={color}
+              />
+            ))}
           </div>
         </div>
 
@@ -367,8 +380,21 @@ export function SettingsSectionFont({
               disabled={isSaving || isUploadingFont}
               placeholder="#000000"
               className="flex-1 h-10"
-              pattern="^#[0-9A-Fa-f]{6}$"
+            pattern="^#[0-9A-Fa-f]{6}$"
             />
+          </div>
+          <div className="flex gap-2 mt-2">
+            {SWATCH_COLORS.map((color) => (
+              <button
+                key={color}
+                type="button"
+                onClick={() => onShadowColorChange(color)}
+                disabled={isSaving || isUploadingFont}
+                className="w-8 h-8 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
+                style={{ backgroundColor: color }}
+                title={color}
+              />
+            ))}
           </div>
         </div>
 
