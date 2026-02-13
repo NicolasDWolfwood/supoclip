@@ -272,6 +272,13 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     )
     ai_options = data.get("ai_options", {})
     ai_provider = _resolve_ai_provider(ai_options.get("provider", _default_ai_provider()))
+    ai_model_raw = ai_options.get("model")
+    if ai_model_raw is None:
+        ai_model = None
+    elif isinstance(ai_model_raw, str):
+        ai_model = ai_model_raw.strip() or None
+    else:
+        raise HTTPException(status_code=400, detail="ai_options.model must be a string")
 
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
@@ -341,6 +348,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 transitions_enabled,
                 transcription_provider,
                 ai_provider,
+                ai_model,
                 queue_name=queue_name,
             )
         except Exception as enqueue_error:

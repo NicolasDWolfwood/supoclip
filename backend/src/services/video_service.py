@@ -173,6 +173,7 @@ class VideoService:
         transcript: str,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_model: Optional[str] = None,
     ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -183,6 +184,7 @@ class VideoService:
             transcript,
             ai_provider=ai_provider,
             ai_api_key=ai_api_key,
+            ai_model=ai_model,
         )
         logger.info(f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found")
         return relevant_parts
@@ -192,6 +194,7 @@ class VideoService:
         transcript: str,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_model: Optional[str] = None,
         progress_callback: Optional[callable] = None,
     ) -> Any:
         """
@@ -231,6 +234,7 @@ class VideoService:
                 transcript,
                 ai_provider=ai_provider,
                 ai_api_key=ai_api_key,
+                ai_model=ai_model,
             )
         finally:
             stop_heartbeat.set()
@@ -337,6 +341,7 @@ class VideoService:
         assembly_api_key: Optional[str] = None,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_model: Optional[str] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -408,6 +413,7 @@ class VideoService:
                 transcript,
                 ai_provider=ai_provider,
                 ai_api_key=ai_api_key,
+                ai_model=ai_model,
                 progress_callback=progress_callback,
             )
             await ensure_not_cancelled()

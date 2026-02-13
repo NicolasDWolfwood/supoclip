@@ -185,6 +185,14 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_ai_model VARCHAR(100)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF EXISTS (

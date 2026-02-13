@@ -26,6 +26,13 @@ interface LatestTask {
   created_at: string;
 }
 
+const DEFAULT_AI_MODELS = {
+  openai: "gpt-5",
+  google: "gemini-2.5-pro",
+  anthropic: "claude-4-sonnet",
+  zai: "glm-5",
+} as const;
+
 function normalizeFontSize(size: number): number {
   return Math.max(24, Math.min(48, size));
 }
@@ -56,6 +63,7 @@ export default function Home() {
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
   const [aiProvider, setAiProvider] = useState<"openai" | "google" | "anthropic" | "zai">("openai");
+  const [aiModel, setAiModel] = useState(DEFAULT_AI_MODELS.openai);
 
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
@@ -136,6 +144,16 @@ export default function Home() {
           ) {
             setAiProvider(savedAiProvider);
           }
+
+          const providerForModel =
+            savedAiProvider === "openai" ||
+            savedAiProvider === "google" ||
+            savedAiProvider === "anthropic" ||
+            savedAiProvider === "zai"
+              ? savedAiProvider
+              : "openai";
+          const storedAiModel = typeof data.aiModel === "string" ? data.aiModel.trim() : "";
+          setAiModel(storedAiModel || DEFAULT_AI_MODELS[providerForModel]);
         }
       } catch (error) {
         console.error('Failed to load user preferences:', error);
@@ -349,6 +367,7 @@ export default function Home() {
           },
           ai_options: {
             provider: aiProvider,
+            model: aiModel.trim() || DEFAULT_AI_MODELS[aiProvider],
           }
         }),
       });

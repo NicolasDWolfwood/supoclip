@@ -42,6 +42,7 @@ class User(Base):
         nullable=False,
         server_default=text("'openai'"),
     )
+    default_ai_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
     # Relationships
     tasks: Mapped[List["Task"]] = relationship("Task", back_populates="user", cascade="all, delete-orphan")

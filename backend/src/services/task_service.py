@@ -93,6 +93,7 @@ class TaskService:
         transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
+        ai_model: Optional[str] = None,
         progress_callback: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         user_id: Optional[str] = None,
@@ -171,6 +172,7 @@ class TaskService:
                 assembly_api_key=assembly_api_key,
                 ai_provider=selected_ai_provider,
                 ai_api_key=ai_api_key,
+                ai_model=ai_model,
                 progress_callback=update_progress,
                 cancel_check=cancel_check,
             )

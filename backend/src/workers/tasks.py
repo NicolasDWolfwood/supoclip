@@ -23,6 +23,7 @@ async def process_video_task(
     transitions_enabled: bool = False,
     transcription_provider: str = "local",
     ai_provider: str = "openai",
+    ai_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -39,6 +40,7 @@ async def process_video_task(
         transitions_enabled: Whether transition effects should be applied
         transcription_provider: "local" or "assemblyai"
         ai_provider: "openai", "google", "anthropic", or "zai"
+        ai_model: Optional model override for the selected AI provider
 
     Returns:
         Dict with processing results
@@ -81,6 +83,7 @@ async def process_video_task(
                 transitions_enabled=transitions_enabled,
                 transcription_provider=transcription_provider,
                 ai_provider=ai_provider,
+                ai_model=ai_model,
                 progress_callback=update_progress,
                 cancel_check=ensure_not_cancelled,
                 user_id=user_id,

@@ -36,6 +36,7 @@ model User {
   default_transitions_enabled Boolean? @default(false)
   default_transcription_provider String? @default("local") @db.VarChar(20)
   default_ai_provider String? @default("openai") @db.VarChar(20)
+  default_ai_model String? @db.VarChar(100)
 
   // Relationships
   tasks         Task[]

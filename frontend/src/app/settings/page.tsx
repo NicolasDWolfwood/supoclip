@@ -28,6 +28,18 @@ import {
 
 const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
 const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
+const DEFAULT_AI_MODELS: Record<(typeof AI_PROVIDERS)[number], string> = {
+  openai: "gpt-5",
+  google: "gemini-2.5-pro",
+  anthropic: "claude-4-sonnet",
+  zai: "glm-5",
+};
+const AI_MODEL_OPTIONS: Record<(typeof AI_PROVIDERS)[number], string[]> = {
+  openai: ["gpt-5", "gpt-5-mini", "gpt-4.1"],
+  google: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  anthropic: ["claude-4-sonnet", "claude-3-5-haiku"],
+  zai: ["glm-5"],
+};
 
 type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 type AiProvider = (typeof AI_PROVIDERS)[number];
@@ -39,6 +51,7 @@ interface UserPreferences {
   transitionsEnabled: boolean;
   transcriptionProvider: TranscriptionProvider;
   aiProvider: AiProvider;
+  aiModel: string;
 }
 
 function normalizeFontSize(size: number): number {
@@ -60,6 +73,7 @@ export default function SettingsPage() {
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [transcriptionProvider, setTranscriptionProvider] = useState<TranscriptionProvider>("local");
   const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
+  const [aiModel, setAiModel] = useState(DEFAULT_AI_MODELS.openai);
 
   const [availableFonts, setAvailableFonts] = useState<Array<{ name: string; display_name: string }>>([]);
   const [isUploadingFont, setIsUploadingFont] = useState(false);
@@ -168,6 +182,11 @@ export default function SettingsPage() {
           if (typeof data.aiProvider === "string" && isAiProvider(data.aiProvider)) {
             setAiProvider(data.aiProvider);
           }
+
+          const providerForModel =
+            typeof data.aiProvider === "string" && isAiProvider(data.aiProvider) ? data.aiProvider : "openai";
+          const storedModel = typeof data.aiModel === "string" ? data.aiModel.trim() : "";
+          setAiModel(storedModel || DEFAULT_AI_MODELS[providerForModel]);
         }
       } catch (loadError) {
         console.error("Failed to load preferences:", loadError);
@@ -430,6 +449,10 @@ export default function SettingsPage() {
     setSuccess(false);
 
     try {
+      const resolvedAiModel = aiModel.trim() || DEFAULT_AI_MODELS[aiProvider];
+      if (resolvedAiModel !== aiModel) {
+        setAiModel(resolvedAiModel);
+      }
       const response = await fetch("/api/preferences", {
         method: "PATCH",
         headers: {
@@ -442,6 +465,7 @@ export default function SettingsPage() {
           transitionsEnabled,
           transcriptionProvider,
           aiProvider,
+          aiModel: resolvedAiModel,
         }),
       });
 
@@ -790,7 +814,18 @@ export default function SettingsPage() {
                   value={aiProvider}
                   onValueChange={(value) => {
                     if (isAiProvider(value)) {
-                      setAiProvider(value);
+                      setAiProvider((prev) => {
+                        const nextProvider = value;
+                        setAiModel((prevModel) => {
+                          const prevDefault = DEFAULT_AI_MODELS[prev];
+                          const trimmed = prevModel.trim();
+                          if (!trimmed || trimmed === prevDefault) {
+                            return DEFAULT_AI_MODELS[nextProvider];
+                          }
+                          return prevModel;
+                        });
+                        return nextProvider;
+                      });
                     }
                     setAiKeyStatus(null);
                     setAiKeyError(null);
@@ -857,6 +892,28 @@ export default function SettingsPage() {
                   </div>
                   {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
                   {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
+                </div>
+
+                <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+                  <label htmlFor="ai-provider-model" className="text-xs font-medium text-black">
+                    {aiProvider.toUpperCase()} Model
+                  </label>
+                  <Input
+                    id="ai-provider-model"
+                    list={`ai-model-options-${aiProvider}`}
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value ?? "")}
+                    placeholder={`Default: ${DEFAULT_AI_MODELS[aiProvider]}`}
+                    disabled={isLoading}
+                  />
+                  <datalist id={`ai-model-options-${aiProvider}`}>
+                    {AI_MODEL_OPTIONS[aiProvider].map((model) => (
+                      <option key={model} value={model} />
+                    ))}
+                  </datalist>
+                  <p className="text-xs text-gray-500">
+                    Clear the field to revert to the default model: {DEFAULT_AI_MODELS[aiProvider]}.
+                  </p>
                 </div>
               </div>
             </div>

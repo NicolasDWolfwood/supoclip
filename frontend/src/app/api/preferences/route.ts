@@ -29,6 +29,7 @@ export async function GET() {
         default_transitions_enabled: true,
         default_transcription_provider: true,
         default_ai_provider: true,
+        default_ai_model: true,
       },
     });
 
@@ -46,6 +47,7 @@ export async function GET() {
       transitionsEnabled: user.default_transitions_enabled ?? false,
       transcriptionProvider: user.default_transcription_provider || "local",
       aiProvider: user.default_ai_provider || "openai",
+      aiModel: user.default_ai_model || "",
     });
   } catch (error) {
     console.error("Error fetching preferences:", error);
@@ -78,6 +80,7 @@ export async function PATCH(request: NextRequest) {
       transitionsEnabled,
       transcriptionProvider,
       aiProvider,
+      aiModel,
     } = body;
 
     // Validate inputs
@@ -129,6 +132,12 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+    if (aiModel !== undefined && aiModel !== null && typeof aiModel !== "string") {
+      return NextResponse.json(
+        { error: "Invalid aiModel (must be a string or null)" },
+        { status: 400 }
+      );
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: session.user.id },
@@ -139,6 +148,7 @@ export async function PATCH(request: NextRequest) {
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
         ...(transcriptionProvider !== undefined && { default_transcription_provider: transcriptionProvider }),
         ...(aiProvider !== undefined && { default_ai_provider: aiProvider }),
+        ...(aiModel !== undefined && { default_ai_model: aiModel || null }),
       },
       select: {
         default_font_family: true,
@@ -147,6 +157,7 @@ export async function PATCH(request: NextRequest) {
         default_transitions_enabled: true,
         default_transcription_provider: true,
         default_ai_provider: true,
+        default_ai_model: true,
       },
     });
 
@@ -157,6 +168,7 @@ export async function PATCH(request: NextRequest) {
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
       aiProvider: updatedUser.default_ai_provider || "openai",
+      aiModel: updatedUser.default_ai_model || "",
     });
   } catch (error) {
     console.error("Error updating preferences:", error);
