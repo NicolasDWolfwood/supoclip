@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Cloud, Cpu, KeyRound } from "lucide-react";
+import { Cloud, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -97,13 +97,10 @@ export function SettingsSectionTranscription({
 
   return (
     <div className="space-y-4">
-      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-black">Transcription Provider</p>
-            <p className="text-xs text-gray-500">Choose local Whisper or AssemblyAI for transcript generation.</p>
-          </div>
-          <KeyRound className="w-4 h-4 text-gray-500 mt-0.5" />
+      <div className="space-y-3">
+        <div>
+          <p className="text-sm font-medium text-black">Provider</p>
+          <p className="text-xs text-gray-500">Choose local Whisper or AssemblyAI for transcript generation.</p>
         </div>
 
         <Select
@@ -112,7 +109,7 @@ export function SettingsSectionTranscription({
           disabled={isSaving || isSavingAssemblyKey}
         >
           <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select transcription provider" />
+            <SelectValue placeholder="Select provider" />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="local">

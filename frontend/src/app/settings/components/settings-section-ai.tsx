@@ -1,4 +1,3 @@
-import { Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -74,13 +73,10 @@ export function SettingsSectionAi({
 }: SettingsSectionAiProps) {
   return (
     <div className="space-y-4">
-      <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-medium text-black">AI Provider</p>
-            <p className="text-xs text-gray-500">Choose which LLM provider analyzes transcripts to select clips.</p>
-          </div>
-          <Bot className="w-4 h-4 text-gray-500 mt-0.5" />
+      <div className="space-y-3">
+        <div>
+          <p className="text-sm font-medium text-black">Provider</p>
+          <p className="text-xs text-gray-500">Choose which LLM provider analyzes transcripts to select clips.</p>
         </div>
 
         <Select
@@ -89,7 +85,7 @@ export function SettingsSectionAi({
           disabled={isSaving || isSavingAiKey}
         >
           <SelectTrigger className="w-full">
-            <SelectValue placeholder="Select AI provider" />
+            <SelectValue placeholder="Select provider" />
           </SelectTrigger>
           <SelectContent>
             {AI_PROVIDERS.map((provider) => (
