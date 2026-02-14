@@ -8,6 +8,10 @@ This is the single source of truth for MrglSnips runtime environment variables.
 |---|---|---|---|---|
 | `TRANSCRIPTION_PROVIDER` | No | `local` | backend, worker | Transcription backend: `local` or `assemblyai`. |
 | `ASSEMBLY_AI_API_KEY` | Conditional | - | backend, worker | Required when `TRANSCRIPTION_PROVIDER=assemblyai`. |
+| `MEDIAPIPE_FACE_MODEL_PATH` | No | `backend/models/blaze_face_short_range.tflite` (local), `/app/models/blaze_face_short_range.tflite` (Docker) | backend, worker | File path for MediaPipe Tasks face detector model used for face-aware crop. |
+| `MEDIAPIPE_FACE_MODEL_URL` | No | Google MediaPipe model URL | backend, worker | Download URL used when model file is missing and auto-download is enabled. |
+| `MEDIAPIPE_FACE_MODEL_SHA256` | No | `b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f` | backend, worker | Optional integrity check for downloaded/baked face model file. |
+| `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD` | No | `true` | backend, worker | Auto-download face model if missing at startup/runtime. |
 | `LLM` | No | `openai:gpt-5-mini` | backend, worker | Primary model selector (`provider:model`). |
 | `OPENAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `openai:*`. |
 | `GOOGLE_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `google:*`. |

@@ -51,6 +51,10 @@ LLM=openai:gpt-5-mini
 # Optional (default local transcription)
 TRANSCRIPTION_PROVIDER=local
 
+# Optional (face-aware crop model; auto-downloads if missing)
+# MEDIAPIPE_FACE_MODEL_PATH=./backend/models/blaze_face_short_range.tflite
+# MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=true
+
 # Optional (only needed when TRANSCRIPTION_PROVIDER=assemblyai)
 # ASSEMBLY_AI_API_KEY=your_assemblyai_key_here
 
@@ -111,6 +115,8 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `WHISPER_DEVICE` | `auto` | Whisper device target (`auto`, `cuda`, `cpu`) |
 | `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API) |
 | `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
+| `MEDIAPIPE_FACE_MODEL_PATH` | `./backend/models/blaze_face_short_range.tflite` | Face detector model path for face-aware crop (Docker default resolves to `/app/models/...`) |
+| `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD` | `true` | Auto-download face model when missing |
 | `WORKER_MAX_JOBS` | `2` | Max concurrent background jobs (reduce if CPU is saturated) |
 | `WORKER2_MAX_JOBS` | `1` | Max concurrent jobs for optional second worker profile |
 | `WORKER2_WHISPER_DEVICE` | `auto` | Device target for optional second worker (`auto`, `cuda`, `cpu`) |

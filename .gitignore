@@ -9,3 +9,4 @@ temp/
 backend/uploads/
 backend/clips/
 backend/.cache/
+backend/models/

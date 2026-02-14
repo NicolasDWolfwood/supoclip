@@ -10,7 +10,9 @@ import logging
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 import json
+import hashlib
 import threading
+import urllib.request
 
 import cv2
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
@@ -29,6 +31,9 @@ logger = logging.getLogger(__name__)
 config = Config()
 _whisper_model_cache: Dict[str, Any] = {}
 _whisper_model_lock = threading.Lock()
+_face_model_path_lock = threading.Lock()
+_face_model_path_cache: Optional[Path] = None
+_mediapipe_detector_tls = threading.local()
 
 class VideoProcessor:
     """Handles video processing operations with optimized settings."""
@@ -111,6 +116,141 @@ def _get_whisper_model(model_name: str, device: str):
         loaded_model = whisper.load_model(model_name, device=device)
         _whisper_model_cache[cache_key] = loaded_model
         return loaded_model
+
+
+def _compute_file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().lower()
+
+
+def _download_file(url: str, destination: Path) -> None:
+    temp_path = destination.with_suffix(destination.suffix + ".download")
+    if temp_path.exists():
+        temp_path.unlink()
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "mrglsnips/1.0"})
+        with urllib.request.urlopen(request, timeout=60) as response, temp_path.open("wb") as target:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                target.write(chunk)
+        os.replace(temp_path, destination)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _resolve_mediapipe_face_model_path() -> Optional[Path]:
+    global _face_model_path_cache
+
+    configured_path = Path(config.mediapipe_face_model_path).expanduser()
+    expected_sha = (config.mediapipe_face_model_sha256 or "").strip().lower()
+    model_url = (config.mediapipe_face_model_url or "").strip()
+    auto_download = bool(getattr(config, "mediapipe_face_model_auto_download", True))
+
+    with _face_model_path_lock:
+        if _face_model_path_cache and _face_model_path_cache.exists():
+            return _face_model_path_cache
+
+        if configured_path.exists():
+            if expected_sha:
+                actual_sha = _compute_file_sha256(configured_path)
+                if actual_sha == expected_sha:
+                    _face_model_path_cache = configured_path
+                    return configured_path
+                logger.warning(
+                    "MediaPipe face model checksum mismatch at %s: expected %s, got %s",
+                    configured_path,
+                    expected_sha,
+                    actual_sha,
+                )
+                if not auto_download:
+                    return None
+            else:
+                _face_model_path_cache = configured_path
+                return configured_path
+        elif not auto_download:
+            logger.info(
+                "MediaPipe face model not found at %s and auto-download is disabled",
+                configured_path,
+            )
+            return None
+
+        if not model_url:
+            logger.warning("MediaPipe face model URL is empty; cannot auto-download model")
+            return None
+
+        try:
+            configured_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.info("Downloading MediaPipe face model to %s", configured_path)
+            _download_file(model_url, configured_path)
+
+            if expected_sha:
+                actual_sha = _compute_file_sha256(configured_path)
+                if actual_sha != expected_sha:
+                    configured_path.unlink(missing_ok=True)
+                    raise ValueError(
+                        f"Checksum mismatch for downloaded model: expected {expected_sha}, got {actual_sha}"
+                    )
+
+            _face_model_path_cache = configured_path
+            return configured_path
+        except Exception as exc:
+            logger.warning(f"Failed to prepare MediaPipe face model: {exc}")
+            return None
+
+
+def _get_thread_mediapipe_face_detector() -> Tuple[Any, Optional[str], Any]:
+    cached_ctx = getattr(_mediapipe_detector_tls, "face_detector_ctx", None)
+    if cached_ctx is not None:
+        return cached_ctx
+
+    mp_face_detection = None
+    mp_detection_backend: Optional[str] = None
+    mp_module = None
+
+    try:
+        import mediapipe as mp
+
+        mp_module = mp
+        model_path = _resolve_mediapipe_face_model_path()
+
+        if model_path is not None:
+            try:
+                from mediapipe.tasks.python import vision
+                from mediapipe.tasks.python.core.base_options import BaseOptions
+
+                options = vision.FaceDetectorOptions(
+                    base_options=BaseOptions(model_asset_path=str(model_path)),
+                    min_detection_confidence=0.5,
+                )
+                mp_face_detection = vision.FaceDetector.create_from_options(options)
+                mp_detection_backend = "tasks"
+                logger.info("Using MediaPipe Tasks face detector")
+            except Exception as exc:
+                logger.warning(f"MediaPipe Tasks face detector failed to initialize: {exc}")
+
+        if mp_face_detection is None and hasattr(mp, "solutions"):
+            mp_face_detection = mp.solutions.face_detection.FaceDetection(
+                model_selection=0,  # 0 for short-range (better for close faces)
+                min_detection_confidence=0.5,
+            )
+            mp_detection_backend = "solutions"
+            logger.info("Using MediaPipe Solutions face detector")
+        elif mp_face_detection is None:
+            logger.info("MediaPipe legacy solutions API unavailable; falling back to OpenCV")
+    except ImportError:
+        logger.info("MediaPipe not available, falling back to OpenCV")
+    except Exception as exc:
+        logger.warning(f"MediaPipe face detector failed to initialize: {exc}")
+
+    detector_ctx = (mp_face_detection, mp_detection_backend, mp_module)
+    _mediapipe_detector_tls.face_detector_ctx = detector_ctx
+    return detector_ctx
 
 
 def _transcribe_with_local_whisper(video_path: Path) -> Dict[str, Any]:
@@ -496,19 +636,7 @@ def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time:
     face_centers = []
 
     try:
-        # Try to use MediaPipe (most accurate)
-        mp_face_detection = None
-        try:
-            import mediapipe as mp
-            mp_face_detection = mp.solutions.face_detection.FaceDetection(
-                model_selection=0,  # 0 for short-range (better for close faces)
-                min_detection_confidence=0.5
-            )
-            logger.info("Using MediaPipe face detector")
-        except ImportError:
-            logger.info("MediaPipe not available, falling back to OpenCV")
-        except Exception as e:
-            logger.warning(f"MediaPipe face detector failed to initialize: {e}")
+        mp_face_detection, mp_detection_backend, mp_module = _get_thread_mediapipe_face_detector()
 
         # Initialize OpenCV face detectors as fallback
         haar_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
@@ -516,19 +644,17 @@ def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time:
         # Try to load DNN face detector (more accurate than Haar)
         dnn_net = None
         try:
-            # Load OpenCV's DNN face detector
-            prototxt_path = cv2.data.haarcascades.replace('haarcascades', 'opencv_face_detector.pbtxt')
-            model_path = cv2.data.haarcascades.replace('haarcascades', 'opencv_face_detector_uint8.pb')
+            cv2_data_dir = Path(cv2.data.haarcascades)
+            prototxt_path = cv2_data_dir / "opencv_face_detector.pbtxt"
+            model_path = cv2_data_dir / "opencv_face_detector_uint8.pb"
 
-            # If DNN model files don't exist, we'll fall back to Haar cascade
-            import os
-            if os.path.exists(prototxt_path) and os.path.exists(model_path):
-                dnn_net = cv2.dnn.readNetFromTensorflow(model_path, prototxt_path)
+            if prototxt_path.exists() and model_path.exists():
+                dnn_net = cv2.dnn.readNetFromTensorflow(str(model_path), str(prototxt_path))
                 logger.info("OpenCV DNN face detector loaded as backup")
             else:
                 logger.info("OpenCV DNN face detector not available")
-        except Exception:
-            logger.info("OpenCV DNN face detector failed to load")
+        except Exception as exc:
+            logger.info(f"OpenCV DNN face detector failed to load: {exc}")
 
         # Sample more frames for better face detection (every 0.5 seconds)
         duration = end_time - start_time
@@ -558,22 +684,46 @@ def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time:
                 # Try MediaPipe first (most accurate)
                 if mp_face_detection is not None:
                     try:
-                        # MediaPipe expects RGB format
-                        results = mp_face_detection.process(frame)
+                        if mp_detection_backend == "tasks":
+                            mp_image = mp_module.Image(
+                                image_format=mp_module.ImageFormat.SRGB,
+                                data=frame,
+                            )
+                            result = mp_face_detection.detect(mp_image)
+                            for detection in (result.detections or []):
+                                bbox = detection.bounding_box
+                                x = int(max(0, bbox.origin_x))
+                                y = int(max(0, bbox.origin_y))
+                                w = int(max(0, bbox.width))
+                                h = int(max(0, bbox.height))
+                                if x >= width or y >= height:
+                                    continue
+                                w = min(w, width - x)
+                                h = min(h, height - y)
+                                if w <= 0 or h <= 0:
+                                    continue
 
-                        if results.detections:
-                            for detection in results.detections:
-                                bbox = detection.location_data.relative_bounding_box
-                                confidence = detection.score[0]
+                                confidence = 0.5
+                                if detection.categories and detection.categories[0].score is not None:
+                                    confidence = float(detection.categories[0].score)
 
-                                # Convert relative coordinates to absolute
-                                x = int(bbox.xmin * width)
-                                y = int(bbox.ymin * height)
-                                w = int(bbox.width * width)
-                                h = int(bbox.height * height)
-
-                                if w > 30 and h > 30:  # Minimum face size
+                                if w > 30 and h > 30:
                                     detected_faces.append((x, y, w, h, confidence))
+                        else:
+                            # MediaPipe Solutions expects RGB format.
+                            results = mp_face_detection.process(frame)
+                            if results.detections:
+                                for detection in results.detections:
+                                    bbox = detection.location_data.relative_bounding_box
+                                    confidence = detection.score[0]
+
+                                    x = int(bbox.xmin * width)
+                                    y = int(bbox.ymin * height)
+                                    w = int(bbox.width * width)
+                                    h = int(bbox.height * height)
+
+                                    if w > 30 and h > 30:
+                                        detected_faces.append((x, y, w, h, confidence))
                     except Exception as e:
                         logger.warning(f"MediaPipe detection failed for frame at {sample_time}s: {e}")
 
@@ -640,10 +790,6 @@ def detect_faces_in_clip(video_clip: VideoFileClip, start_time: float, end_time:
             except Exception as e:
                 logger.warning(f"Error detecting faces in frame at {sample_time}s: {e}")
                 continue
-
-        # Close MediaPipe detector
-        if mp_face_detection is not None:
-            mp_face_detection.close()
 
         # Remove outliers (faces that are very far from the median position)
         if len(face_centers) > 2:

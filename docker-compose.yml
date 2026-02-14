@@ -69,6 +69,10 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-medium}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - MEDIAPIPE_FACE_MODEL_PATH=${MEDIAPIPE_FACE_MODEL_PATH:-/app/models/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL:-https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256:-b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f}
+      - MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=${MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD:-true}
       - WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-2}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_ASSEMBLY=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
@@ -122,6 +126,10 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-medium}
       - WHISPER_DEVICE=${WHISPER_DEVICE:-auto}
+      - MEDIAPIPE_FACE_MODEL_PATH=${MEDIAPIPE_FACE_MODEL_PATH:-/app/models/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL:-https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256:-b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f}
+      - MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=${MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD:-true}
       - WORKER_MAX_JOBS=${WORKER_MAX_JOBS:-2}
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
@@ -172,6 +180,10 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-medium}
       - WHISPER_DEVICE=${WORKER2_WHISPER_DEVICE:-auto}
+      - MEDIAPIPE_FACE_MODEL_PATH=${MEDIAPIPE_FACE_MODEL_PATH:-/app/models/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL:-https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256:-b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f}
+      - MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=${MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD:-true}
       - WORKER_MAX_JOBS=${WORKER2_MAX_JOBS:-1}
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}
@@ -221,6 +233,10 @@ services:
       - ZAI_API_KEY=${ZAI_API_KEY}
       - WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE:-medium}
       - WHISPER_DEVICE=cpu
+      - MEDIAPIPE_FACE_MODEL_PATH=${MEDIAPIPE_FACE_MODEL_PATH:-/app/models/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL:-https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite}
+      - MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256:-b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f}
+      - MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=${MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD:-true}
       - WORKER_MAX_JOBS=1
       - ARQ_QUEUE_NAME=${ARQ_QUEUE_NAME_ASSEMBLY:-arq:queue:assembly}
       - ARQ_QUEUE_NAME_LOCAL=${ARQ_QUEUE_NAME_LOCAL:-arq:queue:local}

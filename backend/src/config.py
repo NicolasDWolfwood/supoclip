@@ -35,3 +35,21 @@ class Config:
         self.arq_queue_name = (os.getenv("ARQ_QUEUE_NAME", "arq:queue:local") or "arq:queue:local").strip()
         self.arq_local_queue_name = (os.getenv("ARQ_QUEUE_NAME_LOCAL", "arq:queue:local") or "arq:queue:local").strip()
         self.arq_assembly_queue_name = (os.getenv("ARQ_QUEUE_NAME_ASSEMBLY", "arq:queue:assembly") or "arq:queue:assembly").strip()
+
+        backend_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.mediapipe_face_model_path = (
+            os.getenv("MEDIAPIPE_FACE_MODEL_PATH")
+            or os.path.join(backend_root, "models", "blaze_face_short_range.tflite")
+        )
+        self.mediapipe_face_model_url = (
+            os.getenv("MEDIAPIPE_FACE_MODEL_URL")
+            or "https://storage.googleapis.com/mediapipe-models/face_detector/"
+               "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+        )
+        self.mediapipe_face_model_sha256 = (
+            os.getenv("MEDIAPIPE_FACE_MODEL_SHA256")
+            or "b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f"
+        ).strip().lower()
+        self.mediapipe_face_model_auto_download = (
+            os.getenv("MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD", "true") or "true"
+        ).strip().lower() in {"1", "true", "yes", "on"}

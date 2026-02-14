@@ -15,6 +15,14 @@ RUN pip install uv
 # Set working directory
 WORKDIR /app
 
+# MediaPipe face detector model (baked into image for deterministic runtime behavior)
+ARG MEDIAPIPE_FACE_MODEL_URL=https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+ARG MEDIAPIPE_FACE_MODEL_SHA256=b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f
+ENV MEDIAPIPE_FACE_MODEL_PATH=/app/models/blaze_face_short_range.tflite
+ENV MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL}
+ENV MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256}
+ENV MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=true
+
 # Copy pyproject.toml and uv.lock for dependency installation
 COPY pyproject.toml uv.lock* ./
 
@@ -25,6 +33,11 @@ RUN uv venv .venv && uv sync
 # Also install from git to get the very latest commits
 RUN uv pip install --upgrade --force-reinstall yt-dlp
 RUN uv pip install --upgrade --force-reinstall "yt-dlp[default]"
+
+# Fetch and verify MediaPipe face detector model
+RUN mkdir -p /app/models \
+    && curl -fsSL "${MEDIAPIPE_FACE_MODEL_URL}" -o "${MEDIAPIPE_FACE_MODEL_PATH}" \
+    && echo "${MEDIAPIPE_FACE_MODEL_SHA256}  ${MEDIAPIPE_FACE_MODEL_PATH}" | sha256sum -c -
 
 # Copy source code
 COPY src/ ./src/

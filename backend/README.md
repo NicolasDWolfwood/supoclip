@@ -57,6 +57,11 @@ Backend compatibility behavior:
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
 - legacy Whisper var: `WHISPER_MODEL`
 - transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)
+- MediaPipe Tasks face model vars:
+  - `MEDIAPIPE_FACE_MODEL_PATH`
+  - `MEDIAPIPE_FACE_MODEL_URL`
+  - `MEDIAPIPE_FACE_MODEL_SHA256`
+  - `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD`
 
 ## Docker
 
