@@ -99,6 +99,9 @@ class VideoService:
         video_path: Path,
         transcription_provider: str = "local",
         assembly_api_key: Optional[str] = None,
+        whisper_chunking_enabled: Optional[bool] = None,
+        whisper_chunk_duration_seconds: Optional[int] = None,
+        whisper_chunk_overlap_seconds: Optional[int] = None,
     ) -> str:
         """
         Generate transcript from video using configured transcription provider.
@@ -110,6 +113,9 @@ class VideoService:
             str(video_path),
             transcription_provider,
             assembly_api_key,
+            whisper_chunking_enabled,
+            whisper_chunk_duration_seconds,
+            whisper_chunk_overlap_seconds,
         )
         logger.info(f"Transcript generated: {len(transcript)} characters")
         return transcript
@@ -120,6 +126,9 @@ class VideoService:
         progress_callback: Optional[callable] = None,
         transcription_provider: str = "local",
         assembly_api_key: Optional[str] = None,
+        whisper_chunking_enabled: Optional[bool] = None,
+        whisper_chunk_duration_seconds: Optional[int] = None,
+        whisper_chunk_overlap_seconds: Optional[int] = None,
     ) -> str:
         """
         Generate transcript and emit heartbeat progress while waiting for transcription.
@@ -175,6 +184,9 @@ class VideoService:
                 video_path,
                 transcription_provider=transcription_provider,
                 assembly_api_key=assembly_api_key,
+                whisper_chunking_enabled=whisper_chunking_enabled,
+                whisper_chunk_duration_seconds=whisper_chunk_duration_seconds,
+                whisper_chunk_overlap_seconds=whisper_chunk_overlap_seconds,
             )
             return transcript
         finally:
@@ -362,6 +374,7 @@ class VideoService:
         ai_key_labels: Optional[List[str]] = None,
         ai_routing_mode: Optional[str] = None,
         ai_model: Optional[str] = None,
+        transcription_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
@@ -413,6 +426,21 @@ class VideoService:
                 progress_callback=progress_callback,
                 transcription_provider=transcription_provider,
                 assembly_api_key=assembly_api_key,
+                whisper_chunking_enabled=(
+                    transcription_options.get("whisper_chunking_enabled")
+                    if transcription_options
+                    else None
+                ),
+                whisper_chunk_duration_seconds=(
+                    transcription_options.get("whisper_chunk_duration_seconds")
+                    if transcription_options
+                    else None
+                ),
+                whisper_chunk_overlap_seconds=(
+                    transcription_options.get("whisper_chunk_overlap_seconds")
+                    if transcription_options
+                    else None
+                ),
             )
             await ensure_not_cancelled()
 

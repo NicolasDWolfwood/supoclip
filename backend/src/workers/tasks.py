@@ -1,6 +1,7 @@
 """
 Worker tasks - background jobs processed by arq workers.
 """
+import asyncio
 import logging
 from typing import Dict, Any, Optional
 
@@ -9,6 +10,42 @@ logger = logging.getLogger(__name__)
 
 class TaskCancelledError(Exception):
     """Raised when a task is explicitly cancelled by an admin action."""
+
+
+class TaskTimeoutError(Exception):
+    """Raised when a task exceeds its configured timeout."""
+
+
+def _resolve_task_timeout_seconds(
+    transcription_options: Optional[Dict[str, Any]],
+    worker_timeout_cap_seconds: int,
+) -> int:
+    if not isinstance(transcription_options, dict):
+        return worker_timeout_cap_seconds
+
+    raw_timeout = transcription_options.get("task_timeout_seconds")
+    if raw_timeout is None:
+        return worker_timeout_cap_seconds
+
+    try:
+        timeout_seconds = int(raw_timeout)
+    except (TypeError, ValueError):
+        logger.warning("Invalid task_timeout_seconds=%r; using worker timeout cap", raw_timeout)
+        return worker_timeout_cap_seconds
+
+    if timeout_seconds <= 0:
+        logger.warning("Non-positive task_timeout_seconds=%r; using worker timeout cap", raw_timeout)
+        return worker_timeout_cap_seconds
+
+    if timeout_seconds > worker_timeout_cap_seconds:
+        logger.warning(
+            "task_timeout_seconds=%s exceeds worker timeout cap=%s; clamping",
+            timeout_seconds,
+            worker_timeout_cap_seconds,
+        )
+        return worker_timeout_cap_seconds
+
+    return timeout_seconds
 
 
 async def process_video_task(
@@ -26,6 +63,7 @@ async def process_video_task(
     ai_model: Optional[str] = None,
     subtitle_style: Optional[Dict[str, Any]] = None,
     ai_routing_mode: Optional[str] = None,
+    transcription_options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -45,11 +83,13 @@ async def process_video_task(
         ai_model: Optional model override for the selected AI provider
         subtitle_style: Extra subtitle style controls for rendering
         ai_routing_mode: Optional z.ai key routing mode ("auto", "subscription", "metered")
+        transcription_options: Optional local transcription overrides and task timeout
 
     Returns:
         Dict with processing results
     """
     from ..database import AsyncSessionLocal
+    from ..config import Config
     from ..services.task_service import TaskService
     from ..workers.job_queue import JobQueue
     from ..workers.progress import ProgressTracker
@@ -76,8 +116,14 @@ async def process_video_task(
                 logger.info(f"Task {task_id}: {percent}% - {message}")
                 await ensure_not_cancelled()
 
+            worker_timeout_cap_seconds = int(Config().worker_job_timeout_seconds)
+            task_timeout_seconds = _resolve_task_timeout_seconds(
+                transcription_options=transcription_options,
+                worker_timeout_cap_seconds=worker_timeout_cap_seconds,
+            )
+
             # Process the video
-            result = await task_service.process_task(
+            result_coro = task_service.process_task(
                 task_id=task_id,
                 url=url,
                 source_type=source_type,
@@ -89,15 +135,34 @@ async def process_video_task(
                 ai_provider=ai_provider,
                 ai_model=ai_model,
                 ai_routing_mode=ai_routing_mode,
+                transcription_options=transcription_options,
                 subtitle_style=subtitle_style,
                 progress_callback=update_progress,
                 cancel_check=ensure_not_cancelled,
                 user_id=user_id,
             )
+            try:
+                result = await asyncio.wait_for(result_coro, timeout=task_timeout_seconds)
+            except asyncio.TimeoutError as exc:
+                raise TaskTimeoutError(
+                    f"Task exceeded timeout of {task_timeout_seconds} seconds"
+                ) from exc
 
             logger.info(f"Task {task_id} completed successfully")
             await progress.complete()
             return result
+
+        except TaskTimeoutError as e:
+            message = str(e)
+            logger.error(f"Task {task_id} timed out: {message}")
+            await task_service.task_repo.update_task_status(
+                db,
+                task_id,
+                "error",
+                progress_message=message,
+            )
+            await progress.error(message)
+            return {"task_id": task_id, "timed_out": True, "message": message}
 
         except TaskCancelledError as e:
             message = str(e)
@@ -144,7 +209,7 @@ class WorkerSettings:
 
     # Retry settings
     max_tries = 3  # Retry failed jobs up to 3 times
-    job_timeout = 3600  # 1 hour timeout for video processing
+    job_timeout = config.worker_job_timeout_seconds
 
     # Worker pool settings (local transcription is CPU-heavy).
     max_jobs = config.worker_max_jobs

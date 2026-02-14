@@ -1,5 +1,3 @@
-import { Clapperboard } from "lucide-react";
-
 interface SettingsSectionVideoProps {
   isSaving: boolean;
   transitionsEnabled: boolean;
@@ -9,14 +7,6 @@ interface SettingsSectionVideoProps {
 export function SettingsSectionVideo({ isSaving, transitionsEnabled, onToggleTransitions }: SettingsSectionVideoProps) {
   return (
     <div className="space-y-4">
-      <div>
-        <div className="flex items-center gap-2">
-          <Clapperboard className="w-4 h-4 text-black" />
-          <h3 className="text-lg font-semibold text-black">Default Video Settings</h3>
-        </div>
-        <p className="mt-1 text-xs text-gray-500">Defaults that affect clip composition and rendering behavior.</p>
-      </div>
-
       <div className="space-y-3 rounded-md border border-gray-200 bg-white p-3">
         <div className="flex items-start justify-between gap-4">
           <div>

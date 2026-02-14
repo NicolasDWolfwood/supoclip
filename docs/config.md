@@ -19,9 +19,14 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `ZAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `zai:*`; requests use z.ai Coding API endpoint (`/api/coding/paas/v4`). |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
+| `WHISPER_CHUNKING_ENABLED` | No | `true` | backend, worker | Enable chunked local Whisper transcription for long videos. |
+| `WHISPER_CHUNK_DURATION_SECONDS` | No | `1200` | backend, worker | Chunk length (seconds) for local Whisper transcription when chunking is enabled. |
+| `WHISPER_CHUNK_OVERLAP_SECONDS` | No | `8` | backend, worker | Overlap duration (seconds) between local Whisper chunks to preserve boundary context. |
 | `WORKER_MAX_JOBS` | No | `2` | worker | Max concurrent background jobs for primary worker; lower values reduce CPU contention during local transcription. |
+| `WORKER_JOB_TIMEOUT_SECONDS` | No | `21600` | worker | ARQ job timeout for a single video task (seconds). Also acts as the maximum allowed per-task timeout selected in the Settings UI. |
 | `WORKER2_MAX_JOBS` | No | `1` | worker2 (optional) | Max concurrent jobs for optional second worker (`multi-worker` profile). |
 | `WORKER2_WHISPER_DEVICE` | No | `auto` | worker2 (optional) | Whisper target device for second worker: `auto`, `cuda`, `cpu`. |
+| `ENABLE_MULTI_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `multi-worker` to include `worker2`. |
 | `ARQ_QUEUE_NAME_LOCAL` | No | `arq:queue:local` | backend, workers | Queue name for local Whisper jobs. |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | No | `arq:queue:assembly` | backend, workers | Queue name for AssemblyAI jobs. |
 | `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |

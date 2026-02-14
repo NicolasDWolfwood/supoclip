@@ -13,6 +13,8 @@ import json
 import hashlib
 import threading
 import urllib.request
+import subprocess
+import tempfile
 
 import cv2
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
@@ -253,23 +255,114 @@ def _get_thread_mediapipe_face_detector() -> Tuple[Any, Optional[str], Any]:
     return detector_ctx
 
 
-def _transcribe_with_local_whisper(video_path: Path) -> Dict[str, Any]:
-    model_name = config.whisper_model or "medium"
-    device, use_fp16 = _resolve_whisper_device()
-    model = _get_whisper_model(model_name, device)
-    logger.info(
-        f"Starting local Whisper transcription using model '{model_name}' "
-        f"on device '{device}' (fp16={use_fp16})"
+def _probe_video_duration_seconds(video_path: Path) -> Optional[float]:
+    try:
+        with VideoFileClip(str(video_path)) as clip:
+            duration = float(clip.duration or 0.0)
+            return duration if duration > 0 else None
+    except Exception as exc:
+        logger.warning(f"Failed to probe video duration for chunking ({video_path}): {exc}")
+        return None
+
+
+def _build_transcription_chunks(
+    duration_seconds: float,
+    chunk_duration_seconds: int,
+    overlap_seconds: int,
+) -> List[Tuple[float, float]]:
+    safe_chunk_duration = max(int(chunk_duration_seconds), 60)
+    safe_overlap = max(int(overlap_seconds), 0)
+    if safe_overlap >= safe_chunk_duration:
+        safe_overlap = max(0, safe_chunk_duration - 1)
+
+    ranges: List[Tuple[float, float]] = []
+    start = 0.0
+    while start < duration_seconds:
+        end = min(duration_seconds, start + safe_chunk_duration)
+        ranges.append((start, end))
+        if end >= duration_seconds:
+            break
+        start = end - safe_overlap
+
+    return ranges
+
+
+def _resolve_whisper_chunking_settings(
+    chunking_enabled_override: Optional[bool],
+    chunk_duration_seconds_override: Optional[int],
+    chunk_overlap_seconds_override: Optional[int],
+) -> Tuple[bool, int, int]:
+    chunking_enabled = (
+        bool(chunking_enabled_override)
+        if chunking_enabled_override is not None
+        else bool(getattr(config, "whisper_chunking_enabled", True))
     )
-    result = model.transcribe(
+    chunk_duration_seconds = int(
+        chunk_duration_seconds_override
+        if chunk_duration_seconds_override is not None
+        else (getattr(config, "whisper_chunk_duration_seconds", 1200) or 1200)
+    )
+    chunk_overlap_seconds = int(
+        chunk_overlap_seconds_override
+        if chunk_overlap_seconds_override is not None
+        else (getattr(config, "whisper_chunk_overlap_seconds", 8) or 8)
+    )
+
+    chunk_duration_seconds = max(chunk_duration_seconds, 60)
+    chunk_overlap_seconds = max(chunk_overlap_seconds, 0)
+    if chunk_overlap_seconds >= chunk_duration_seconds:
+        chunk_overlap_seconds = max(0, chunk_duration_seconds - 1)
+    return chunking_enabled, chunk_duration_seconds, chunk_overlap_seconds
+
+
+def _extract_audio_chunk_for_whisper(
+    video_path: Path,
+    output_path: Path,
+    start_seconds: float,
+    end_seconds: float,
+) -> None:
+    duration_seconds = max(end_seconds - start_seconds, 0.05)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-ss",
+        f"{start_seconds:.3f}",
+        "-i",
         str(video_path),
+        "-t",
+        f"{duration_seconds:.3f}",
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
+def _run_whisper_transcription(model: Any, media_path: Union[Path, str], use_fp16: bool) -> Dict[str, Any]:
+    return model.transcribe(
+        str(media_path),
         task="transcribe",
         word_timestamps=True,
         verbose=False,
         fp16=use_fp16,
     )
 
-    transcript_text = str(result.get("text") or "").strip()
+
+def _extract_words_from_whisper_result(
+    result: Dict[str, Any],
+    *,
+    offset_ms: int = 0,
+    min_end_ms: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     segments = result.get("segments") or []
     words_data: List[Dict[str, Any]] = []
 
@@ -285,9 +378,11 @@ def _transcribe_with_local_whisper(video_path: Path) -> Dict[str, Any]:
             if start_sec is None or end_sec is None:
                 continue
 
-            start_ms = int(float(start_sec) * 1000)
-            end_ms = int(float(end_sec) * 1000)
+            start_ms = int(float(start_sec) * 1000) + offset_ms
+            end_ms = int(float(end_sec) * 1000) + offset_ms
             if end_ms <= start_ms:
+                continue
+            if min_end_ms is not None and end_ms <= min_end_ms:
                 continue
 
             probability = word.get("probability")
@@ -302,25 +397,171 @@ def _transcribe_with_local_whisper(video_path: Path) -> Dict[str, Any]:
             )
 
     # Fallback for environments where word-level timings are unavailable.
-    if not words_data:
-        for segment in segments:
-            text = str(segment.get("text") or "").strip()
-            start_sec = segment.get("start")
-            end_sec = segment.get("end")
-            if not text or start_sec is None or end_sec is None:
+    if words_data:
+        return words_data
+
+    for segment in segments:
+        text = str(segment.get("text") or "").strip()
+        start_sec = segment.get("start")
+        end_sec = segment.get("end")
+        if not text or start_sec is None or end_sec is None:
+            continue
+        start_ms = int(float(start_sec) * 1000) + offset_ms
+        end_ms = int(float(end_sec) * 1000) + offset_ms
+        if end_ms <= start_ms:
+            continue
+        if min_end_ms is not None and end_ms <= min_end_ms:
+            continue
+        words_data.append(
+            {
+                "text": text,
+                "start": start_ms,
+                "end": end_ms,
+                "confidence": 1.0,
+            }
+        )
+
+    return words_data
+
+
+def _dedupe_transcript_words(words: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not words:
+        return words
+
+    ordered = sorted(words, key=lambda item: (int(item["start"]), int(item["end"])))
+    deduped: List[Dict[str, Any]] = []
+    seen_exact: set[Tuple[str, int, int]] = set()
+
+    for word in ordered:
+        text = str(word.get("text") or "").strip()
+        if not text:
+            continue
+        start_ms = int(word.get("start") or 0)
+        end_ms = int(word.get("end") or 0)
+        key = (text, start_ms, end_ms)
+        if key in seen_exact:
+            continue
+
+        if deduped:
+            prev = deduped[-1]
+            prev_text = str(prev.get("text") or "").strip()
+            prev_start = int(prev.get("start") or 0)
+            # Guard against overlap duplicates around chunk boundaries.
+            if (
+                text == prev_text
+                and abs(start_ms - prev_start) <= 300
+                and abs(end_ms - int(prev.get("end") or 0)) <= 300
+            ):
                 continue
-            start_ms = int(float(start_sec) * 1000)
-            end_ms = int(float(end_sec) * 1000)
-            if end_ms <= start_ms:
-                continue
-            words_data.append(
-                {
-                    "text": text,
-                    "start": start_ms,
-                    "end": end_ms,
-                    "confidence": 1.0,
-                }
+
+        seen_exact.add(key)
+        deduped.append(
+            {
+                "text": text,
+                "start": start_ms,
+                "end": end_ms,
+                "confidence": float(word.get("confidence", 1.0) or 1.0),
+            }
+        )
+
+    return deduped
+
+
+def _transcribe_with_local_whisper_chunked(
+    video_path: Path,
+    model: Any,
+    use_fp16: bool,
+    chunk_ranges: List[Tuple[float, float]],
+    overlap_seconds: int,
+) -> Dict[str, Any]:
+    logger.info(
+        "Starting chunked local Whisper transcription (%s chunks, overlap=%ss)",
+        len(chunk_ranges),
+        overlap_seconds,
+    )
+
+    all_words: List[Dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(prefix=f"{video_path.stem}_whisper_", dir=str(video_path.parent)) as temp_dir:
+        temp_dir_path = Path(temp_dir)
+
+        for idx, (start_sec, end_sec) in enumerate(chunk_ranges, start=1):
+            logger.info(
+                "Whisper chunk %s/%s: %.1fs -> %.1fs",
+                idx,
+                len(chunk_ranges),
+                start_sec,
+                end_sec,
             )
+            chunk_path = temp_dir_path / f"chunk_{idx:04d}.wav"
+            _extract_audio_chunk_for_whisper(video_path, chunk_path, start_sec, end_sec)
+            chunk_result = _run_whisper_transcription(model, chunk_path, use_fp16)
+
+            chunk_offset_ms = int(start_sec * 1000)
+            min_end_ms = None
+            if idx > 1 and overlap_seconds > 0:
+                min_end_ms = int((start_sec + overlap_seconds) * 1000)
+
+            chunk_words = _extract_words_from_whisper_result(
+                chunk_result,
+                offset_ms=chunk_offset_ms,
+                min_end_ms=min_end_ms,
+            )
+            all_words.extend(chunk_words)
+
+    deduped_words = _dedupe_transcript_words(all_words)
+    if not deduped_words:
+        raise Exception("Chunked transcription produced no timestamped words")
+
+    transcript_text = " ".join(word["text"] for word in deduped_words).strip()
+    return {"words": deduped_words, "text": transcript_text}
+
+
+def _transcribe_with_local_whisper(
+    video_path: Path,
+    chunking_enabled_override: Optional[bool] = None,
+    chunk_duration_seconds_override: Optional[int] = None,
+    chunk_overlap_seconds_override: Optional[int] = None,
+) -> Dict[str, Any]:
+    model_name = config.whisper_model or "medium"
+    device, use_fp16 = _resolve_whisper_device()
+    model = _get_whisper_model(model_name, device)
+    logger.info(
+        f"Starting local Whisper transcription using model '{model_name}' "
+        f"on device '{device}' (fp16={use_fp16})"
+    )
+    chunking_enabled, chunk_duration_seconds, overlap_seconds = _resolve_whisper_chunking_settings(
+        chunking_enabled_override,
+        chunk_duration_seconds_override,
+        chunk_overlap_seconds_override,
+    )
+
+    if chunking_enabled:
+        video_duration = _probe_video_duration_seconds(video_path)
+        if video_duration:
+            chunk_ranges = _build_transcription_chunks(
+                video_duration,
+                chunk_duration_seconds=chunk_duration_seconds,
+                overlap_seconds=overlap_seconds,
+            )
+            if len(chunk_ranges) > 1:
+                logger.info(
+                    "Local Whisper chunking enabled for %s (duration=%.1fs, chunk=%ss, overlap=%ss)",
+                    video_path.name,
+                    video_duration,
+                    chunk_duration_seconds,
+                    overlap_seconds,
+                )
+                return _transcribe_with_local_whisper_chunked(
+                    video_path,
+                    model=model,
+                    use_fp16=use_fp16,
+                    chunk_ranges=chunk_ranges,
+                    overlap_seconds=overlap_seconds,
+                )
+
+    result = _run_whisper_transcription(model, video_path, use_fp16)
+    transcript_text = str(result.get("text") or "").strip()
+    words_data = _extract_words_from_whisper_result(result)
 
     if not words_data:
         raise Exception("Transcription produced no timestamped words")
@@ -375,6 +616,9 @@ def get_video_transcript(
     video_path: Union[Path, str],
     transcription_provider: Optional[str] = None,
     assembly_api_key: Optional[str] = None,
+    whisper_chunking_enabled: Optional[bool] = None,
+    whisper_chunk_duration_seconds: Optional[int] = None,
+    whisper_chunk_overlap_seconds: Optional[int] = None,
 ) -> str:
     """Get transcript using configured provider with word-level timings."""
     video_path = Path(video_path)
@@ -387,7 +631,12 @@ def get_video_transcript(
         if provider == "assemblyai":
             transcript_data = _transcribe_with_assemblyai(video_path, assembly_api_key)
         else:
-            transcript_data = _transcribe_with_local_whisper(video_path)
+            transcript_data = _transcribe_with_local_whisper(
+                video_path,
+                chunking_enabled_override=whisper_chunking_enabled,
+                chunk_duration_seconds_override=whisper_chunk_duration_seconds,
+                chunk_overlap_seconds_override=whisper_chunk_overlap_seconds,
+            )
 
         cache_transcript_data(video_path, transcript_data)
         formatted_transcript = build_formatted_transcript_from_words(transcript_data["words"])

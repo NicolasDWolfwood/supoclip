@@ -79,6 +79,9 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `ASSEMBLY_AI_API_KEY` - Required only when `TRANSCRIPTION_PROVIDER=assemblyai`
 - `WHISPER_MODEL_SIZE` - Whisper model size used for local transcription
 - `WHISPER_DEVICE` - Whisper execution target (`auto`, `cuda`, `cpu`)
+- `WHISPER_CHUNKING_ENABLED` - Enable chunked local Whisper transcription for long videos
+- `WHISPER_CHUNK_DURATION_SECONDS` - Chunk duration for local Whisper transcription (seconds)
+- `WHISPER_CHUNK_OVERLAP_SECONDS` - Overlap duration between local Whisper chunks (seconds)
 - `MEDIAPIPE_FACE_MODEL_PATH` - Face detector model path for MediaPipe Tasks crop detection
 - `MEDIAPIPE_FACE_MODEL_URL` - Download URL for face detector model when missing
 - `MEDIAPIPE_FACE_MODEL_SHA256` - Expected SHA-256 for model integrity verification
@@ -89,8 +92,10 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
 - `WHISPER_CACHE_HOST_DIR` - Docker host path for Whisper cache mount (default `./backend/.cache/whisper`)
 - `WORKER_MAX_JOBS` - Max concurrent jobs for primary worker
+- `WORKER_JOB_TIMEOUT_SECONDS` - Timeout per worker task (seconds)
 - `WORKER2_MAX_JOBS` - Max concurrent jobs for optional second worker profile
 - `WORKER2_WHISPER_DEVICE` - Whisper device target for optional second worker (`auto`, `cuda`, `cpu`)
+- `ENABLE_MULTI_WORKER` - If `true`, `./start.sh` enables compose profile `multi-worker`
 - `ARQ_QUEUE_NAME_LOCAL` - Queue used for local Whisper transcription jobs
 - `ARQ_QUEUE_NAME_ASSEMBLY` - Queue used for AssemblyAI transcription jobs
 - `DOCKER_GPU_REQUEST` - GPU request for backend/worker containers (`all` or `0`)
@@ -133,6 +138,9 @@ docker-compose up -d
 
 # Start all services with optional second worker
 docker-compose --profile multi-worker up -d
+
+# Or with start script env toggle
+ENABLE_MULTI_WORKER=true ./start.sh
 
 # View logs
 docker-compose logs -f

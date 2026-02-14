@@ -159,6 +159,38 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_whisper_chunking_enabled BOOLEAN NOT NULL DEFAULT true
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_whisper_chunk_duration_seconds INTEGER NOT NULL DEFAULT 1200
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_whisper_chunk_overlap_seconds INTEGER NOT NULL DEFAULT 8
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_task_timeout_seconds INTEGER NOT NULL DEFAULT 21600
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (
@@ -170,6 +202,63 @@ async def init_db():
                         ADD CONSTRAINT check_users_default_transcription_provider
                         CHECK (default_transcription_provider IN ('local', 'assemblyai'));
                     END IF;
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_whisper_chunk_duration_seconds'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_whisper_chunk_duration_seconds;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_whisper_chunk_duration_seconds
+                    CHECK (default_whisper_chunk_duration_seconds BETWEEN 300 AND 3600);
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_whisper_chunk_overlap_seconds'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_whisper_chunk_overlap_seconds;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_whisper_chunk_overlap_seconds
+                    CHECK (default_whisper_chunk_overlap_seconds BETWEEN 0 AND 120);
+                END $$;
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'check_users_default_task_timeout_seconds'
+                    ) THEN
+                        ALTER TABLE users DROP CONSTRAINT check_users_default_task_timeout_seconds;
+                    END IF;
+                    ALTER TABLE users
+                    ADD CONSTRAINT check_users_default_task_timeout_seconds
+                    CHECK (default_task_timeout_seconds BETWEEN 300 AND 86400);
                 END $$;
                 """
             )

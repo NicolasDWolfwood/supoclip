@@ -4,7 +4,7 @@ Task API routes using refactored architecture.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
-from typing import Optional
+from typing import Optional, Any, Dict
 import json
 import logging
 
@@ -24,6 +24,12 @@ SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
+MIN_WHISPER_CHUNK_DURATION_SECONDS = 300
+MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600
+MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0
+MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
+MIN_TASK_TIMEOUT_SECONDS = 300
+MAX_TASK_TIMEOUT_SECONDS = 86400
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -49,6 +55,109 @@ def _resolve_transcription_provider(raw: object) -> str:
     if provider not in SUPPORTED_TRANSCRIPTION_PROVIDERS:
         return "local"
     return provider
+
+
+def _coerce_int(raw: object, field_name: str) -> int:
+    if isinstance(raw, bool):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer")
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer") from exc
+
+
+def _resolve_task_timeout_seconds(raw: object) -> Optional[int]:
+    if raw is None:
+        return None
+    timeout_seconds = _coerce_int(raw, "transcription_options.task_timeout_seconds")
+    if timeout_seconds < MIN_TASK_TIMEOUT_SECONDS or timeout_seconds > MAX_TASK_TIMEOUT_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "transcription_options.task_timeout_seconds must be between "
+                f"{MIN_TASK_TIMEOUT_SECONDS} and {MAX_TASK_TIMEOUT_SECONDS}"
+            ),
+        )
+    worker_cap_seconds = int(getattr(config, "worker_job_timeout_seconds", 21600) or 21600)
+    if timeout_seconds > worker_cap_seconds:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "transcription_options.task_timeout_seconds exceeds worker cap "
+                f"({worker_cap_seconds}). Increase WORKER_JOB_TIMEOUT_SECONDS and restart workers."
+            ),
+        )
+    return timeout_seconds
+
+
+def _resolve_transcription_runtime_options(
+    transcription_options: Dict[str, Any],
+    provider: str,
+) -> Dict[str, Any]:
+    options: Dict[str, Any] = {}
+
+    task_timeout_seconds = _resolve_task_timeout_seconds(transcription_options.get("task_timeout_seconds"))
+    if task_timeout_seconds is not None:
+        options["task_timeout_seconds"] = task_timeout_seconds
+
+    if provider != "local":
+        return options
+
+    if "whisper_chunking_enabled" in transcription_options:
+        options["whisper_chunking_enabled"] = _coerce_bool(
+            transcription_options.get("whisper_chunking_enabled"),
+            default=True,
+        )
+
+    if "whisper_chunk_duration_seconds" in transcription_options:
+        chunk_duration_seconds = _coerce_int(
+            transcription_options.get("whisper_chunk_duration_seconds"),
+            "transcription_options.whisper_chunk_duration_seconds",
+        )
+        if (
+            chunk_duration_seconds < MIN_WHISPER_CHUNK_DURATION_SECONDS
+            or chunk_duration_seconds > MAX_WHISPER_CHUNK_DURATION_SECONDS
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "transcription_options.whisper_chunk_duration_seconds must be between "
+                    f"{MIN_WHISPER_CHUNK_DURATION_SECONDS} and {MAX_WHISPER_CHUNK_DURATION_SECONDS}"
+                ),
+            )
+        options["whisper_chunk_duration_seconds"] = chunk_duration_seconds
+
+    if "whisper_chunk_overlap_seconds" in transcription_options:
+        chunk_overlap_seconds = _coerce_int(
+            transcription_options.get("whisper_chunk_overlap_seconds"),
+            "transcription_options.whisper_chunk_overlap_seconds",
+        )
+        if (
+            chunk_overlap_seconds < MIN_WHISPER_CHUNK_OVERLAP_SECONDS
+            or chunk_overlap_seconds > MAX_WHISPER_CHUNK_OVERLAP_SECONDS
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "transcription_options.whisper_chunk_overlap_seconds must be between "
+                    f"{MIN_WHISPER_CHUNK_OVERLAP_SECONDS} and {MAX_WHISPER_CHUNK_OVERLAP_SECONDS}"
+                ),
+            )
+        options["whisper_chunk_overlap_seconds"] = chunk_overlap_seconds
+
+    duration_for_validation = options.get("whisper_chunk_duration_seconds")
+    overlap_for_validation = options.get("whisper_chunk_overlap_seconds")
+    if duration_for_validation is not None and overlap_for_validation is not None:
+        if overlap_for_validation >= duration_for_validation:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "transcription_options.whisper_chunk_overlap_seconds must be smaller than "
+                    "whisper_chunk_duration_seconds"
+                ),
+            )
+
+    return options
 
 
 def _default_ai_provider() -> str:
@@ -158,6 +267,13 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
             "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
             "has_assembly_key": bool(settings.get("has_assembly_key")),
             "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
+            "worker_timeout_cap_seconds": int(getattr(config, "worker_job_timeout_seconds", 21600) or 21600),
+            "min_task_timeout_seconds": MIN_TASK_TIMEOUT_SECONDS,
+            "max_task_timeout_seconds": MAX_TASK_TIMEOUT_SECONDS,
+            "min_whisper_chunk_duration_seconds": MIN_WHISPER_CHUNK_DURATION_SECONDS,
+            "max_whisper_chunk_duration_seconds": MAX_WHISPER_CHUNK_DURATION_SECONDS,
+            "min_whisper_chunk_overlap_seconds": MIN_WHISPER_CHUNK_OVERLAP_SECONDS,
+            "max_whisper_chunk_overlap_seconds": MAX_WHISPER_CHUNK_OVERLAP_SECONDS,
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -419,6 +535,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     transcription_provider = _resolve_transcription_provider(
         transcription_options.get("provider", "local")
     )
+    transcription_runtime_options = _resolve_transcription_runtime_options(
+        transcription_options,
+        transcription_provider,
+    )
     ai_options = data.get("ai_options", {})
     if not isinstance(ai_options, dict):
         ai_options = {}
@@ -504,6 +624,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 ai_model,
                 subtitle_style,
                 resolved_zai_routing_mode,
+                transcription_runtime_options,
                 queue_name=queue_name,
             )
         except Exception as enqueue_error:
@@ -522,6 +643,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "task_id": task_id,
             "job_id": job_id,
             "transcription_provider": transcription_provider,
+            "transcription_options": transcription_runtime_options,
             "ai_provider": ai_provider,
             "ai_routing_mode": resolved_zai_routing_mode,
             "message": "Task created and queued for processing"

@@ -13,8 +13,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSession } from "@/lib/auth-client";
 import { SettingsSaveStatus } from "./components/settings-save-status";
+import { SettingsSectionAi } from "./components/settings-section-ai";
 import { SettingsSectionFont } from "./components/settings-section-font";
-import { SettingsSectionProcessing } from "./components/settings-section-processing";
+import { SettingsSectionTranscription } from "./components/settings-section-transcription";
 import { SettingsSectionVideo } from "./components/settings-section-video";
 import { SettingsSidebar } from "./components/settings-sidebar";
 import {
@@ -38,9 +39,13 @@ import {
   isSettingsSection,
   isTranscriptionProvider,
   isZaiRoutingMode,
+  normalizeTaskTimeoutSeconds,
   normalizeFontSize,
+  normalizeWhisperChunkDurationSeconds,
+  normalizeWhisperChunkOverlapSeconds,
   SETTINGS_SECTION_META,
   SETTINGS_SECTIONS,
+  MAX_TASK_TIMEOUT_SECONDS,
   type AiProvider,
   type SettingsSection,
   type UserPreferences,
@@ -53,7 +58,7 @@ interface SavePreferencesOptions {
 
 function getActiveSection(sectionValue: string | null): SettingsSection {
   if (sectionValue === "processing") {
-    return "ai";
+    return "transcription";
   }
   return isSettingsSection(sectionValue) ? sectionValue : "font";
 }
@@ -74,6 +79,7 @@ function SettingsPageContent() {
   const [assemblyApiKey, setAssemblyApiKey] = useState("");
   const [hasSavedAssemblyKey, setHasSavedAssemblyKey] = useState(false);
   const [hasAssemblyEnvFallback, setHasAssemblyEnvFallback] = useState(false);
+  const [workerTimeoutCapSeconds, setWorkerTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
   const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
   const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
   const [assemblyKeyError, setAssemblyKeyError] = useState<string | null>(null);
@@ -748,6 +754,11 @@ function SettingsPageContent() {
           typeof data.aiProvider === "string" && isAiProvider(data.aiProvider) ? data.aiProvider : "openai";
 
         const normalizedFontStyle = normalizeFontStyleOptions(data);
+        const normalizedWhisperChunkDuration = normalizeWhisperChunkDurationSeconds(data.whisperChunkDurationSeconds);
+        const normalizedWhisperChunkOverlap = normalizeWhisperChunkOverlapSeconds(
+          data.whisperChunkOverlapSeconds,
+          normalizedWhisperChunkDuration,
+        );
 
         const nextPreferences: UserPreferences = {
           ...normalizedFontStyle,
@@ -756,6 +767,13 @@ function SettingsPageContent() {
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
               ? data.transcriptionProvider
               : DEFAULT_USER_PREFERENCES.transcriptionProvider,
+          whisperChunkingEnabled:
+            typeof data.whisperChunkingEnabled === "boolean"
+              ? data.whisperChunkingEnabled
+              : DEFAULT_USER_PREFERENCES.whisperChunkingEnabled,
+          whisperChunkDurationSeconds: normalizedWhisperChunkDuration,
+          whisperChunkOverlapSeconds: normalizedWhisperChunkOverlap,
+          taskTimeoutSeconds: normalizeTaskTimeoutSeconds(data.taskTimeoutSeconds),
           aiProvider: resolvedAiProvider,
           aiModel:
             typeof data.aiModel === "string" && data.aiModel.trim().length > 0
@@ -799,6 +817,19 @@ function SettingsPageContent() {
         const data = await response.json();
         setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
         setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+        const cap =
+          typeof data.worker_timeout_cap_seconds === "number" && Number.isFinite(data.worker_timeout_cap_seconds)
+            ? Math.max(300, Math.round(data.worker_timeout_cap_seconds))
+            : MAX_TASK_TIMEOUT_SECONDS;
+        setWorkerTimeoutCapSeconds(cap);
+        setPreferencesDraft((prev) => ({
+          ...prev,
+          taskTimeoutSeconds: Math.min(prev.taskTimeoutSeconds, cap),
+        }));
+        setLastSavedSnapshot((prev) => ({
+          ...prev,
+          taskTimeoutSeconds: Math.min(prev.taskTimeoutSeconds, cap),
+        }));
       } catch (loadError) {
         console.error("Failed to load transcription settings:", loadError);
       }
@@ -964,7 +995,9 @@ function SettingsPageContent() {
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-semibold text-black">{SETTINGS_SECTION_META[activeSection].label}</p>
-                <p className="text-xs text-gray-500">Use the Save button to apply default preference changes.</p>
+                <p className="text-xs text-gray-500">
+                  {SETTINGS_SECTION_META[activeSection].description} Use Save to apply changes.
+                </p>
               </div>
               <SettingsSaveStatus isDirty={isDirty} isSaving={isSavingPreferences} saveError={saveError} />
             </div>
@@ -1053,23 +1086,75 @@ function SettingsPageContent() {
                   setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
                 }}
               />
-            ) : (
-              <SettingsSectionProcessing
+            ) : activeSection === "transcription" ? (
+              <SettingsSectionTranscription
                 isSaving={isSavingPreferences}
                 transcriptionProvider={preferencesDraft.transcriptionProvider}
+                whisperChunkingEnabled={preferencesDraft.whisperChunkingEnabled}
+                whisperChunkDurationSeconds={preferencesDraft.whisperChunkDurationSeconds}
+                whisperChunkOverlapSeconds={preferencesDraft.whisperChunkOverlapSeconds}
+                taskTimeoutSeconds={preferencesDraft.taskTimeoutSeconds}
+                taskTimeoutMaxSeconds={workerTimeoutCapSeconds}
+                isSavingAssemblyKey={isSavingAssemblyKey}
+                assemblyApiKey={assemblyApiKey}
+                hasSavedAssemblyKey={hasSavedAssemblyKey}
+                hasAssemblyEnvFallback={hasAssemblyEnvFallback}
+                assemblyKeyStatus={assemblyKeyStatus}
+                assemblyKeyError={assemblyKeyError}
+                onTranscriptionProviderChange={(provider) => {
+                  if (isTranscriptionProvider(provider)) {
+                    setPreferencesDraft((prev) => ({ ...prev, transcriptionProvider: provider }));
+                  }
+                  setAssemblyKeyStatus(null);
+                  setAssemblyKeyError(null);
+                }}
+                onWhisperChunkingEnabledChange={(enabled) => {
+                  setPreferencesDraft((prev) => ({ ...prev, whisperChunkingEnabled: enabled }));
+                }}
+                onWhisperChunkDurationSecondsChange={(seconds) => {
+                  setPreferencesDraft((prev) => {
+                    const nextDuration = normalizeWhisperChunkDurationSeconds(seconds);
+                    const nextOverlap = normalizeWhisperChunkOverlapSeconds(prev.whisperChunkOverlapSeconds, nextDuration);
+                    return {
+                      ...prev,
+                      whisperChunkDurationSeconds: nextDuration,
+                      whisperChunkOverlapSeconds: nextOverlap,
+                    };
+                  });
+                }}
+                onWhisperChunkOverlapSecondsChange={(seconds) => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    whisperChunkOverlapSeconds: normalizeWhisperChunkOverlapSeconds(
+                      seconds,
+                      prev.whisperChunkDurationSeconds,
+                    ),
+                  }));
+                }}
+                onTaskTimeoutSecondsChange={(seconds) => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    taskTimeoutSeconds: Math.min(workerTimeoutCapSeconds, normalizeTaskTimeoutSeconds(seconds)),
+                  }));
+                }}
+                onAssemblyApiKeyChange={setAssemblyApiKey}
+                onSaveAssemblyKey={() => {
+                  void saveAssemblyKey(assemblyApiKey);
+                }}
+                onDeleteAssemblyKey={() => {
+                  void deleteAssemblyKey();
+                }}
+              />
+            ) : (
+              <SettingsSectionAi
+                isSaving={isSavingPreferences}
                 aiProvider={preferencesDraft.aiProvider}
                 aiModel={preferencesDraft.aiModel}
                 aiModelOptions={aiModelOptions[preferencesDraft.aiProvider]}
                 hasLoadedAiModels={hasLoadedAiModels[preferencesDraft.aiProvider]}
                 hasAiKeyForSelectedProvider={hasAiKeyForSelectedProvider}
                 isLoadingAiModels={isLoadingAiModels}
-                isSavingAssemblyKey={isSavingAssemblyKey}
                 isSavingAiKey={isSavingAiKey}
-                assemblyApiKey={assemblyApiKey}
-                hasSavedAssemblyKey={hasSavedAssemblyKey}
-                hasAssemblyEnvFallback={hasAssemblyEnvFallback}
-                assemblyKeyStatus={assemblyKeyStatus}
-                assemblyKeyError={assemblyKeyError}
                 aiApiKey={aiApiKeys[preferencesDraft.aiProvider]}
                 hasSavedAiKey={hasSavedAiKeys[preferencesDraft.aiProvider]}
                 hasEnvAiFallback={hasEnvAiFallback[preferencesDraft.aiProvider]}
@@ -1082,13 +1167,6 @@ function SettingsPageContent() {
                 zaiProfileApiKey={zaiProfileApiKeys[selectedZaiKeyProfile]}
                 hasSavedZaiSubscriptionKey={hasSavedZaiProfileKeys.subscription}
                 hasSavedZaiMeteredKey={hasSavedZaiProfileKeys.metered}
-                onTranscriptionProviderChange={(provider) => {
-                  if (isTranscriptionProvider(provider)) {
-                    setPreferencesDraft((prev) => ({ ...prev, transcriptionProvider: provider }));
-                  }
-                  setAssemblyKeyStatus(null);
-                  setAssemblyKeyError(null);
-                }}
                 onAiProviderChange={(provider) => {
                   if (!isAiProvider(provider)) {
                     return;
@@ -1114,13 +1192,6 @@ function SettingsPageContent() {
                 }}
                 onAiModelChange={(model) => {
                   setPreferencesDraft((prev) => ({ ...prev, aiModel: model }));
-                }}
-                onAssemblyApiKeyChange={setAssemblyApiKey}
-                onSaveAssemblyKey={() => {
-                  void saveAssemblyKey(assemblyApiKey);
-                }}
-                onDeleteAssemblyKey={() => {
-                  void deleteAssemblyKey();
                 }}
                 onAiApiKeyChange={(value) => {
                   setAiApiKeys((prev) => ({ ...prev, [preferencesDraft.aiProvider]: value }));
@@ -1172,10 +1243,12 @@ function SettingsPageContent() {
                 {isSavingPreferences
                   ? "Saving..."
                   : activeSection === "font"
-                    ? "Save Font Defaults"
+                    ? "Save Fonts"
                     : activeSection === "video"
-                      ? "Save Video Defaults"
-                      : "Save AI Defaults"}
+                      ? "Save Video"
+                      : activeSection === "transcription"
+                        ? "Save Transcription"
+                        : "Save AI"}
               </Button>
             </div>
           </section>

@@ -19,6 +19,12 @@ import {
 
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
 const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai"]);
+const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
+const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
+const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
+const MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120;
+const MIN_TASK_TIMEOUT_SECONDS = 300;
+const MAX_TASK_TIMEOUT_SECONDS = 86400;
 
 // GET /api/preferences - Get user preferences
 export async function GET() {
@@ -51,6 +57,10 @@ export async function GET() {
         default_shadow_offset_y: true,
         default_transitions_enabled: true,
         default_transcription_provider: true,
+        default_whisper_chunking_enabled: true,
+        default_whisper_chunk_duration_seconds: true,
+        default_whisper_chunk_overlap_seconds: true,
+        default_task_timeout_seconds: true,
         default_ai_provider: true,
         default_ai_model: true,
       },
@@ -91,6 +101,10 @@ export async function GET() {
       shadowOffsetY: normalizeShadowOffset(user.default_shadow_offset_y),
       transitionsEnabled: user.default_transitions_enabled ?? false,
       transcriptionProvider: user.default_transcription_provider || "local",
+      whisperChunkingEnabled: user.default_whisper_chunking_enabled ?? true,
+      whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
+      whisperChunkOverlapSeconds: user.default_whisper_chunk_overlap_seconds || 8,
+      taskTimeoutSeconds: user.default_task_timeout_seconds || 21600,
       aiProvider: user.default_ai_provider || "openai",
       aiModel: user.default_ai_model || "",
     });
@@ -138,6 +152,10 @@ export async function PATCH(request: NextRequest) {
       shadowOffsetY,
       transitionsEnabled,
       transcriptionProvider,
+      whisperChunkingEnabled,
+      whisperChunkDurationSeconds,
+      whisperChunkOverlapSeconds,
+      taskTimeoutSeconds,
       aiProvider,
       aiModel,
     } = body;
@@ -217,6 +235,60 @@ export async function PATCH(request: NextRequest) {
     if (aiModel !== undefined && aiModel !== null && typeof aiModel !== "string") {
       return NextResponse.json({ error: "Invalid aiModel (must be a string or null)" }, { status: 400 });
     }
+    if (whisperChunkingEnabled !== undefined && typeof whisperChunkingEnabled !== "boolean") {
+      return NextResponse.json({ error: "Invalid whisperChunkingEnabled" }, { status: 400 });
+    }
+    if (
+      whisperChunkDurationSeconds !== undefined &&
+      !isIntegerInRange(
+        whisperChunkDurationSeconds,
+        MIN_WHISPER_CHUNK_DURATION_SECONDS,
+        MAX_WHISPER_CHUNK_DURATION_SECONDS,
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error: `Invalid whisperChunkDurationSeconds (must be an integer from ${MIN_WHISPER_CHUNK_DURATION_SECONDS} to ${MAX_WHISPER_CHUNK_DURATION_SECONDS})`,
+        },
+        { status: 400 },
+      );
+    }
+    if (
+      whisperChunkOverlapSeconds !== undefined &&
+      !isIntegerInRange(
+        whisperChunkOverlapSeconds,
+        MIN_WHISPER_CHUNK_OVERLAP_SECONDS,
+        MAX_WHISPER_CHUNK_OVERLAP_SECONDS,
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error: `Invalid whisperChunkOverlapSeconds (must be an integer from ${MIN_WHISPER_CHUNK_OVERLAP_SECONDS} to ${MAX_WHISPER_CHUNK_OVERLAP_SECONDS})`,
+        },
+        { status: 400 },
+      );
+    }
+    if (
+      taskTimeoutSeconds !== undefined &&
+      !isIntegerInRange(taskTimeoutSeconds, MIN_TASK_TIMEOUT_SECONDS, MAX_TASK_TIMEOUT_SECONDS)
+    ) {
+      return NextResponse.json(
+        {
+          error: `Invalid taskTimeoutSeconds (must be an integer from ${MIN_TASK_TIMEOUT_SECONDS} to ${MAX_TASK_TIMEOUT_SECONDS})`,
+        },
+        { status: 400 },
+      );
+    }
+    if (
+      whisperChunkDurationSeconds !== undefined &&
+      whisperChunkOverlapSeconds !== undefined &&
+      whisperChunkOverlapSeconds >= whisperChunkDurationSeconds
+    ) {
+      return NextResponse.json(
+        { error: "Invalid whisperChunkOverlapSeconds (must be smaller than whisperChunkDurationSeconds)" },
+        { status: 400 },
+      );
+    }
 
     const updatedUser = await prisma.user.update({
       where: { id: session.user.id },
@@ -238,6 +310,14 @@ export async function PATCH(request: NextRequest) {
         ...(shadowOffsetY !== undefined && { default_shadow_offset_y: normalizeShadowOffset(shadowOffsetY) }),
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
         ...(transcriptionProvider !== undefined && { default_transcription_provider: transcriptionProvider }),
+        ...(whisperChunkingEnabled !== undefined && { default_whisper_chunking_enabled: whisperChunkingEnabled }),
+        ...(whisperChunkDurationSeconds !== undefined && {
+          default_whisper_chunk_duration_seconds: whisperChunkDurationSeconds,
+        }),
+        ...(whisperChunkOverlapSeconds !== undefined && {
+          default_whisper_chunk_overlap_seconds: whisperChunkOverlapSeconds,
+        }),
+        ...(taskTimeoutSeconds !== undefined && { default_task_timeout_seconds: taskTimeoutSeconds }),
         ...(aiProvider !== undefined && { default_ai_provider: aiProvider }),
         ...(aiModel !== undefined && { default_ai_model: aiModel || null }),
       },
@@ -259,6 +339,10 @@ export async function PATCH(request: NextRequest) {
         default_shadow_offset_y: true,
         default_transitions_enabled: true,
         default_transcription_provider: true,
+        default_whisper_chunking_enabled: true,
+        default_whisper_chunk_duration_seconds: true,
+        default_whisper_chunk_overlap_seconds: true,
+        default_task_timeout_seconds: true,
         default_ai_provider: true,
         default_ai_model: true,
       },
@@ -292,6 +376,10 @@ export async function PATCH(request: NextRequest) {
       shadowOffsetY: normalizeShadowOffset(updatedUser.default_shadow_offset_y),
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
+      whisperChunkingEnabled: updatedUser.default_whisper_chunking_enabled ?? true,
+      whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,
+      whisperChunkOverlapSeconds: updatedUser.default_whisper_chunk_overlap_seconds || 8,
+      taskTimeoutSeconds: updatedUser.default_task_timeout_seconds || 21600,
       aiProvider: updatedUser.default_ai_provider || "openai",
       aiModel: updatedUser.default_ai_model || "",
     });

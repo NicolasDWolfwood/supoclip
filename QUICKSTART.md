@@ -85,6 +85,10 @@ docker-compose up -d --build
 # Start with optional second worker (parallel job processing)
 docker-compose --profile multi-worker up -d --build
 
+# Or via start script using .env toggle:
+# ENABLE_MULTI_WORKER=true
+# ./start.sh
+
 # View logs
 docker-compose logs -f
 
@@ -113,13 +117,18 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 |----------|---------|-------------|
 | `WHISPER_MODEL_SIZE` | `medium` | Whisper model size (tiny/base/small/medium/large) |
 | `WHISPER_DEVICE` | `auto` | Whisper device target (`auto`, `cuda`, `cpu`) |
+| `WHISPER_CHUNKING_ENABLED` | `true` | Enable chunked local Whisper transcription for long videos |
+| `WHISPER_CHUNK_DURATION_SECONDS` | `1200` | Chunk duration in seconds for local Whisper (default 20 minutes) |
+| `WHISPER_CHUNK_OVERLAP_SECONDS` | `8` | Overlap in seconds between chunks for boundary continuity |
 | `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API) |
 | `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
 | `MEDIAPIPE_FACE_MODEL_PATH` | `./backend/models/blaze_face_short_range.tflite` | Face detector model path for face-aware crop (Docker default resolves to `/app/models/...`) |
 | `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD` | `true` | Auto-download face model when missing |
 | `WORKER_MAX_JOBS` | `2` | Max concurrent background jobs (reduce if CPU is saturated) |
+| `WORKER_JOB_TIMEOUT_SECONDS` | `21600` | Timeout per worker job (seconds); also caps per-task timeout chosen in Settings |
 | `WORKER2_MAX_JOBS` | `1` | Max concurrent jobs for optional second worker profile |
 | `WORKER2_WHISPER_DEVICE` | `auto` | Device target for optional second worker (`auto`, `cuda`, `cpu`) |
+| `ENABLE_MULTI_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker2` profile |
 | `ARQ_QUEUE_NAME_LOCAL` | `arq:queue:local` | Queue name for local Whisper jobs |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | `arq:queue:assembly` | Queue name for AssemblyAI jobs |
 | `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |

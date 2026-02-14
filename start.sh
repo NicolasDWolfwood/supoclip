@@ -78,8 +78,17 @@ BACKEND_HOST_PORT="${BACKEND_HOST_PORT:-8000}"
 FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-http://${APP_HOST}:${FRONTEND_HOST_PORT}}"
 BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://${APP_HOST}:${BACKEND_HOST_PORT}}"
 API_DOCS_URL="${BACKEND_ORIGIN}/docs"
+ENABLE_MULTI_WORKER="${ENABLE_MULTI_WORKER:-false}"
+
+COMPOSE_ARGS=()
+if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
+    COMPOSE_ARGS+=(--profile multi-worker)
+fi
 
 echo -e "${GREEN}Starting MrglSnips...${NC}"
+if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
+    echo "Multi-worker profile enabled (worker + worker2)."
+fi
 echo ""
 
 # Build and start containers
@@ -87,7 +96,7 @@ echo "Building and starting Docker containers..."
 echo "(This may take a few minutes on the first run)"
 echo ""
 
-$DOCKER_COMPOSE up -d --build
+$DOCKER_COMPOSE "${COMPOSE_ARGS[@]}" up -d --build
 
 echo ""
 echo -e "${GREEN}MrglSnips is starting up!${NC}"
@@ -98,10 +107,10 @@ echo "  - Backend:   ${BACKEND_ORIGIN}"
 echo "  - API Docs:  ${API_DOCS_URL}"
 echo ""
 echo "To view logs, run:"
-echo "  $DOCKER_COMPOSE logs -f"
+echo "  $DOCKER_COMPOSE ${COMPOSE_ARGS[*]} logs -f"
 echo ""
 echo "To stop all services, run:"
-echo "  $DOCKER_COMPOSE down"
+echo "  $DOCKER_COMPOSE ${COMPOSE_ARGS[*]} down"
 echo ""
 echo "Waiting for services to be healthy..."
 
@@ -114,11 +123,11 @@ if $DOCKER_COMPOSE ps | grep -q "Up"; then
     echo ""
     echo "You can now:"
     echo "  1. Open ${FRONTEND_ORIGIN} in your browser"
-    echo "  2. View logs: $DOCKER_COMPOSE logs -f"
-    echo "  3. Stop services: $DOCKER_COMPOSE down"
+    echo "  2. View logs: $DOCKER_COMPOSE ${COMPOSE_ARGS[*]} logs -f"
+    echo "  3. Stop services: $DOCKER_COMPOSE ${COMPOSE_ARGS[*]} down"
 else
     echo -e "${YELLOW}Services are starting... Check logs if you encounter issues:${NC}"
-    echo "  $DOCKER_COMPOSE logs -f"
+    echo "  $DOCKER_COMPOSE ${COMPOSE_ARGS[*]} logs -f"
 fi
 
 echo ""

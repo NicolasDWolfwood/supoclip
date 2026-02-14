@@ -49,6 +49,26 @@ class User(Base):
         nullable=False,
         server_default=text("'local'"),
     )
+    default_whisper_chunking_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        server_default=text("true"),
+    )
+    default_whisper_chunk_duration_seconds: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("1200"),
+    )
+    default_whisper_chunk_overlap_seconds: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("8"),
+    )
+    default_task_timeout_seconds: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        server_default=text("21600"),
+    )
     default_ai_provider: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

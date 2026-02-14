@@ -131,11 +131,6 @@ export function SettingsSectionFont({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-semibold text-black mb-1">Default Font Settings</h3>
-        <p className="text-sm text-gray-600">These defaults are applied to new video processing tasks.</p>
-      </div>
-
       <div className="space-y-2">
         <Label className="text-sm font-medium text-black flex items-center gap-2">
           <Type className="w-4 h-4" />

@@ -51,6 +51,16 @@ const DEFAULT_AI_MODELS = {
   zai: "glm-5",
 } as const satisfies Record<AiProvider, string>;
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
+const DEFAULT_WHISPER_CHUNKING_ENABLED = true;
+const DEFAULT_WHISPER_CHUNK_DURATION_SECONDS = 1200;
+const DEFAULT_WHISPER_CHUNK_OVERLAP_SECONDS = 8;
+const DEFAULT_TASK_TIMEOUT_SECONDS = 21600;
+const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
+const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
+const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
+const MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120;
+const MIN_TASK_TIMEOUT_SECONDS = 300;
+const MAX_TASK_TIMEOUT_SECONDS = 86400;
 
 function isAiProvider(value: unknown): value is AiProvider {
   return typeof value === "string" && AI_PROVIDERS.includes(value as AiProvider);
@@ -82,6 +92,33 @@ function hexToRgba(hex: string, alpha: number): string {
 
 function formatTextOption(option: string): string {
   return option.charAt(0).toUpperCase() + option.slice(1);
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function normalizeWhisperChunkDurationSecondsOnForm(value: unknown): number {
+  return clampInteger(
+    value,
+    DEFAULT_WHISPER_CHUNK_DURATION_SECONDS,
+    MIN_WHISPER_CHUNK_DURATION_SECONDS,
+    MAX_WHISPER_CHUNK_DURATION_SECONDS,
+  );
+}
+
+function normalizeWhisperChunkOverlapSecondsOnForm(value: unknown, chunkDurationSeconds: number): number {
+  const boundedByDuration = Math.max(MIN_WHISPER_CHUNK_OVERLAP_SECONDS, chunkDurationSeconds - 1);
+  const maxAllowed = Math.min(MAX_WHISPER_CHUNK_OVERLAP_SECONDS, boundedByDuration);
+  return clampInteger(value, DEFAULT_WHISPER_CHUNK_OVERLAP_SECONDS, MIN_WHISPER_CHUNK_OVERLAP_SECONDS, maxAllowed);
+}
+
+function normalizeTaskTimeoutSecondsOnForm(value: unknown, timeoutCapSeconds: number): number {
+  const maxAllowed = Math.max(MIN_TASK_TIMEOUT_SECONDS, Math.min(MAX_TASK_TIMEOUT_SECONDS, timeoutCapSeconds));
+  return clampInteger(value, DEFAULT_TASK_TIMEOUT_SECONDS, MIN_TASK_TIMEOUT_SECONDS, maxAllowed);
 }
 
 export default function Home() {
@@ -121,6 +158,11 @@ export default function Home() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
+  const [whisperChunkingEnabled, setWhisperChunkingEnabled] = useState(DEFAULT_WHISPER_CHUNKING_ENABLED);
+  const [whisperChunkDurationSeconds, setWhisperChunkDurationSeconds] = useState(DEFAULT_WHISPER_CHUNK_DURATION_SECONDS);
+  const [whisperChunkOverlapSeconds, setWhisperChunkOverlapSeconds] = useState(DEFAULT_WHISPER_CHUNK_OVERLAP_SECONDS);
+  const [taskTimeoutSeconds, setTaskTimeoutSeconds] = useState(DEFAULT_TASK_TIMEOUT_SECONDS);
+  const [taskTimeoutCapSeconds, setTaskTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
   const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODELS.openai);
 
@@ -201,6 +243,10 @@ export default function Home() {
             shadowOffsetY?: unknown;
             transitionsEnabled?: unknown;
             transcriptionProvider?: unknown;
+            whisperChunkingEnabled?: unknown;
+            whisperChunkDurationSeconds?: unknown;
+            whisperChunkOverlapSeconds?: unknown;
+            taskTimeoutSeconds?: unknown;
             aiProvider?: unknown;
             aiModel?: unknown;
           } = await response.json();
@@ -226,6 +272,19 @@ export default function Home() {
           if (savedTranscriptionProvider === "local" || savedTranscriptionProvider === "assemblyai") {
             setTranscriptionProvider(savedTranscriptionProvider);
           }
+          setWhisperChunkingEnabled(
+            typeof data.whisperChunkingEnabled === "boolean"
+              ? data.whisperChunkingEnabled
+              : DEFAULT_WHISPER_CHUNKING_ENABLED,
+          );
+          const normalizedChunkDuration = normalizeWhisperChunkDurationSecondsOnForm(data.whisperChunkDurationSeconds);
+          const normalizedChunkOverlap = normalizeWhisperChunkOverlapSecondsOnForm(
+            data.whisperChunkOverlapSeconds,
+            normalizedChunkDuration,
+          );
+          setWhisperChunkDurationSeconds(normalizedChunkDuration);
+          setWhisperChunkOverlapSeconds(normalizedChunkOverlap);
+          setTaskTimeoutSeconds(normalizeTaskTimeoutSecondsOnForm(data.taskTimeoutSeconds, taskTimeoutCapSeconds));
 
           const savedAiProvider = isAiProvider(data.aiProvider) ? data.aiProvider : undefined;
           if (savedAiProvider) {
@@ -243,6 +302,35 @@ export default function Home() {
 
     loadUserPreferences();
   }, [session?.user?.id]);
+
+  useEffect(() => {
+    const loadTranscriptionLimits = async () => {
+      if (!session?.user?.id) return;
+      try {
+        const response = await fetch(`${apiUrl}/tasks/transcription-settings`, {
+          headers: {
+            user_id: session.user.id,
+          },
+        });
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        const cap = clampInteger(
+          data.worker_timeout_cap_seconds,
+          MAX_TASK_TIMEOUT_SECONDS,
+          MIN_TASK_TIMEOUT_SECONDS,
+          MAX_TASK_TIMEOUT_SECONDS,
+        );
+        setTaskTimeoutCapSeconds(cap);
+        setTaskTimeoutSeconds((prev) => normalizeTaskTimeoutSecondsOnForm(prev, cap));
+      } catch (limitError) {
+        console.error("Failed to load transcription limits:", limitError);
+      }
+    };
+
+    void loadTranscriptionLimits();
+  }, [apiUrl, session?.user?.id]);
 
   // Load latest task
   useEffect(() => {
@@ -426,6 +514,13 @@ export default function Home() {
         videoUrl = uploadResult.video_path;
       }
 
+      const normalizedChunkDuration = normalizeWhisperChunkDurationSecondsOnForm(whisperChunkDurationSeconds);
+      const normalizedChunkOverlap = normalizeWhisperChunkOverlapSecondsOnForm(
+        whisperChunkOverlapSeconds,
+        normalizedChunkDuration,
+      );
+      const normalizedTaskTimeoutSeconds = normalizeTaskTimeoutSecondsOnForm(taskTimeoutSeconds, taskTimeoutCapSeconds);
+
       const startResponse = await fetch(`${apiUrl}/tasks/`, {
         method: 'POST',
         headers: {
@@ -457,6 +552,10 @@ export default function Home() {
           },
           transcription_options: {
             provider: transcriptionProvider,
+            whisper_chunking_enabled: whisperChunkingEnabled,
+            whisper_chunk_duration_seconds: normalizedChunkDuration,
+            whisper_chunk_overlap_seconds: normalizedChunkOverlap,
+            task_timeout_seconds: normalizedTaskTimeoutSeconds,
           },
           ai_options: {
             provider: aiProvider,

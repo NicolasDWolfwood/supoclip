@@ -56,7 +56,12 @@ Backend compatibility behavior:
 - z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
 - legacy Whisper var: `WHISPER_MODEL`
+- local long-form Whisper vars:
+  - `WHISPER_CHUNKING_ENABLED`
+  - `WHISPER_CHUNK_DURATION_SECONDS`
+  - `WHISPER_CHUNK_OVERLAP_SECONDS`
 - transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)
+- worker timeout var: `WORKER_JOB_TIMEOUT_SECONDS` (increase for multi-hour jobs)
 - MediaPipe Tasks face model vars:
   - `MEDIAPIPE_FACE_MODEL_PATH`
   - `MEDIAPIPE_FACE_MODEL_URL`

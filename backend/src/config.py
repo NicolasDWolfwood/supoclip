@@ -5,11 +5,17 @@ load_dotenv()
 
 class Config:
     def __init__(self):
+        def env_bool(name: str, default: str = "false") -> bool:
+            return (os.getenv(name, default) or default).strip().lower() in {"1", "true", "yes", "on"}
+
         # Backward compatible env handling:
         # - prefer the documented vars (LLM, WHISPER_MODEL_SIZE)
         # - still accept legacy names used in older revisions
         self.whisper_model = os.getenv("WHISPER_MODEL_SIZE") or os.getenv("WHISPER_MODEL", "medium")
         self.whisper_device = (os.getenv("WHISPER_DEVICE", "auto") or "auto").strip().lower()
+        self.whisper_chunking_enabled = env_bool("WHISPER_CHUNKING_ENABLED", "true")
+        self.whisper_chunk_duration_seconds = int(os.getenv("WHISPER_CHUNK_DURATION_SECONDS", "1200"))
+        self.whisper_chunk_overlap_seconds = int(os.getenv("WHISPER_CHUNK_OVERLAP_SECONDS", "8"))
         self.transcription_provider = (os.getenv("TRANSCRIPTION_PROVIDER", "local") or "local").strip().lower()
         self.llm = os.getenv("LLM") or os.getenv("LLM_MODEL") or "openai:gpt-5-mini"
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -32,6 +38,7 @@ class Config:
         self.redis_host = os.getenv("REDIS_HOST", "localhost")
         self.redis_port = int(os.getenv("REDIS_PORT", "6379"))
         self.worker_max_jobs = int(os.getenv("WORKER_MAX_JOBS", "2"))
+        self.worker_job_timeout_seconds = int(os.getenv("WORKER_JOB_TIMEOUT_SECONDS", "21600"))
         self.arq_queue_name = (os.getenv("ARQ_QUEUE_NAME", "arq:queue:local") or "arq:queue:local").strip()
         self.arq_local_queue_name = (os.getenv("ARQ_QUEUE_NAME_LOCAL", "arq:queue:local") or "arq:queue:local").strip()
         self.arq_assembly_queue_name = (os.getenv("ARQ_QUEUE_NAME_ASSEMBLY", "arq:queue:assembly") or "arq:queue:assembly").strip()
