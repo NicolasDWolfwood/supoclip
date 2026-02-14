@@ -55,6 +55,11 @@ class User(Base):
         server_default=text("'openai'"),
     )
     default_ai_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    default_zai_key_routing_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        server_default=text("'auto'"),
+    )
 
     # Relationships
     tasks: Mapped[List["Task"]] = relationship("Task", back_populates="user", cascade="all, delete-orphan")

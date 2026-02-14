@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from typing import Optional, Dict, Any, List
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 LLM_PROVIDER_COLUMNS = {
@@ -13,6 +14,8 @@ LLM_PROVIDER_COLUMNS = {
     "anthropic": "anthropic_api_key_encrypted",
     "zai": "zai_api_key_encrypted",
 }
+SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
+SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 
 
 class TaskRepository:
@@ -310,6 +313,202 @@ class TaskRepository:
         if (result.rowcount or 0) == 0:
             raise ValueError(f"User {user_id} not found")
         await db.commit()
+
+    @staticmethod
+    async def get_user_ai_key_profile_encrypted(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+        profile_name: str,
+    ) -> Optional[str]:
+        normalized_provider = (provider or "").strip().lower()
+        normalized_profile = (profile_name or "").strip().lower()
+        if normalized_provider not in LLM_PROVIDER_COLUMNS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
+            raise ValueError(f"Unsupported key profile: {profile_name}")
+        result = await db.execute(
+            text(
+                """
+                SELECT api_key_encrypted
+                FROM user_ai_key_profiles
+                WHERE user_id = :user_id
+                  AND provider = :provider
+                  AND profile_name = :profile_name
+                  AND enabled = true
+                """
+            ),
+            {
+                "user_id": user_id,
+                "provider": normalized_provider,
+                "profile_name": normalized_profile,
+            },
+        )
+        row = result.fetchone()
+        if not row:
+            return None
+        return row.api_key_encrypted
+
+    @staticmethod
+    async def list_user_ai_key_profiles(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+    ) -> Dict[str, bool]:
+        normalized_provider = (provider or "").strip().lower()
+        if normalized_provider not in LLM_PROVIDER_COLUMNS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        result = await db.execute(
+            text(
+                """
+                SELECT profile_name, api_key_encrypted
+                FROM user_ai_key_profiles
+                WHERE user_id = :user_id
+                  AND provider = :provider
+                  AND enabled = true
+                """
+            ),
+            {
+                "user_id": user_id,
+                "provider": normalized_provider,
+            },
+        )
+        presence = {name: False for name in SUPPORTED_ZAI_KEY_PROFILES}
+        for row in result.fetchall():
+            profile_name = (getattr(row, "profile_name", "") or "").strip().lower()
+            if profile_name in presence:
+                presence[profile_name] = bool(getattr(row, "api_key_encrypted", None))
+        return presence
+
+    @staticmethod
+    async def set_user_ai_key_profile(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+        profile_name: str,
+        encrypted_key: str,
+    ) -> None:
+        normalized_provider = (provider or "").strip().lower()
+        normalized_profile = (profile_name or "").strip().lower()
+        if normalized_provider not in LLM_PROVIDER_COLUMNS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
+            raise ValueError(f"Unsupported key profile: {profile_name}")
+        result = await db.execute(
+            text(
+                """
+                INSERT INTO user_ai_key_profiles (
+                    id,
+                    user_id,
+                    provider,
+                    profile_name,
+                    api_key_encrypted,
+                    enabled,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :user_id,
+                    :provider,
+                    :profile_name,
+                    :encrypted_key,
+                    true,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (user_id, provider, profile_name)
+                DO UPDATE SET
+                    api_key_encrypted = EXCLUDED.api_key_encrypted,
+                    enabled = true,
+                    updated_at = NOW()
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "provider": normalized_provider,
+                "profile_name": normalized_profile,
+                "encrypted_key": encrypted_key,
+            },
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError("Failed to save key profile")
+        await db.commit()
+
+    @staticmethod
+    async def clear_user_ai_key_profile(
+        db: AsyncSession,
+        user_id: str,
+        provider: str,
+        profile_name: str,
+    ) -> None:
+        normalized_provider = (provider or "").strip().lower()
+        normalized_profile = (profile_name or "").strip().lower()
+        if normalized_provider not in LLM_PROVIDER_COLUMNS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
+            raise ValueError(f"Unsupported key profile: {profile_name}")
+        await db.execute(
+            text(
+                """
+                DELETE FROM user_ai_key_profiles
+                WHERE user_id = :user_id
+                  AND provider = :provider
+                  AND profile_name = :profile_name
+                """
+            ),
+            {
+                "user_id": user_id,
+                "provider": normalized_provider,
+                "profile_name": normalized_profile,
+            },
+        )
+        await db.commit()
+
+    @staticmethod
+    async def get_user_zai_routing_mode(db: AsyncSession, user_id: str) -> str:
+        result = await db.execute(
+            text(
+                """
+                SELECT default_zai_key_routing_mode
+                FROM users
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            raise ValueError(f"User {user_id} not found")
+        mode = (getattr(row, "default_zai_key_routing_mode", "auto") or "auto").strip().lower()
+        if mode not in SUPPORTED_ZAI_ROUTING_MODES:
+            return "auto"
+        return mode
+
+    @staticmethod
+    async def set_user_zai_routing_mode(db: AsyncSession, user_id: str, routing_mode: str) -> str:
+        normalized_mode = (routing_mode or "").strip().lower()
+        if normalized_mode not in SUPPORTED_ZAI_ROUTING_MODES:
+            raise ValueError(f"Unsupported zai routing mode: {routing_mode}")
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET default_zai_key_routing_mode = :routing_mode,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {
+                "user_id": user_id,
+                "routing_mode": normalized_mode,
+            },
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+        return normalized_mode
 
     @staticmethod
     async def user_exists(db: AsyncSession, user_id: str) -> bool:

@@ -49,6 +49,7 @@ model User {
   default_transcription_provider String? @default("local") @db.VarChar(20)
   default_ai_provider String? @default("openai") @db.VarChar(20)
   default_ai_model String? @db.VarChar(100)
+  default_zai_key_routing_mode String? @default("auto") @db.VarChar(20)
 
   // Relationships
   tasks         Task[]

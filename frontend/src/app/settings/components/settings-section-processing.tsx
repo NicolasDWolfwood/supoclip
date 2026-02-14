@@ -2,7 +2,7 @@ import { Bot, Cloud, Cpu, KeyRound, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { AiProvider, TranscriptionProvider } from "../settings-section-types";
+import type { AiProvider, TranscriptionProvider, ZaiRoutingMode } from "../settings-section-types";
 import { AI_PROVIDERS, DEFAULT_AI_MODELS } from "../settings-section-types";
 
 interface SettingsSectionProcessingProps {
@@ -28,6 +28,11 @@ interface SettingsSectionProcessingProps {
   aiKeyError: string | null;
   aiModelStatus: string | null;
   aiModelError: string | null;
+  selectedZaiKeyProfile: "subscription" | "metered";
+  zaiRoutingMode: ZaiRoutingMode;
+  zaiProfileApiKey: string;
+  hasSavedZaiSubscriptionKey: boolean;
+  hasSavedZaiMeteredKey: boolean;
   onTranscriptionProviderChange: (provider: TranscriptionProvider) => void;
   onAiProviderChange: (provider: AiProvider) => void;
   onAiModelChange: (model: string) => void;
@@ -38,6 +43,11 @@ interface SettingsSectionProcessingProps {
   onSaveAiProviderKey: () => void;
   onDeleteAiProviderKey: () => void;
   onRefreshAiModels: () => void;
+  onSelectedZaiKeyProfileChange: (profile: "subscription" | "metered") => void;
+  onZaiRoutingModeChange: (mode: ZaiRoutingMode) => void;
+  onZaiProfileApiKeyChange: (value: string) => void;
+  onSaveZaiProfileKey: () => void;
+  onDeleteZaiProfileKey: () => void;
 }
 
 export function SettingsSectionProcessing({
@@ -63,6 +73,11 @@ export function SettingsSectionProcessing({
   aiKeyError,
   aiModelStatus,
   aiModelError,
+  selectedZaiKeyProfile,
+  zaiRoutingMode,
+  zaiProfileApiKey,
+  hasSavedZaiSubscriptionKey,
+  hasSavedZaiMeteredKey,
   onTranscriptionProviderChange,
   onAiProviderChange,
   onAiModelChange,
@@ -73,6 +88,11 @@ export function SettingsSectionProcessing({
   onSaveAiProviderKey,
   onDeleteAiProviderKey,
   onRefreshAiModels,
+  onSelectedZaiKeyProfileChange,
+  onZaiRoutingModeChange,
+  onZaiProfileApiKeyChange,
+  onSaveZaiProfileKey,
+  onDeleteZaiProfileKey,
 }: SettingsSectionProcessingProps) {
   return (
     <div className="space-y-4">
@@ -197,52 +217,139 @@ export function SettingsSectionProcessing({
           </SelectContent>
         </Select>
 
-        <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
-          <label htmlFor="ai-provider-key" className="text-xs font-medium text-black">
-            {aiProvider.toUpperCase()} API Key
-          </label>
-          <Input
-            id="ai-provider-key"
-            type="password"
-            value={aiApiKey}
-            onChange={(event) => onAiApiKeyChange(event.target.value ?? "")}
-            placeholder={
-              hasSavedAiKey
-                ? `Saved ${aiProvider} key present (enter new key to replace)`
-                : `Paste your ${aiProvider} API key`
-            }
-            disabled={isSaving || isSavingAiKey}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={isSaving || isSavingAiKey || !aiApiKey.trim()}
-              onClick={onSaveAiProviderKey}
+        {aiProvider === "zai" ? (
+          <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+            <label className="text-xs font-medium text-black">z.ai Key Routing</label>
+            <Select
+              value={zaiRoutingMode}
+              onValueChange={(value) => onZaiRoutingModeChange(value as ZaiRoutingMode)}
+              disabled={isSaving || isSavingAiKey}
             >
-              {isSavingAiKey ? "Saving..." : "Save Key"}
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={isSaving || isSavingAiKey || !hasSavedAiKey}
-              onClick={onDeleteAiProviderKey}
-            >
-              Remove Saved Key
-            </Button>
-            <span className="text-xs text-gray-500">
-              {hasSavedAiKey
-                ? "Saved key available"
-                : hasEnvAiFallback
-                  ? "No saved key; using backend env fallback"
-                  : "No key configured"}
-            </span>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="Select routing mode" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto (subscription then metered)</SelectItem>
+                <SelectItem value="subscription">Subscription only</SelectItem>
+                <SelectItem value="metered">Metered only</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-gray-500">
+              Auto retries with your metered key if the subscription key is out of balance/package.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Profile to edit</label>
+                <Select
+                  value={selectedZaiKeyProfile}
+                  onValueChange={(value) => onSelectedZaiKeyProfileChange(value as "subscription" | "metered")}
+                  disabled={isSaving || isSavingAiKey}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select profile" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="subscription">Subscription</SelectItem>
+                    <SelectItem value="metered">Metered</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Saved profile keys</label>
+                <p className="text-xs text-gray-600">
+                  Subscription: {hasSavedZaiSubscriptionKey ? "yes" : "no"} | Metered: {hasSavedZaiMeteredKey ? "yes" : "no"}
+                </p>
+                {!hasSavedZaiSubscriptionKey && !hasSavedZaiMeteredKey && hasEnvAiFallback && (
+                  <p className="text-xs text-gray-500">No z.ai profile key saved; backend env fallback is available.</p>
+                )}
+              </div>
+            </div>
+            <label htmlFor="zai-profile-key" className="text-xs font-medium text-black">
+              z.ai {selectedZaiKeyProfile} API Key
+            </label>
+            <Input
+              id="zai-profile-key"
+              type="password"
+              value={zaiProfileApiKey}
+              onChange={(event) => onZaiProfileApiKeyChange(event.target.value ?? "")}
+              placeholder={`Paste your z.ai ${selectedZaiKeyProfile} key`}
+              disabled={isSaving || isSavingAiKey}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || !zaiProfileApiKey.trim()}
+                onClick={onSaveZaiProfileKey}
+              >
+                {isSavingAiKey ? "Saving..." : "Save Profile Key"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={
+                  isSaving ||
+                  isSavingAiKey ||
+                  !(selectedZaiKeyProfile === "subscription" ? hasSavedZaiSubscriptionKey : hasSavedZaiMeteredKey)
+                }
+                onClick={onDeleteZaiProfileKey}
+              >
+                Remove Profile Key
+              </Button>
+            </div>
+            {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
+            {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
           </div>
-          {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
-          {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
-        </div>
+        ) : (
+          <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+            <label htmlFor="ai-provider-key" className="text-xs font-medium text-black">
+              {aiProvider.toUpperCase()} API Key
+            </label>
+            <Input
+              id="ai-provider-key"
+              type="password"
+              value={aiApiKey}
+              onChange={(event) => onAiApiKeyChange(event.target.value ?? "")}
+              placeholder={
+                hasSavedAiKey
+                  ? `Saved ${aiProvider} key present (enter new key to replace)`
+                  : `Paste your ${aiProvider} API key`
+              }
+              disabled={isSaving || isSavingAiKey}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || !aiApiKey.trim()}
+                onClick={onSaveAiProviderKey}
+              >
+                {isSavingAiKey ? "Saving..." : "Save Key"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || !hasSavedAiKey}
+                onClick={onDeleteAiProviderKey}
+              >
+                Remove Saved Key
+              </Button>
+              <span className="text-xs text-gray-500">
+                {hasSavedAiKey
+                  ? "Saved key available"
+                  : hasEnvAiFallback
+                    ? "No saved key; using backend env fallback"
+                    : "No key configured"}
+              </span>
+            </div>
+            {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
+            {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
+          </div>
+        )}
 
         <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
           <label htmlFor="ai-provider-model" className="text-xs font-medium text-black">

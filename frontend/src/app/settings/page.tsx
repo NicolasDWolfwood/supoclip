@@ -37,12 +37,14 @@ import {
   isAiProvider,
   isSettingsSection,
   isTranscriptionProvider,
+  isZaiRoutingMode,
   normalizeFontSize,
   SETTINGS_SECTION_META,
   SETTINGS_SECTIONS,
   type AiProvider,
   type SettingsSection,
   type UserPreferences,
+  type ZaiRoutingMode,
 } from "./settings-section-types";
 
 interface SavePreferencesOptions {
@@ -82,6 +84,16 @@ function SettingsPageContent() {
     anthropic: "",
     zai: "",
   });
+  const [zaiProfileApiKeys, setZaiProfileApiKeys] = useState<Record<"subscription" | "metered", string>>({
+    subscription: "",
+    metered: "",
+  });
+  const [hasSavedZaiProfileKeys, setHasSavedZaiProfileKeys] = useState<Record<"subscription" | "metered", boolean>>({
+    subscription: false,
+    metered: false,
+  });
+  const [selectedZaiKeyProfile, setSelectedZaiKeyProfile] = useState<"subscription" | "metered">("subscription");
+  const [zaiRoutingMode, setZaiRoutingMode] = useState<ZaiRoutingMode>("auto");
   const [hasSavedAiKeys, setHasSavedAiKeys] = useState<Record<AiProvider, boolean>>({
     openai: false,
     google: false,
@@ -129,7 +141,12 @@ function SettingsPageContent() {
   );
 
   const hasAiKeyForSelectedProvider =
-    hasSavedAiKeys[preferencesDraft.aiProvider] || hasEnvAiFallback[preferencesDraft.aiProvider];
+    preferencesDraft.aiProvider === "zai"
+      ? hasSavedAiKeys.zai ||
+        hasSavedZaiProfileKeys.subscription ||
+        hasSavedZaiProfileKeys.metered ||
+        hasEnvAiFallback.zai
+      : hasSavedAiKeys[preferencesDraft.aiProvider] || hasEnvAiFallback[preferencesDraft.aiProvider];
 
   const sectionNavItems = useMemo(
     () => SETTINGS_SECTIONS.map((section) => ({ id: section, ...SETTINGS_SECTION_META[section] })),
@@ -191,7 +208,12 @@ function SettingsPageContent() {
       const requestId = latestAiModelsRequestRef.current;
 
       try {
-        const response = await fetch(`${apiUrl}/tasks/ai-settings/${provider}/models`, {
+        const params = new URLSearchParams();
+        if (provider === "zai") {
+          params.set("routing_mode", zaiRoutingMode);
+        }
+        const modelsUrl = `${apiUrl}/tasks/ai-settings/${provider}/models${params.toString() ? `?${params.toString()}` : ""}`;
+        const response = await fetch(modelsUrl, {
           headers: {
             user_id: session.user.id,
           },
@@ -251,8 +273,47 @@ function SettingsPageContent() {
         }
       }
     },
-    [apiUrl, session?.user?.id],
+    [apiUrl, session?.user?.id, zaiRoutingMode],
   );
+
+  const refreshAiSettings = useCallback(async (): Promise<void> => {
+    if (!session?.user?.id) {
+      return;
+    }
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings`, {
+        headers: {
+          user_id: session.user.id,
+        },
+      });
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+      setHasSavedAiKeys({
+        openai: Boolean(data.has_openai_key),
+        google: Boolean(data.has_google_key),
+        anthropic: Boolean(data.has_anthropic_key),
+        zai: Boolean(data.has_zai_key),
+      });
+      setHasSavedZaiProfileKeys({
+        subscription: Boolean(data.has_zai_subscription_key),
+        metered: Boolean(data.has_zai_metered_key),
+      });
+      if (typeof data.zai_routing_mode === "string" && isZaiRoutingMode(data.zai_routing_mode)) {
+        setZaiRoutingMode(data.zai_routing_mode);
+      }
+      setHasEnvAiFallback({
+        openai: Boolean(data.has_env_openai),
+        google: Boolean(data.has_env_google),
+        anthropic: Boolean(data.has_env_anthropic),
+        zai: Boolean(data.has_env_zai),
+      });
+    } catch (loadError) {
+      console.error("Failed to load AI settings:", loadError);
+    }
+  }, [apiUrl, session?.user?.id]);
 
   const savePreferences = useCallback(
     async (options?: SavePreferencesOptions): Promise<boolean> => {
@@ -429,6 +490,7 @@ function SettingsPageContent() {
         setHasSavedAiKeys((prev) => ({ ...prev, [provider]: true }));
         setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
         setAiKeyStatus(`${provider} key saved.`);
+        void refreshAiSettings();
         void fetchAiModels(provider);
         return true;
       } catch (saveError) {
@@ -439,7 +501,123 @@ function SettingsPageContent() {
         setIsSavingAiKey(false);
       }
     },
-    [apiUrl, fetchAiModels, session?.user?.id],
+    [apiUrl, fetchAiModels, refreshAiSettings, session?.user?.id],
+  );
+
+  const saveZaiProfileKey = useCallback(
+    async (profile: "subscription" | "metered", key: string): Promise<boolean> => {
+      const trimmed = key.trim();
+      if (!trimmed) {
+        setAiKeyError(`z.ai ${profile} key cannot be empty.`);
+        return false;
+      }
+
+      setIsSavingAiKey(true);
+      setAiKeyError(null);
+      setAiKeyStatus(null);
+
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings/zai/profiles/${profile}/key`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            user_id: session?.user?.id || "",
+          },
+          body: JSON.stringify({ api_key: trimmed }),
+        });
+        const responseData = await response.json().catch(() => ({} as { detail?: string }));
+        if (!response.ok) {
+          throw new Error(responseData?.detail || `Failed to save z.ai ${profile} key`);
+        }
+
+        setHasSavedZaiProfileKeys((prev) => ({ ...prev, [profile]: true }));
+        setHasSavedAiKeys((prev) => ({ ...prev, zai: true }));
+        setZaiProfileApiKeys((prev) => ({ ...prev, [profile]: "" }));
+        setAiKeyStatus(`z.ai ${profile} key saved.`);
+        void refreshAiSettings();
+        void fetchAiModels("zai");
+        return true;
+      } catch (saveError) {
+        const message = saveError instanceof Error ? saveError.message : `Failed to save z.ai ${profile} key`;
+        setAiKeyError(message);
+        return false;
+      } finally {
+        setIsSavingAiKey(false);
+      }
+    },
+    [apiUrl, fetchAiModels, refreshAiSettings, session?.user?.id],
+  );
+
+  const deleteZaiProfileKey = useCallback(
+    async (profile: "subscription" | "metered"): Promise<void> => {
+      setIsSavingAiKey(true);
+      setAiKeyError(null);
+      setAiKeyStatus(null);
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings/zai/profiles/${profile}/key`, {
+          method: "DELETE",
+          headers: {
+            user_id: session?.user?.id || "",
+          },
+        });
+        const responseData = await response.json().catch(() => ({} as { detail?: string }));
+        if (!response.ok) {
+          throw new Error(responseData?.detail || `Failed to remove z.ai ${profile} key`);
+        }
+
+        setHasSavedZaiProfileKeys((prev) => ({ ...prev, [profile]: false }));
+        setZaiProfileApiKeys((prev) => ({ ...prev, [profile]: "" }));
+        setAiKeyStatus(`z.ai ${profile} key removed.`);
+        void refreshAiSettings();
+      } catch (deleteError) {
+        const message = deleteError instanceof Error ? deleteError.message : `Failed to remove z.ai ${profile} key`;
+        setAiKeyError(message);
+      } finally {
+        setIsSavingAiKey(false);
+      }
+    },
+    [apiUrl, refreshAiSettings, session?.user?.id],
+  );
+
+  const saveZaiRoutingMode = useCallback(
+    async (routingMode: ZaiRoutingMode): Promise<boolean> => {
+      setIsSavingAiKey(true);
+      setAiKeyError(null);
+      setAiKeyStatus(null);
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings/zai/routing-mode`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            user_id: session?.user?.id || "",
+          },
+          body: JSON.stringify({ routing_mode: routingMode }),
+        });
+        const responseData = await response.json().catch(() => ({} as { detail?: string; routing_mode?: string }));
+        if (!response.ok) {
+          throw new Error(responseData?.detail || "Failed to save z.ai routing mode");
+        }
+        const returnedMode = typeof responseData.routing_mode === "string" ? responseData.routing_mode : routingMode;
+        if (isZaiRoutingMode(returnedMode)) {
+          setZaiRoutingMode(returnedMode);
+        } else {
+          setZaiRoutingMode(routingMode);
+        }
+        setAiKeyStatus(`z.ai routing mode saved: ${routingMode}.`);
+        void refreshAiSettings();
+        if (preferencesDraft.aiProvider === "zai") {
+          void fetchAiModels("zai");
+        }
+        return true;
+      } catch (saveError) {
+        const message = saveError instanceof Error ? saveError.message : "Failed to save z.ai routing mode";
+        setAiKeyError(message);
+        return false;
+      } finally {
+        setIsSavingAiKey(false);
+      }
+    },
+    [apiUrl, fetchAiModels, preferencesDraft.aiProvider, refreshAiSettings, session?.user?.id],
   );
 
   const deleteAiProviderKey = useCallback(
@@ -464,6 +642,7 @@ function SettingsPageContent() {
         setHasSavedAiKeys((prev) => ({ ...prev, [provider]: false }));
         setAiApiKeys((prev) => ({ ...prev, [provider]: "" }));
         setAiKeyStatus(`${provider} key removed.`);
+        void refreshAiSettings();
 
         if (!hasEnvAiFallback[provider]) {
           setAiModelOptions((prev) => ({ ...prev, [provider]: FALLBACK_AI_MODEL_OPTIONS[provider] }));
@@ -480,7 +659,7 @@ function SettingsPageContent() {
         setIsSavingAiKey(false);
       }
     },
-    [apiUrl, hasEnvAiFallback, preferencesDraft.aiProvider, session?.user?.id],
+    [apiUrl, hasEnvAiFallback, preferencesDraft.aiProvider, refreshAiSettings, session?.user?.id],
   );
 
   const handleFontUpload = useCallback(
@@ -632,38 +811,8 @@ function SettingsPageContent() {
     if (!session?.user?.id) {
       return;
     }
-
-    const loadAiSettings = async () => {
-      try {
-        const response = await fetch(`${apiUrl}/tasks/ai-settings`, {
-          headers: {
-            user_id: session.user.id,
-          },
-        });
-        if (!response.ok) {
-          return;
-        }
-
-        const data = await response.json();
-        setHasSavedAiKeys({
-          openai: Boolean(data.has_openai_key),
-          google: Boolean(data.has_google_key),
-          anthropic: Boolean(data.has_anthropic_key),
-          zai: Boolean(data.has_zai_key),
-        });
-        setHasEnvAiFallback({
-          openai: Boolean(data.has_env_openai),
-          google: Boolean(data.has_env_google),
-          anthropic: Boolean(data.has_env_anthropic),
-          zai: Boolean(data.has_env_zai),
-        });
-      } catch (loadError) {
-        console.error("Failed to load AI settings:", loadError);
-      }
-    };
-
-    void loadAiSettings();
-  }, [apiUrl, session?.user?.id]);
+    void refreshAiSettings();
+  }, [refreshAiSettings, session?.user?.id]);
 
   useEffect(() => {
     if (!session?.user?.id) {
@@ -671,7 +820,10 @@ function SettingsPageContent() {
     }
 
     const provider = preferencesDraft.aiProvider;
-    const hasProviderKey = hasSavedAiKeys[provider] || hasEnvAiFallback[provider];
+    const hasProviderKey =
+      provider === "zai"
+        ? hasSavedAiKeys.zai || hasSavedZaiProfileKeys.subscription || hasSavedZaiProfileKeys.metered || hasEnvAiFallback.zai
+        : hasSavedAiKeys[provider] || hasEnvAiFallback[provider];
     if (!hasProviderKey) {
       setAiModelOptions((prev) => ({ ...prev, [provider]: FALLBACK_AI_MODEL_OPTIONS[provider] }));
       setHasLoadedAiModels((prev) => ({ ...prev, [provider]: false }));
@@ -681,7 +833,16 @@ function SettingsPageContent() {
     }
 
     void fetchAiModels(provider, { showStatus: false });
-  }, [fetchAiModels, hasEnvAiFallback, hasSavedAiKeys, preferencesDraft.aiProvider, session?.user?.id]);
+  }, [
+    fetchAiModels,
+    hasEnvAiFallback,
+    hasSavedAiKeys,
+    hasSavedZaiProfileKeys.metered,
+    hasSavedZaiProfileKeys.subscription,
+    preferencesDraft.aiProvider,
+    session?.user?.id,
+    zaiRoutingMode,
+  ]);
 
   useEffect(() => {
     if (!isDirty || isSavingPreferences) {
@@ -916,6 +1077,11 @@ function SettingsPageContent() {
                 aiKeyError={aiKeyError}
                 aiModelStatus={aiModelStatus}
                 aiModelError={aiModelError}
+                selectedZaiKeyProfile={selectedZaiKeyProfile}
+                zaiRoutingMode={zaiRoutingMode}
+                zaiProfileApiKey={zaiProfileApiKeys[selectedZaiKeyProfile]}
+                hasSavedZaiSubscriptionKey={hasSavedZaiProfileKeys.subscription}
+                hasSavedZaiMeteredKey={hasSavedZaiProfileKeys.metered}
                 onTranscriptionProviderChange={(provider) => {
                   if (isTranscriptionProvider(provider)) {
                     setPreferencesDraft((prev) => ({ ...prev, transcriptionProvider: provider }));
@@ -968,6 +1134,23 @@ function SettingsPageContent() {
                 }}
                 onRefreshAiModels={() => {
                   void fetchAiModels(preferencesDraft.aiProvider);
+                }}
+                onSelectedZaiKeyProfileChange={setSelectedZaiKeyProfile}
+                onZaiRoutingModeChange={(mode) => {
+                  if (!isZaiRoutingMode(mode)) {
+                    return;
+                  }
+                  setZaiRoutingMode(mode);
+                  void saveZaiRoutingMode(mode);
+                }}
+                onZaiProfileApiKeyChange={(value) => {
+                  setZaiProfileApiKeys((prev) => ({ ...prev, [selectedZaiKeyProfile]: value }));
+                }}
+                onSaveZaiProfileKey={() => {
+                  void saveZaiProfileKey(selectedZaiKeyProfile, zaiProfileApiKeys[selectedZaiKeyProfile]);
+                }}
+                onDeleteZaiProfileKey={() => {
+                  void deleteZaiProfileKey(selectedZaiKeyProfile);
                 }}
               />
             )}

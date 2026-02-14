@@ -52,6 +52,8 @@ Backend compatibility behavior:
 - preferred model var: `LLM`
 - legacy model var: `LLM_MODEL`
 - AI provider keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`
+- z.ai requests use Coding API endpoint: `https://api.z.ai/api/coding/paas/v4`
+- z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
 - legacy Whisper var: `WHISPER_MODEL`
 - transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)
@@ -67,6 +69,10 @@ Backend is started by `docker-compose.yml` with:
 When running locally or via Docker:
 - Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 - AI model discovery: `GET /tasks/ai-settings/{provider}/models` (uses saved user key first, then env fallback)
+- z.ai profile keys:
+  - `PUT /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
+  - `DELETE /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
+  - `PUT /tasks/ai-settings/zai/routing-mode` (`auto`, `subscription`, `metered`)
 
 ## Fonts
 

@@ -2,7 +2,7 @@
 Task service - orchestrates task creation and processing workflow.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Dict, Any, Optional, Callable, Awaitable, List, Tuple
 import logging
 import asyncio
 
@@ -23,6 +23,8 @@ DEFAULT_AI_MODELS = {
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
 }
+SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
+SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
 
 
 class TaskService:
@@ -89,6 +91,156 @@ class TaskService:
         logger.info(f"Created task {task_id} for user {user_id}")
         return task_id
 
+    @staticmethod
+    def _env_ai_key_for_provider(provider: str) -> Optional[str]:
+        normalized_provider = (provider or "").strip().lower()
+        if normalized_provider == "openai":
+            return (config.openai_api_key or "").strip() or None
+        if normalized_provider == "google":
+            return (config.google_api_key or "").strip() or None
+        if normalized_provider == "anthropic":
+            return (config.anthropic_api_key or "").strip() or None
+        if normalized_provider == "zai":
+            return (config.zai_api_key or "").strip() or None
+        return None
+
+    @staticmethod
+    def _normalize_zai_routing_mode(value: Optional[str]) -> str:
+        normalized = (value or "").strip().lower()
+        if normalized not in SUPPORTED_ZAI_ROUTING_MODES:
+            return "auto"
+        return normalized
+
+    async def get_user_zai_routing_mode(self, user_id: str) -> str:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        return await self.task_repo.get_user_zai_routing_mode(self.db, user_id)
+
+    async def set_user_zai_routing_mode(self, user_id: str, routing_mode: str) -> str:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        normalized_mode = self._normalize_zai_routing_mode(routing_mode)
+        return await self.task_repo.set_user_zai_routing_mode(self.db, user_id, normalized_mode)
+
+    async def save_user_ai_profile_key(
+        self,
+        user_id: str,
+        provider: str,
+        profile_name: str,
+        api_key: str,
+    ) -> None:
+        normalized_provider = (provider or "").strip().lower()
+        normalized_profile = (profile_name or "").strip().lower()
+        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
+            raise ValueError(f"Unsupported key profile: {profile_name}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        encrypted = self.secret_service.encrypt(api_key)
+        await self.task_repo.set_user_ai_key_profile(
+            self.db,
+            user_id,
+            normalized_provider,
+            normalized_profile,
+            encrypted,
+        )
+
+    async def clear_user_ai_profile_key(
+        self,
+        user_id: str,
+        provider: str,
+        profile_name: str,
+    ) -> None:
+        normalized_provider = (provider or "").strip().lower()
+        normalized_profile = (profile_name or "").strip().lower()
+        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
+            raise ValueError(f"Unsupported key profile: {profile_name}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        await self.task_repo.clear_user_ai_key_profile(
+            self.db,
+            user_id,
+            normalized_provider,
+            normalized_profile,
+        )
+
+    async def get_effective_user_ai_api_key_attempts(
+        self,
+        user_id: str,
+        provider: str,
+        zai_routing_mode: Optional[str] = None,
+    ) -> Tuple[List[Dict[str, str]], Optional[str]]:
+        normalized_provider = (provider or "").strip().lower()
+        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+
+        attempts: List[Dict[str, str]] = []
+        seen_keys: set[str] = set()
+
+        def append_attempt(label: str, key: Optional[str]) -> None:
+            normalized_key = (key or "").strip()
+            if not normalized_key:
+                return
+            if normalized_key in seen_keys:
+                return
+            seen_keys.add(normalized_key)
+            attempts.append({"label": label, "key": normalized_key})
+
+        if normalized_provider != "zai":
+            stored_encrypted_ai_key = await self.task_repo.get_user_encrypted_ai_key(
+                self.db,
+                user_id,
+                normalized_provider,
+            )
+            if stored_encrypted_ai_key:
+                append_attempt("saved", self.secret_service.decrypt(stored_encrypted_ai_key))
+            append_attempt("env", self._env_ai_key_for_provider(normalized_provider))
+            return attempts, None
+
+        if zai_routing_mode is None:
+            resolved_mode = await self.task_repo.get_user_zai_routing_mode(self.db, user_id)
+        else:
+            resolved_mode = self._normalize_zai_routing_mode(zai_routing_mode)
+
+        subscription_key_encrypted = await self.task_repo.get_user_ai_key_profile_encrypted(
+            self.db,
+            user_id,
+            "zai",
+            "subscription",
+        )
+        metered_key_encrypted = await self.task_repo.get_user_ai_key_profile_encrypted(
+            self.db,
+            user_id,
+            "zai",
+            "metered",
+        )
+        legacy_key_encrypted = await self.task_repo.get_user_encrypted_ai_key(
+            self.db,
+            user_id,
+            "zai",
+        )
+        subscription_key = self.secret_service.decrypt(subscription_key_encrypted) if subscription_key_encrypted else None
+        metered_key = self.secret_service.decrypt(metered_key_encrypted) if metered_key_encrypted else None
+        legacy_key = self.secret_service.decrypt(legacy_key_encrypted) if legacy_key_encrypted else None
+        env_key = self._env_ai_key_for_provider("zai")
+
+        if resolved_mode == "subscription":
+            append_attempt("subscription", subscription_key)
+        elif resolved_mode == "metered":
+            append_attempt("metered", metered_key)
+        else:
+            append_attempt("subscription", subscription_key)
+            append_attempt("metered", metered_key)
+            append_attempt("saved", legacy_key)
+            append_attempt("env", env_key)
+
+        return attempts, resolved_mode
+
     async def process_task(
         self,
         task_id: str,
@@ -101,6 +253,7 @@ class TaskService:
         transcription_provider: str = "local",
         ai_provider: str = "openai",
         ai_model: Optional[str] = None,
+        ai_routing_mode: Optional[str] = None,
         subtitle_style: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
@@ -148,26 +301,23 @@ class TaskService:
                 else:
                     assembly_api_key = config.assembly_ai_api_key
 
-            ai_api_key: Optional[str] = None
             selected_ai_provider = (ai_provider or "openai").strip().lower()
-            if selected_ai_provider in SUPPORTED_AI_PROVIDERS:
-                stored_encrypted_ai_key = None
-                if user_id:
-                    stored_encrypted_ai_key = await self.task_repo.get_user_encrypted_ai_key(
-                        self.db,
-                        user_id,
-                        selected_ai_provider,
-                    )
-                if stored_encrypted_ai_key:
-                    ai_api_key = self.secret_service.decrypt(stored_encrypted_ai_key)
-                elif selected_ai_provider == "openai":
-                    ai_api_key = config.openai_api_key
-                elif selected_ai_provider == "google":
-                    ai_api_key = config.google_api_key
-                elif selected_ai_provider == "anthropic":
-                    ai_api_key = config.anthropic_api_key
-                elif selected_ai_provider == "zai":
-                    ai_api_key = config.zai_api_key
+            resolved_zai_routing_mode: Optional[str] = None
+            ai_key_attempts: List[Dict[str, str]] = []
+            if selected_ai_provider in SUPPORTED_AI_PROVIDERS and user_id:
+                ai_key_attempts, resolved_zai_routing_mode = await self.get_effective_user_ai_api_key_attempts(
+                    user_id=user_id,
+                    provider=selected_ai_provider,
+                    zai_routing_mode=ai_routing_mode,
+                )
+            elif selected_ai_provider in SUPPORTED_AI_PROVIDERS:
+                fallback_key = self._env_ai_key_for_provider(selected_ai_provider)
+                if fallback_key:
+                    ai_key_attempts = [{"label": "env", "key": fallback_key}]
+
+            ai_api_key = ai_key_attempts[0]["key"] if ai_key_attempts else None
+            ai_api_key_fallbacks = [attempt["key"] for attempt in ai_key_attempts[1:]]
+            ai_key_labels = [attempt["label"] for attempt in ai_key_attempts]
 
             result = await self.video_service.process_video_complete(
                 url=url,
@@ -180,6 +330,9 @@ class TaskService:
                 assembly_api_key=assembly_api_key,
                 ai_provider=selected_ai_provider,
                 ai_api_key=ai_api_key,
+                ai_api_key_fallbacks=ai_api_key_fallbacks,
+                ai_key_labels=ai_key_labels,
+                ai_routing_mode=resolved_zai_routing_mode,
                 ai_model=ai_model,
                 subtitle_style=subtitle_style,
                 progress_callback=update_progress,
@@ -304,6 +457,15 @@ class TaskService:
         for provider in SUPPORTED_AI_PROVIDERS:
             encrypted = await self.task_repo.get_user_encrypted_ai_key(self.db, user_id, provider)
             result[f"has_{provider}_key"] = bool(encrypted)
+        zai_profiles = await self.task_repo.list_user_ai_key_profiles(self.db, user_id, "zai")
+        result["has_zai_subscription_key"] = bool(zai_profiles.get("subscription"))
+        result["has_zai_metered_key"] = bool(zai_profiles.get("metered"))
+        result["zai_routing_mode"] = await self.task_repo.get_user_zai_routing_mode(self.db, user_id)
+        result["has_zai_key"] = bool(
+            result.get("has_zai_key")
+            or result["has_zai_subscription_key"]
+            or result["has_zai_metered_key"]
+        )
         return result
 
     async def save_user_ai_key(self, user_id: str, provider: str, api_key: str) -> None:
@@ -321,37 +483,23 @@ class TaskService:
             raise ValueError(f"User {user_id} not found")
         await self.task_repo.clear_user_encrypted_ai_key(self.db, user_id, provider)
 
-    async def get_effective_user_ai_api_key(self, user_id: str, provider: str) -> Optional[str]:
+    async def list_available_ai_models(
+        self,
+        user_id: str,
+        provider: str,
+        zai_routing_mode: Optional[str] = None,
+    ) -> Dict[str, Any]:
         normalized_provider = (provider or "").strip().lower()
-        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
-            raise ValueError(f"Unsupported AI provider: {provider}")
-        if not await self.task_repo.user_exists(self.db, user_id):
-            raise ValueError(f"User {user_id} not found")
-
-        stored_encrypted_ai_key = await self.task_repo.get_user_encrypted_ai_key(
-            self.db,
-            user_id,
-            normalized_provider,
+        key_attempts, resolved_routing_mode = await self.get_effective_user_ai_api_key_attempts(
+            user_id=user_id,
+            provider=normalized_provider,
+            zai_routing_mode=zai_routing_mode,
         )
-        if stored_encrypted_ai_key:
-            return self.secret_service.decrypt(stored_encrypted_ai_key)
-
-        if normalized_provider == "openai":
-            return (config.openai_api_key or "").strip() or None
-        if normalized_provider == "google":
-            return (config.google_api_key or "").strip() or None
-        if normalized_provider == "anthropic":
-            return (config.anthropic_api_key or "").strip() or None
-        if normalized_provider == "zai":
-            return (config.zai_api_key or "").strip() or None
-        return None
-
-    async def list_available_ai_models(self, user_id: str, provider: str) -> Dict[str, Any]:
-        normalized_provider = (provider or "").strip().lower()
-        api_key = await self.get_effective_user_ai_api_key(user_id, normalized_provider)
+        api_key = key_attempts[0]["key"] if key_attempts else None
         if not api_key:
+            routing_hint = f" (routing mode: {resolved_routing_mode})" if resolved_routing_mode else ""
             raise ValueError(
-                f"{normalized_provider} selected but no API key is configured. Save one in Settings."
+                f"{normalized_provider} selected but no API key is configured{routing_hint}. Save one in Settings."
             )
 
         models = await asyncio.to_thread(
@@ -365,6 +513,7 @@ class TaskService:
             "models": models,
             "default_model": default_model,
             "count": len(models),
+            "zai_routing_mode": resolved_routing_mode,
         }
 
     async def get_task_with_clips(self, task_id: str) -> Optional[Dict[str, Any]]:

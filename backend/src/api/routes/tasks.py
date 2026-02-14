@@ -4,6 +4,7 @@ Task API routes using refactored architecture.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
+from typing import Optional
 import json
 import logging
 
@@ -21,6 +22,8 @@ config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
+SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -64,6 +67,29 @@ def _resolve_ai_provider(raw: object) -> str:
     if provider not in SUPPORTED_AI_PROVIDERS:
         return _default_ai_provider()
     return provider
+
+
+def _resolve_zai_routing_mode(raw: object) -> Optional[str]:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="ai_options.routing_mode must be a string")
+    normalized = raw.strip().lower()
+    if normalized not in SUPPORTED_ZAI_ROUTING_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported z.ai routing mode: {normalized}",
+        )
+    return normalized
+
+
+def _resolve_zai_profile(raw: object) -> str:
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="profile must be a string")
+    profile = raw.strip().lower()
+    if profile not in SUPPORTED_ZAI_KEY_PROFILES:
+        raise HTTPException(status_code=400, detail=f"Unsupported z.ai key profile: {profile}")
+    return profile
 
 
 def _require_admin_access(request: Request) -> None:
@@ -189,6 +215,10 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
             "has_google_key": bool(settings.get("has_google_key")),
             "has_anthropic_key": bool(settings.get("has_anthropic_key")),
             "has_zai_key": bool(settings.get("has_zai_key")),
+            "has_zai_subscription_key": bool(settings.get("has_zai_subscription_key")),
+            "has_zai_metered_key": bool(settings.get("has_zai_metered_key")),
+            "zai_routing_mode": str(settings.get("zai_routing_mode") or "auto"),
+            "zai_routing_options": sorted(SUPPORTED_ZAI_ROUTING_MODES),
             "has_env_openai": bool((config.openai_api_key or "").strip()),
             "has_env_google": bool((config.google_api_key or "").strip()),
             "has_env_anthropic": bool((config.anthropic_api_key or "").strip()),
@@ -250,6 +280,80 @@ async def delete_ai_provider_key(
         raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
 
 
+@router.put("/ai-settings/zai/profiles/{profile}/key")
+async def save_zai_profile_key(
+    profile: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save z.ai profile key (subscription or metered)."""
+    user_id = _require_user_id(request)
+    normalized_profile = _resolve_zai_profile(profile)
+    data = await request.json()
+    api_key = str(data.get("api_key") or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    try:
+        task_service = TaskService(db)
+        await task_service.save_user_ai_profile_key(
+            user_id=user_id,
+            provider="zai",
+            profile_name=normalized_profile,
+            api_key=api_key,
+        )
+        return {"message": f"zai {normalized_profile} key saved", "provider": "zai", "profile": normalized_profile}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving z.ai profile key: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving key: {str(e)}")
+
+
+@router.delete("/ai-settings/zai/profiles/{profile}/key")
+async def delete_zai_profile_key(
+    profile: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete z.ai profile key (subscription or metered)."""
+    user_id = _require_user_id(request)
+    normalized_profile = _resolve_zai_profile(profile)
+    try:
+        task_service = TaskService(db)
+        await task_service.clear_user_ai_profile_key(
+            user_id=user_id,
+            provider="zai",
+            profile_name=normalized_profile,
+        )
+        return {"message": f"zai {normalized_profile} key removed", "provider": "zai", "profile": normalized_profile}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting z.ai profile key: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
+
+
+@router.put("/ai-settings/zai/routing-mode")
+async def set_zai_routing_mode(request: Request, db: AsyncSession = Depends(get_db)):
+    """Set default z.ai key routing mode for the user."""
+    user_id = _require_user_id(request)
+    data = await request.json()
+    routing_mode = _resolve_zai_routing_mode(data.get("routing_mode"))
+    if routing_mode is None:
+        raise HTTPException(status_code=400, detail="routing_mode is required")
+
+    try:
+        task_service = TaskService(db)
+        saved_mode = await task_service.set_user_zai_routing_mode(user_id, routing_mode)
+        return {"message": "z.ai routing mode saved", "routing_mode": saved_mode}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving z.ai routing mode: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving routing mode: {str(e)}")
+
+
 @router.get("/ai-settings/{provider}/models")
 async def list_ai_provider_models(
     provider: str,
@@ -262,9 +366,19 @@ async def list_ai_provider_models(
     if provider not in SUPPORTED_AI_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}")
 
+    zai_routing_mode = (
+        _resolve_zai_routing_mode(request.query_params.get("routing_mode"))
+        if provider == "zai"
+        else None
+    )
+
     try:
         task_service = TaskService(db)
-        result = await task_service.list_available_ai_models(user_id, provider)
+        result = await task_service.list_available_ai_models(
+            user_id,
+            provider,
+            zai_routing_mode=zai_routing_mode,
+        )
         return result
     except ModelCatalogError as e:
         raise HTTPException(status_code=e.status_code, detail=str(e))
@@ -300,11 +414,20 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
     font_color = subtitle_style["font_color"]
     transitions_enabled = _coerce_bool(font_options.get("transitions_enabled"), default=False)
     transcription_options = data.get("transcription_options", {})
+    if not isinstance(transcription_options, dict):
+        transcription_options = {}
     transcription_provider = _resolve_transcription_provider(
         transcription_options.get("provider", "local")
     )
     ai_options = data.get("ai_options", {})
+    if not isinstance(ai_options, dict):
+        ai_options = {}
     ai_provider = _resolve_ai_provider(ai_options.get("provider", _default_ai_provider()))
+    ai_routing_mode = (
+        _resolve_zai_routing_mode(ai_options.get("routing_mode"))
+        if ai_provider == "zai"
+        else None
+    )
     ai_model_raw = ai_options.get("model")
     if ai_model_raw is None:
         ai_model = None
@@ -332,19 +455,16 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     status_code=400,
                     detail="AssemblyAI selected but no API key is configured. Save one in Settings.",
                 )
-        ai_settings = await task_service.get_user_ai_settings(user_id)
-        has_saved_ai_key = bool(ai_settings.get(f"has_{ai_provider}_key"))
-        env_ai_keys = {
-            "openai": bool((config.openai_api_key or "").strip()),
-            "google": bool((config.google_api_key or "").strip()),
-            "anthropic": bool((config.anthropic_api_key or "").strip()),
-            "zai": bool((config.zai_api_key or "").strip()),
-        }
-        has_env_ai_key = env_ai_keys.get(ai_provider, False)
-        if not (has_saved_ai_key or has_env_ai_key):
+        ai_key_attempts, resolved_zai_routing_mode = await task_service.get_effective_user_ai_api_key_attempts(
+            user_id=user_id,
+            provider=ai_provider,
+            zai_routing_mode=ai_routing_mode,
+        )
+        if not ai_key_attempts:
+            routing_detail = f" (routing mode: {resolved_zai_routing_mode})" if resolved_zai_routing_mode else ""
             raise HTTPException(
                 status_code=400,
-                detail=f"{ai_provider} selected but no API key is configured. Save one in Settings.",
+                detail=f"{ai_provider} selected but no API key is configured{routing_detail}. Save one in Settings.",
             )
 
         task_id = await task_service.create_task_with_source(
@@ -383,6 +503,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 ai_provider,
                 ai_model,
                 subtitle_style,
+                resolved_zai_routing_mode,
                 queue_name=queue_name,
             )
         except Exception as enqueue_error:
@@ -402,6 +523,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "job_id": job_id,
             "transcription_provider": transcription_provider,
             "ai_provider": ai_provider,
+            "ai_routing_mode": resolved_zai_routing_mode,
             "message": "Task created and queued for processing"
         }
 

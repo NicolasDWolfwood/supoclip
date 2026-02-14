@@ -22,7 +22,7 @@ DEFAULT_AI_MODELS = {
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
 }
-ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/paas/v4"
+ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 
 class TranscriptSegment(BaseModel):
     """Represents a relevant segment of transcript with precise timing."""

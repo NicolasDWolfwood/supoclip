@@ -10,9 +10,11 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
 export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
+export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
 
 export type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
+export type ZaiRoutingMode = (typeof ZAI_ROUTING_MODES)[number];
 
 export interface UserPreferences extends FontStyleOptions {
   transitionsEnabled: boolean;
@@ -64,6 +66,10 @@ export function isTranscriptionProvider(value: string): value is TranscriptionPr
 
 export function isAiProvider(value: string): value is AiProvider {
   return AI_PROVIDERS.includes(value as AiProvider);
+}
+
+export function isZaiRoutingMode(value: string): value is ZaiRoutingMode {
+  return ZAI_ROUTING_MODES.includes(value as ZaiRoutingMode);
 }
 
 export function isSettingsSection(value: string | null): value is SettingsSection {

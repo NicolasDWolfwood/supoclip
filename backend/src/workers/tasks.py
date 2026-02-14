@@ -25,6 +25,7 @@ async def process_video_task(
     ai_provider: str = "openai",
     ai_model: Optional[str] = None,
     subtitle_style: Optional[Dict[str, Any]] = None,
+    ai_routing_mode: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -43,6 +44,7 @@ async def process_video_task(
         ai_provider: "openai", "google", "anthropic", or "zai"
         ai_model: Optional model override for the selected AI provider
         subtitle_style: Extra subtitle style controls for rendering
+        ai_routing_mode: Optional z.ai key routing mode ("auto", "subscription", "metered")
 
     Returns:
         Dict with processing results
@@ -86,6 +88,7 @@ async def process_video_task(
                 transcription_provider=transcription_provider,
                 ai_provider=ai_provider,
                 ai_model=ai_model,
+                ai_routing_mode=ai_routing_mode,
                 subtitle_style=subtitle_style,
                 progress_callback=update_progress,
                 cancel_check=ensure_not_cancelled,

@@ -131,7 +131,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `BETTER_AUTH_SECRET` | dev secret | Auth secret (change in production!) |
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
 | `ANTHROPIC_API_KEY` | - | For Claude models |
-| `ZAI_API_KEY` | - | For z.ai GLM models |
+| `ZAI_API_KEY` | - | For z.ai GLM models (backend calls z.ai Coding API endpoint) |
 
 Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
 
@@ -162,6 +162,8 @@ LLM=google:gemini-2.5-flash
 ```bash
 LLM=zai:glm-5
 ```
+Runtime note: z.ai requests use `https://api.z.ai/api/coding/paas/v4`.
+In Settings, z.ai supports two user key profiles (`subscription`, `metered`) and routing mode (`auto`, `subscription`, `metered`).
 
 ## Troubleshooting
 

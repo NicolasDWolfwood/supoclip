@@ -8,7 +8,7 @@ from typing import Any, Iterable
 from urllib import error, parse, request
 
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
-ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/paas/v4"
+ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 HTTP_TIMEOUT_SECONDS = 15
 
 

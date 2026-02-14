@@ -29,6 +29,20 @@ class VideoService:
     """Service for video processing operations."""
 
     @staticmethod
+    def _is_retryable_zai_error(error_text: Optional[str]) -> bool:
+        normalized = (error_text or "").strip().lower()
+        if not normalized:
+            return False
+        retry_markers = (
+            "insufficient balance",
+            "no resource package",
+            "\"code\": \"1113\"",
+            "'code': '1113'",
+            "code: 1113",
+        )
+        return any(marker in normalized for marker in retry_markers)
+
+    @staticmethod
     async def download_video(url: str, progress_callback: Optional[callable] = None) -> Optional[Path]:
         """
         Download a YouTube video asynchronously.
@@ -344,6 +358,9 @@ class VideoService:
         assembly_api_key: Optional[str] = None,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_api_key_fallbacks: Optional[List[str]] = None,
+        ai_key_labels: Optional[List[str]] = None,
+        ai_routing_mode: Optional[str] = None,
         ai_model: Optional[str] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
@@ -412,13 +429,59 @@ class VideoService:
                     }
                 )
 
-            relevant_parts = await VideoService.analyze_transcript_with_progress(
-                transcript,
-                ai_provider=ai_provider,
-                ai_api_key=ai_api_key,
-                ai_model=ai_model,
-                progress_callback=progress_callback,
-            )
+            key_attempts = [ai_api_key] + list(ai_api_key_fallbacks or [])
+            if not key_attempts:
+                key_attempts = [None]
+            labels = list(ai_key_labels or [])
+            while len(labels) < len(key_attempts):
+                labels.append(f"attempt-{len(labels) + 1}")
+
+            relevant_parts = None
+            attempted_labels: List[str] = []
+            for attempt_index, key_candidate in enumerate(key_attempts):
+                attempt_label = labels[attempt_index]
+                attempted_labels.append(attempt_label)
+                relevant_parts = await VideoService.analyze_transcript_with_progress(
+                    transcript,
+                    ai_provider=ai_provider,
+                    ai_api_key=key_candidate,
+                    ai_model=ai_model,
+                    progress_callback=progress_callback,
+                )
+                diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
+                error_text = diagnostics.get("error")
+                can_retry = (
+                    ai_provider == "zai"
+                    and attempt_index < (len(key_attempts) - 1)
+                    and VideoService._is_retryable_zai_error(error_text)
+                )
+                if not can_retry:
+                    break
+                logger.warning(
+                    "z.ai analysis attempt %s failed due to balance/package issue; retrying with fallback key",
+                    attempt_label,
+                )
+                if progress_callback:
+                    await progress_callback(
+                        50,
+                        "z.ai key exhausted, retrying with fallback key...",
+                        {
+                            "stage": "analysis",
+                            "stage_progress": 0,
+                            "overall_progress": 50,
+                            "ai_provider": ai_provider,
+                            "ai_key_attempt": attempt_label,
+                            "ai_routing_mode": ai_routing_mode,
+                        },
+                    )
+
+            if relevant_parts is not None:
+                diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
+                diagnostics["ai_key_attempts"] = attempted_labels
+                diagnostics["ai_key_label"] = attempted_labels[-1] if attempted_labels else "attempt-1"
+                if ai_routing_mode:
+                    diagnostics["ai_routing_mode"] = ai_routing_mode
+                relevant_parts.diagnostics = diagnostics
             await ensure_not_cancelled()
 
             # Step 4: Create clips
