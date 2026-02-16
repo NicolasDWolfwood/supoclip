@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, Optional, Callable, Awaitable, List, Tuple
 import logging
 import asyncio
+import re
+from pathlib import Path
 
 from ..repositories.task_repository import TaskRepository
 from ..repositories.source_repository import SourceRepository
@@ -16,6 +18,7 @@ from .video_service import VideoService
 from .secret_service import SecretService
 from .ai_model_catalog_service import list_models_for_provider
 from ..config import Config
+from ..video_utils import load_cached_transcript_data
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -30,6 +33,8 @@ SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
 DRAFT_MIN_DURATION_SECONDS = 3
 DRAFT_MAX_DURATION_SECONDS = 180
+TIMELINE_INCREMENT_SECONDS = 0.5
+_TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
 
 class TaskService:
@@ -56,6 +61,7 @@ class TaskService:
         transcription_provider: str = "local",
         ai_provider: str = "openai",
         review_before_render_enabled: bool = True,
+        timeline_editor_enabled: bool = True,
     ) -> str:
         """
         Create a new task with associated source.
@@ -91,6 +97,7 @@ class TaskService:
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
             review_before_render_enabled=review_before_render_enabled,
+            timeline_editor_enabled=timeline_editor_enabled,
         )
 
         logger.info(f"Created task {task_id} for user {user_id}")
@@ -129,44 +136,55 @@ class TaskService:
         parts = value.split(":")
         if len(parts) == 2:
             minute_text, second_text = parts
-            if not (minute_text.isdigit() and second_text.isdigit()):
+            if not (minute_text.isdigit() and _TIMESTAMP_SECONDS_RE.match(second_text)):
                 raise ValueError(f"Invalid timestamp format: {value}")
             minutes = int(minute_text)
-            seconds = int(second_text)
-            if seconds > 59:
+            seconds = float(second_text)
+            if seconds >= 60:
                 raise ValueError(f"Invalid timestamp format: {value}")
-            return float(minutes * 60 + seconds)
+            return minutes * 60 + seconds
 
         if len(parts) == 3:
             hour_text, minute_text, second_text = parts
-            if not (hour_text.isdigit() and minute_text.isdigit() and second_text.isdigit()):
+            if not (hour_text.isdigit() and minute_text.isdigit() and _TIMESTAMP_SECONDS_RE.match(second_text)):
                 raise ValueError(f"Invalid timestamp format: {value}")
             hours = int(hour_text)
             minutes = int(minute_text)
-            seconds = int(second_text)
-            if minutes > 59 or seconds > 59:
+            seconds = float(second_text)
+            if minutes > 59 or seconds >= 60:
                 raise ValueError(f"Invalid timestamp format: {value}")
-            return float(hours * 3600 + minutes * 60 + seconds)
+            return hours * 3600 + minutes * 60 + seconds
 
         raise ValueError(f"Invalid timestamp format: {value}")
 
     @staticmethod
-    def _format_seconds_to_timestamp(seconds: float) -> str:
-        total_seconds = max(0, int(round(seconds)))
-        hours = total_seconds // 3600
-        minutes = (total_seconds % 3600) // 60
-        remainder_seconds = total_seconds % 60
+    def _snap_to_timeline_increment(seconds: float) -> float:
+        snapped = round(max(0.0, float(seconds)) / TIMELINE_INCREMENT_SECONDS) * TIMELINE_INCREMENT_SECONDS
+        return round(max(0.0, snapped), 3)
+
+    @classmethod
+    def _format_seconds_to_timestamp(cls, seconds: float) -> str:
+        snapped_seconds = cls._snap_to_timeline_increment(seconds)
+        whole_seconds = int(snapped_seconds)
+        fractional = snapped_seconds - whole_seconds
+        hours = whole_seconds // 3600
+        minutes = (whole_seconds % 3600) // 60
+        remainder_seconds = whole_seconds % 60
+        if abs(fractional - 0.5) < 1e-6:
+            second_token = f"{remainder_seconds:02d}.5"
+        else:
+            second_token = f"{remainder_seconds:02d}"
         if hours > 0:
-            return f"{hours:02d}:{minutes:02d}:{remainder_seconds:02d}"
-        return f"{minutes:02d}:{remainder_seconds:02d}"
+            return f"{hours:02d}:{minutes:02d}:{second_token}"
+        return f"{minutes:02d}:{second_token}"
 
     def _validate_clip_window(
         self,
         start_time: str,
         end_time: str,
     ) -> tuple[float, float, float]:
-        start_seconds = self._parse_timestamp_to_seconds_strict(start_time)
-        end_seconds = self._parse_timestamp_to_seconds_strict(end_time)
+        start_seconds = self._snap_to_timeline_increment(self._parse_timestamp_to_seconds_strict(start_time))
+        end_seconds = self._snap_to_timeline_increment(self._parse_timestamp_to_seconds_strict(end_time))
         if start_seconds >= end_seconds:
             raise ValueError("start_time must be less than end_time")
         duration_seconds = end_seconds - start_seconds
@@ -174,7 +192,48 @@ class TaskService:
             raise ValueError(
                 f"Clip duration must be between {DRAFT_MIN_DURATION_SECONDS}s and {DRAFT_MAX_DURATION_SECONDS}s"
             )
-        return start_seconds, end_seconds, duration_seconds
+        return (
+            start_seconds,
+            end_seconds,
+            round(duration_seconds, 3),
+        )
+
+    def _validate_non_overlapping_draft_windows(self, drafts: List[Dict[str, Any]]) -> None:
+        windows: List[tuple[str, float, float]] = []
+        for draft in drafts:
+            if draft.get("is_deleted"):
+                continue
+            draft_id = str(draft.get("id") or "")
+            start_seconds = self._parse_timestamp_to_seconds_strict(str(draft.get("start_time") or ""))
+            end_seconds = self._parse_timestamp_to_seconds_strict(str(draft.get("end_time") or ""))
+            windows.append((draft_id, start_seconds, end_seconds))
+
+        windows.sort(key=lambda item: (item[1], item[2], item[0]))
+        for index in range(1, len(windows)):
+            previous_id, _previous_start, previous_end = windows[index - 1]
+            current_id, current_start, _current_end = windows[index]
+            if current_start < (previous_end - 1e-6):
+                raise ValueError(f"Draft clips overlap: {previous_id} and {current_id}")
+
+    @staticmethod
+    def _extract_text_from_transcript_cache(video_path: Path, clip_start: float, clip_end: float) -> str:
+        transcript_data = load_cached_transcript_data(video_path)
+        if not transcript_data or not transcript_data.get("words"):
+            return ""
+
+        clip_start_ms = int(max(0.0, clip_start) * 1000)
+        clip_end_ms = int(max(clip_start, clip_end) * 1000)
+        matched_words: List[str] = []
+        for word in transcript_data.get("words", []):
+            word_text = str(word.get("text") or "").strip()
+            if not word_text:
+                continue
+            word_start = int(word.get("start") or 0)
+            word_end = int(word.get("end") or 0)
+            if word_start < clip_end_ms and word_end > clip_start_ms:
+                matched_words.append(word_text)
+
+        return " ".join(matched_words).strip()
 
     async def get_user_zai_routing_mode(self, user_id: str) -> str:
         if not await self.task_repo.user_exists(self.db, user_id):
@@ -483,7 +542,7 @@ class TaskService:
             start_time = str(segment.get("start_time") or "00:00")
             end_time = str(segment.get("end_time") or "00:00")
             try:
-                _, _, duration_seconds = self._validate_clip_window(start_time, end_time)
+                start_seconds, end_seconds, duration_seconds = self._validate_clip_window(start_time, end_time)
             except ValueError as validation_error:
                 logger.warning(
                     "Skipping invalid draft segment for task %s (%s -> %s): %s",
@@ -498,14 +557,19 @@ class TaskService:
             drafts_payload.append(
                 {
                     "clip_order": index,
-                    "start_time": start_time,
-                    "end_time": end_time,
+                    "start_time": self._format_seconds_to_timestamp(start_seconds),
+                    "end_time": self._format_seconds_to_timestamp(end_seconds),
                     "duration": duration_seconds,
+                    "original_start_time": self._format_seconds_to_timestamp(start_seconds),
+                    "original_end_time": self._format_seconds_to_timestamp(end_seconds),
+                    "original_duration": duration_seconds,
                     "original_text": text_value,
                     "edited_text": text_value,
                     "relevance_score": float(segment.get("relevance_score") or 0.0),
                     "reasoning": segment.get("reasoning"),
+                    "created_by_user": False,
                     "is_selected": True,
+                    "is_deleted": False,
                     "edited_word_timings_json": None,
                 }
             )
@@ -634,11 +698,16 @@ class TaskService:
         await update_progress(10, "Loading approved draft clips...")
 
         drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
-        selected_drafts = [draft for draft in drafts if draft.get("is_selected")]
+        selected_drafts = [draft for draft in drafts if draft.get("is_selected") and not draft.get("is_deleted")]
         if not selected_drafts:
             raise ValueError("Finalize requires at least one selected draft clip")
 
-        selected_drafts.sort(key=lambda draft: int(draft.get("clip_order") or 0))
+        selected_drafts.sort(
+            key=lambda draft: (
+                self._parse_timestamp_to_seconds_strict(str(draft.get("start_time") or "00:00")),
+                int(draft.get("clip_order") or 0),
+            )
+        )
 
         await update_progress(15, "Preparing source media...")
         video_path = await self.video_service.resolve_video_path(url=url, source_type=source_type)
@@ -893,6 +962,10 @@ class TaskService:
 
         normalized_updates: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
+        draft_state: Dict[str, Dict[str, Any]] = {
+            draft_id: dict(existing)
+            for draft_id, existing in existing_by_id.items()
+        }
 
         for item in updates:
             if not isinstance(item, dict):
@@ -911,16 +984,12 @@ class TaskService:
 
             start_time = str(item.get("start_time", existing["start_time"])).strip()
             end_time = str(item.get("end_time", existing["end_time"])).strip()
-            _, _, duration_seconds = self._validate_clip_window(start_time, end_time)
+            start_seconds, end_seconds, duration_seconds = self._validate_clip_window(start_time, end_time)
 
             normalized_update: Dict[str, Any] = {
                 "id": draft_id,
-                "start_time": self._format_seconds_to_timestamp(
-                    self._parse_timestamp_to_seconds_strict(start_time)
-                ),
-                "end_time": self._format_seconds_to_timestamp(
-                    self._parse_timestamp_to_seconds_strict(end_time)
-                ),
+                "start_time": self._format_seconds_to_timestamp(start_seconds),
+                "end_time": self._format_seconds_to_timestamp(end_seconds),
                 "duration": duration_seconds,
             }
 
@@ -946,9 +1015,85 @@ class TaskService:
                 normalized_update["edited_word_timings_json"] = None
 
             normalized_updates.append(normalized_update)
+            draft_state[draft_id].update(normalized_update)
+
+        self._validate_non_overlapping_draft_windows(list(draft_state.values()))
 
         await self.draft_clip_repo.bulk_update_drafts(self.db, task_id, normalized_updates)
         return await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+
+    async def create_task_draft_clip(
+        self,
+        task_id: str,
+        start_time: str,
+        end_time: str,
+        source_url: str,
+        source_type: str,
+        edited_text: Optional[str] = None,
+        is_selected: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        start_seconds, end_seconds, duration_seconds = self._validate_clip_window(start_time, end_time)
+        normalized_start_time = self._format_seconds_to_timestamp(start_seconds)
+        normalized_end_time = self._format_seconds_to_timestamp(end_seconds)
+
+        existing_drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        proposed_drafts = list(existing_drafts) + [
+            {
+                "id": "__new__",
+                "start_time": normalized_start_time,
+                "end_time": normalized_end_time,
+                "is_deleted": False,
+            }
+        ]
+        self._validate_non_overlapping_draft_windows(proposed_drafts)
+
+        source_video_path = await self.video_service.resolve_video_path(url=source_url, source_type=source_type)
+        transcript_text = self._extract_text_from_transcript_cache(
+            source_video_path,
+            start_seconds,
+            end_seconds,
+        )
+
+        preferred_text = str(edited_text or "").strip()
+        base_text = preferred_text or transcript_text
+        clip_order = await self.draft_clip_repo.get_next_clip_order(self.db, task_id)
+
+        payload = {
+            "clip_order": clip_order,
+            "start_time": normalized_start_time,
+            "end_time": normalized_end_time,
+            "duration": duration_seconds,
+            "original_start_time": normalized_start_time,
+            "original_end_time": normalized_end_time,
+            "original_duration": duration_seconds,
+            "original_text": base_text,
+            "edited_text": preferred_text or base_text,
+            "relevance_score": 0.0,
+            "reasoning": "Added manually during review",
+            "created_by_user": True,
+            "is_selected": bool(is_selected) if is_selected is not None else bool(base_text),
+            "is_deleted": False,
+            "edited_word_timings_json": None,
+        }
+        created_id = await self.draft_clip_repo.create_draft(self.db, task_id, payload)
+
+        draft_map = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
+        draft = draft_map.get(created_id)
+        if not draft:
+            raise ValueError("Failed to create draft clip")
+        return draft
+
+    async def delete_task_draft_clip(self, task_id: str, draft_id: str) -> None:
+        existing = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
+        if draft_id not in existing:
+            raise ValueError("Draft clip not found")
+        await self.draft_clip_repo.soft_delete_draft(self.db, task_id=task_id, draft_id=draft_id)
+
+    async def restore_task_draft_clips(self, task_id: str) -> List[Dict[str, Any]]:
+        await self.draft_clip_repo.restore_task_drafts(self.db, task_id)
+        restored = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        self._validate_non_overlapping_draft_windows(restored)
+        return restored
 
     async def get_user_transcription_settings(self, user_id: str) -> Dict[str, Any]:
         if not await self.task_repo.user_exists(self.db, user_id):

@@ -45,6 +45,8 @@ class User(Base):
     default_shadow_offset_x: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     default_shadow_offset_y: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
     default_transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    default_review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    default_timeline_editor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
     default_transcription_provider: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -94,6 +96,7 @@ class Task(Base):
     generated_clips_ids: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String(36)), nullable=True)
     status: Mapped[str] = mapped_column(String(20), server_default=text("'pending'"), nullable=False)
     review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    timeline_editor_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     # Font customization fields
     font_family: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, server_default=text("'TikTokSans-Regular'"))
@@ -167,11 +170,16 @@ class TaskClipDraft(Base):
     start_time: Mapped[str] = mapped_column(String(20), nullable=False)
     end_time: Mapped[str] = mapped_column(String(20), nullable=False)
     duration: Mapped[float] = mapped_column(Float, nullable=False)
+    original_start_time: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_end_time: Mapped[str] = mapped_column(String(20), nullable=False)
+    original_duration: Mapped[float] = mapped_column(Float, nullable=False)
     original_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     edited_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     relevance_score: Mapped[float] = mapped_column(Float, nullable=False)
     reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by_user: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     is_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    is_deleted: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     edited_word_timings_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

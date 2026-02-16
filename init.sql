@@ -32,6 +32,8 @@ CREATE TABLE users (
     default_shadow_blur INTEGER DEFAULT 2,
     default_shadow_offset_x INTEGER DEFAULT 0,
     default_shadow_offset_y INTEGER DEFAULT 2,
+    default_review_before_render_enabled BOOLEAN NOT NULL DEFAULT true,
+    default_timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true,
     -- Optional user-managed API secret (encrypted)
     assembly_api_key_encrypted TEXT,
     openai_api_key_encrypted TEXT,
@@ -57,6 +59,7 @@ CREATE TABLE tasks (
     generated_clips_ids VARCHAR(36)[], -- Array of clip IDs
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     review_before_render_enabled BOOLEAN NOT NULL DEFAULT true,
+    timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true,
 
     -- Progress tracking fields
     progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
@@ -99,11 +102,16 @@ CREATE TABLE task_clip_drafts (
     start_time VARCHAR(20) NOT NULL,
     end_time VARCHAR(20) NOT NULL,
     duration FLOAT NOT NULL,
+    original_start_time VARCHAR(20) NOT NULL,
+    original_end_time VARCHAR(20) NOT NULL,
+    original_duration FLOAT NOT NULL,
     original_text TEXT,
     edited_text TEXT,
     relevance_score FLOAT NOT NULL,
     reasoning TEXT,
+    created_by_user BOOLEAN NOT NULL DEFAULT false,
     is_selected BOOLEAN NOT NULL DEFAULT true,
+    is_deleted BOOLEAN NOT NULL DEFAULT false,
     edited_word_timings_json JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -159,6 +167,7 @@ CREATE INDEX idx_generated_clips_created_at ON generated_clips(created_at);
 CREATE INDEX idx_task_clip_drafts_task_id ON task_clip_drafts(task_id);
 CREATE INDEX idx_task_clip_drafts_clip_order ON task_clip_drafts(clip_order);
 CREATE UNIQUE INDEX uq_task_clip_drafts_task_order ON task_clip_drafts(task_id, clip_order);
+CREATE INDEX idx_task_clip_drafts_active ON task_clip_drafts(task_id, is_deleted);
 CREATE INDEX idx_session_token ON session(token);
 CREATE INDEX idx_session_userId ON session("userId");
 CREATE INDEX idx_account_userId ON account("userId");

@@ -99,13 +99,20 @@ Examples:
 
 ## Task Review Runtime Behavior
 
-- Task create payload supports `review_before_render_enabled` (boolean, default `true`).
+- Task create payload supports `review_before_render_enabled` (boolean, default from user preference, initially `true`).
+- Task create payload supports `timeline_editor_enabled` (boolean, default from user preference).
 - When enabled, task processing stops after analysis at status `awaiting_review`.
 - Users can edit draft clips through:
+  - `GET /tasks/{task_id}/source-video`
   - `GET /tasks/{task_id}/draft-clips`
+  - `POST /tasks/{task_id}/draft-clips` (create)
   - `PUT /tasks/{task_id}/draft-clips`
+  - `DELETE /tasks/{task_id}/draft-clips/{draft_id}` (soft delete)
+  - `POST /tasks/{task_id}/draft-clips/restore`
   - `POST /tasks/{task_id}/finalize`
 - Finalize queues rendering from approved draft clips.
+- User preference `default_timeline_editor_enabled` controls the default timeline editor toggle for new tasks.
+- User preference `default_review_before_render_enabled` controls whether new tasks default to pause at `awaiting_review`.
 
 ## Validation Checklist
 

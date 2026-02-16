@@ -109,6 +109,14 @@ async def init_db():
             text(
                 """
                 ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
                 ADD COLUMN IF NOT EXISTS transitions_enabled BOOLEAN NOT NULL DEFAULT false
                 """
             )
@@ -169,6 +177,22 @@ async def init_db():
                 """
                 ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_transitions_enabled BOOLEAN NOT NULL DEFAULT false
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_review_before_render_enabled BOOLEAN NOT NULL DEFAULT true
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_timeline_editor_enabled BOOLEAN NOT NULL DEFAULT true
                 """
             )
         )
@@ -513,15 +537,94 @@ async def init_db():
                     start_time VARCHAR(20) NOT NULL,
                     end_time VARCHAR(20) NOT NULL,
                     duration FLOAT NOT NULL,
+                    original_start_time VARCHAR(20) NOT NULL,
+                    original_end_time VARCHAR(20) NOT NULL,
+                    original_duration FLOAT NOT NULL,
                     original_text TEXT,
                     edited_text TEXT,
                     relevance_score FLOAT NOT NULL,
                     reasoning TEXT,
+                    created_by_user BOOLEAN NOT NULL DEFAULT false,
                     is_selected BOOLEAN NOT NULL DEFAULT true,
+                    is_deleted BOOLEAN NOT NULL DEFAULT false,
                     edited_word_timings_json JSONB,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS original_start_time VARCHAR(20)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS original_end_time VARCHAR(20)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS original_duration FLOAT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS created_by_user BOOLEAN NOT NULL DEFAULT false
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                UPDATE task_clip_drafts
+                SET original_start_time = COALESCE(original_start_time, start_time),
+                    original_end_time = COALESCE(original_end_time, end_time),
+                    original_duration = COALESCE(original_duration, duration)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ALTER COLUMN original_start_time SET NOT NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ALTER COLUMN original_end_time SET NOT NULL
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE IF EXISTS task_clip_drafts
+                ALTER COLUMN original_duration SET NOT NULL
                 """
             )
         )
@@ -546,6 +649,14 @@ async def init_db():
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_task_clip_drafts_task_order
                     ON task_clip_drafts(task_id, clip_order)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS idx_task_clip_drafts_active
+                    ON task_clip_drafts(task_id, is_deleted)
                 """
             )
         )

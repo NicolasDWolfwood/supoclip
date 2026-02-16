@@ -2,11 +2,14 @@
 Task API routes using refactored architecture.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 from typing import Optional, Any, Dict, List
 import json
 import logging
+import mimetypes
+from uuid import UUID
 
 from ...database import get_db
 from ...services.task_service import TaskService
@@ -31,6 +34,7 @@ MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected"}
+DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected"}
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -50,6 +54,10 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
 
 
 def _resolve_review_before_render_enabled(raw: object) -> bool:
+    return _coerce_bool(raw, default=True)
+
+
+def _resolve_timeline_editor_enabled(raw: object) -> bool:
     return _coerce_bool(raw, default=True)
 
 
@@ -560,15 +568,30 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         ai_model = ai_model_raw.strip() or None
     else:
         raise HTTPException(status_code=400, detail="ai_options.model must be a string")
-    review_before_render_enabled = _resolve_review_before_render_enabled(
-        data.get("review_before_render_enabled")
-    )
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    if "review_before_render_enabled" in data:
+        review_before_render_enabled = _resolve_review_before_render_enabled(data.get("review_before_render_enabled"))
+    else:
+        task_service_for_defaults = TaskService(db)
+        review_before_render_enabled = (
+            await task_service_for_defaults.task_repo.get_user_default_review_before_render_enabled(
+                db,
+                user_id,
+            )
+        )
+    if "timeline_editor_enabled" in data:
+        timeline_editor_enabled = _resolve_timeline_editor_enabled(data.get("timeline_editor_enabled"))
+    else:
+        task_service_for_defaults = TaskService(db)
+        timeline_editor_enabled = await task_service_for_defaults.task_repo.get_user_default_timeline_editor_enabled(
+            db,
+            user_id,
+        )
 
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
-
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User authentication required")
 
     try:
         task_service = TaskService(db)
@@ -606,6 +629,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
             review_before_render_enabled=review_before_render_enabled,
+            timeline_editor_enabled=timeline_editor_enabled,
         )
 
         # Get source type for worker
@@ -657,6 +681,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "ai_provider": ai_provider,
             "ai_routing_mode": resolved_zai_routing_mode,
             "review_before_render_enabled": review_before_render_enabled,
+            "timeline_editor_enabled": timeline_editor_enabled,
             "message": "Task created and queued for processing"
         }
 
@@ -751,6 +776,43 @@ async def get_task(task_id: str, request: Request, db: AsyncSession = Depends(ge
     except Exception as e:
         logger.error(f"Error retrieving task: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving task: {str(e)}")
+
+
+@router.get("/{task_id}/source-video")
+async def get_task_source_video(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Serve source video file for interactive timeline review."""
+    user_id = request.headers.get("user_id") or request.query_params.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this task")
+
+    source_url = str(task.get("source_url") or "").strip()
+    source_type = str(task.get("source_type") or "").strip()
+    if not source_url or not source_type:
+        raise HTTPException(status_code=400, detail="Task source is missing")
+
+    try:
+        source_video_path = await task_service.video_service.resolve_video_path(
+            url=source_url,
+            source_type=source_type,
+        )
+    except Exception as e:
+        logger.error(f"Error resolving source video for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to prepare source video for review")
+
+    media_type = mimetypes.guess_type(str(source_video_path))[0] or "video/mp4"
+    return FileResponse(
+        path=str(source_video_path),
+        media_type=media_type,
+        filename=source_video_path.name,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.get("/{task_id}/clips")
@@ -855,6 +917,134 @@ async def update_task_draft_clips(task_id: str, request: Request, db: AsyncSessi
     except Exception as e:
         logger.error(f"Error updating draft clips: {e}")
         raise HTTPException(status_code=500, detail=f"Error updating draft clips: {str(e)}")
+
+
+@router.post("/{task_id}/draft-clips")
+async def create_task_draft_clip(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Create a new draft clip during review."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this task")
+    if task.get("status") != "awaiting_review":
+        raise HTTPException(status_code=400, detail="Draft clips can only be created while task is awaiting_review")
+
+    data = await request.json()
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Payload must be an object")
+    unknown_fields = set(data.keys()) - DRAFT_CREATE_FIELDS
+    if unknown_fields:
+        unknown_list = ", ".join(sorted(unknown_fields))
+        raise HTTPException(status_code=400, detail=f"Unsupported draft clip fields: {unknown_list}")
+
+    start_time = str(data.get("start_time") or "").strip()
+    end_time = str(data.get("end_time") or "").strip()
+    if not start_time or not end_time:
+        raise HTTPException(status_code=400, detail="start_time and end_time are required")
+
+    source_url = str(task.get("source_url") or "").strip()
+    source_type = str(task.get("source_type") or "").strip()
+    if not source_url or not source_type:
+        raise HTTPException(status_code=400, detail="Task source is missing")
+
+    try:
+        created_draft = await task_service.create_task_draft_clip(
+            task_id=task_id,
+            start_time=start_time,
+            end_time=end_time,
+            source_url=source_url,
+            source_type=source_type,
+            edited_text=data.get("edited_text"),
+            is_selected=(
+                _coerce_bool(data.get("is_selected"), default=False)
+                if "is_selected" in data
+                else None
+            ),
+        )
+        return {
+            "task_id": task_id,
+            "draft_clip": created_draft,
+            "message": "Draft clip created",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error creating draft clip: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating draft clip: {str(e)}")
+
+
+@router.delete("/{task_id}/draft-clips/{draft_id}")
+async def delete_task_draft_clip(
+    task_id: str,
+    draft_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft-delete a draft clip during review."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this task")
+    if task.get("status") != "awaiting_review":
+        raise HTTPException(status_code=400, detail="Draft clips can only be deleted while task is awaiting_review")
+
+    try:
+        await task_service.delete_task_draft_clip(task_id=task_id, draft_id=str(draft_id))
+        draft_clips = await task_service.get_task_draft_clips(task_id)
+        return {
+            "task_id": task_id,
+            "draft_clips": draft_clips,
+            "total_drafts": len(draft_clips),
+            "message": "Draft clip deleted",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting draft clip: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting draft clip: {str(e)}")
+
+
+@router.post("/{task_id}/draft-clips/restore")
+async def restore_task_draft_clips(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Restore draft clips to their initial review defaults."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this task")
+    if task.get("status") != "awaiting_review":
+        raise HTTPException(status_code=400, detail="Draft clips can only be restored while task is awaiting_review")
+
+    try:
+        restored_drafts = await task_service.restore_task_draft_clips(task_id)
+        return {
+            "task_id": task_id,
+            "draft_clips": restored_drafts,
+            "total_drafts": len(restored_drafts),
+            "message": "Draft clips restored to initial values",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error restoring draft clips: {e}")
+        raise HTTPException(status_code=500, detail=f"Error restoring draft clips: {str(e)}")
 
 
 @router.post("/{task_id}/finalize")
@@ -1009,7 +1199,7 @@ async def get_task_progress_sse(task_id: str, request: Request, db: AsyncSession
 
 @router.patch("/{task_id}")
 async def update_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Update task details (title)."""
+    """Update task details (title and review timeline toggle)."""
     headers = request.headers
     user_id = headers.get("user_id")
 
@@ -1019,9 +1209,18 @@ async def update_task(task_id: str, request: Request, db: AsyncSession = Depends
     try:
         data = await request.json()
         title = data.get("title")
-
-        if not title:
-            raise HTTPException(status_code=400, detail="Title is required")
+        has_title = isinstance(title, str) and bool(title.strip())
+        has_timeline_flag = "timeline_editor_enabled" in data
+        if not has_title and not has_timeline_flag:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one of title or timeline_editor_enabled is required",
+            )
+        timeline_editor_enabled = (
+            _resolve_timeline_editor_enabled(data.get("timeline_editor_enabled"))
+            if has_timeline_flag
+            else None
+        )
 
         task_service = TaskService(db)
 
@@ -1032,10 +1231,20 @@ async def update_task(task_id: str, request: Request, db: AsyncSession = Depends
         if task["user_id"] != user_id:
             raise HTTPException(status_code=403, detail="Not authorized to update this task")
 
-        # Update source title
-        await task_service.source_repo.update_source_title(db, task["source_id"], title)
+        if has_title:
+            await task_service.source_repo.update_source_title(db, task["source_id"], str(title).strip())
+        if timeline_editor_enabled is not None:
+            await task_service.task_repo.update_task_timeline_editor_enabled(
+                db,
+                task_id,
+                timeline_editor_enabled,
+            )
 
-        return {"message": "Task updated successfully", "task_id": task_id}
+        return {
+            "message": "Task updated successfully",
+            "task_id": task_id,
+            "timeline_editor_enabled": timeline_editor_enabled if timeline_editor_enabled is not None else task.get("timeline_editor_enabled"),
+        }
 
     except HTTPException:
         raise

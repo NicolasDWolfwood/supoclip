@@ -47,6 +47,8 @@ model User {
   default_shadow_offset_x Int?    @default(0)
   default_shadow_offset_y Int?    @default(2)
   default_transitions_enabled Boolean? @default(false)
+  default_review_before_render_enabled Boolean? @default(true)
+  default_timeline_editor_enabled Boolean? @default(true)
   default_transcription_provider String? @default("local") @db.VarChar(20)
   default_whisper_chunking_enabled Boolean? @default(true)
   default_whisper_chunk_duration_seconds Int? @default(1200)
@@ -70,6 +72,8 @@ model Task {
   source_id            String?
   generated_clips_ids  String[]
   status               String    @default("pending") @db.VarChar(20)
+  review_before_render_enabled Boolean @default(true)
+  timeline_editor_enabled Boolean @default(true)
 
   // Font customization fields
   font_family          String?   @default("TikTokSans-Regular") @db.VarChar(100)

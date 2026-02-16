@@ -56,6 +56,8 @@ export async function GET() {
         default_shadow_offset_x: true,
         default_shadow_offset_y: true,
         default_transitions_enabled: true,
+        default_review_before_render_enabled: true,
+        default_timeline_editor_enabled: true,
         default_transcription_provider: true,
         default_whisper_chunking_enabled: true,
         default_whisper_chunk_duration_seconds: true,
@@ -100,6 +102,8 @@ export async function GET() {
       shadowOffsetX: normalizeShadowOffset(user.default_shadow_offset_x),
       shadowOffsetY: normalizeShadowOffset(user.default_shadow_offset_y),
       transitionsEnabled: user.default_transitions_enabled ?? false,
+      reviewBeforeRenderEnabled: user.default_review_before_render_enabled ?? true,
+      timelineEditorEnabled: user.default_timeline_editor_enabled ?? true,
       transcriptionProvider: user.default_transcription_provider || "local",
       whisperChunkingEnabled: user.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: user.default_whisper_chunk_duration_seconds || 1200,
@@ -151,6 +155,8 @@ export async function PATCH(request: NextRequest) {
       shadowOffsetX,
       shadowOffsetY,
       transitionsEnabled,
+      reviewBeforeRenderEnabled,
+      timelineEditorEnabled,
       transcriptionProvider,
       whisperChunkingEnabled,
       whisperChunkDurationSeconds,
@@ -216,6 +222,12 @@ export async function PATCH(request: NextRequest) {
     }
     if (transitionsEnabled !== undefined && typeof transitionsEnabled !== "boolean") {
       return NextResponse.json({ error: "Invalid transitionsEnabled" }, { status: 400 });
+    }
+    if (reviewBeforeRenderEnabled !== undefined && typeof reviewBeforeRenderEnabled !== "boolean") {
+      return NextResponse.json({ error: "Invalid reviewBeforeRenderEnabled" }, { status: 400 });
+    }
+    if (timelineEditorEnabled !== undefined && typeof timelineEditorEnabled !== "boolean") {
+      return NextResponse.json({ error: "Invalid timelineEditorEnabled" }, { status: 400 });
     }
     if (
       transcriptionProvider !== undefined &&
@@ -309,6 +321,10 @@ export async function PATCH(request: NextRequest) {
         ...(shadowOffsetX !== undefined && { default_shadow_offset_x: normalizeShadowOffset(shadowOffsetX) }),
         ...(shadowOffsetY !== undefined && { default_shadow_offset_y: normalizeShadowOffset(shadowOffsetY) }),
         ...(transitionsEnabled !== undefined && { default_transitions_enabled: transitionsEnabled }),
+        ...(reviewBeforeRenderEnabled !== undefined && {
+          default_review_before_render_enabled: reviewBeforeRenderEnabled,
+        }),
+        ...(timelineEditorEnabled !== undefined && { default_timeline_editor_enabled: timelineEditorEnabled }),
         ...(transcriptionProvider !== undefined && { default_transcription_provider: transcriptionProvider }),
         ...(whisperChunkingEnabled !== undefined && { default_whisper_chunking_enabled: whisperChunkingEnabled }),
         ...(whisperChunkDurationSeconds !== undefined && {
@@ -338,6 +354,8 @@ export async function PATCH(request: NextRequest) {
         default_shadow_offset_x: true,
         default_shadow_offset_y: true,
         default_transitions_enabled: true,
+        default_review_before_render_enabled: true,
+        default_timeline_editor_enabled: true,
         default_transcription_provider: true,
         default_whisper_chunking_enabled: true,
         default_whisper_chunk_duration_seconds: true,
@@ -375,6 +393,8 @@ export async function PATCH(request: NextRequest) {
       shadowOffsetX: normalizeShadowOffset(updatedUser.default_shadow_offset_x),
       shadowOffsetY: normalizeShadowOffset(updatedUser.default_shadow_offset_y),
       transitionsEnabled: updatedUser.default_transitions_enabled ?? false,
+      reviewBeforeRenderEnabled: updatedUser.default_review_before_render_enabled ?? true,
+      timelineEditorEnabled: updatedUser.default_timeline_editor_enabled ?? true,
       transcriptionProvider: updatedUser.default_transcription_provider || "local",
       whisperChunkingEnabled: updatedUser.default_whisper_chunking_enabled ?? true,
       whisperChunkDurationSeconds: updatedUser.default_whisper_chunk_duration_seconds || 1200,

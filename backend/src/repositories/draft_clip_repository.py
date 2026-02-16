@@ -37,11 +37,16 @@ class DraftClipRepository:
                         start_time,
                         end_time,
                         duration,
+                        original_start_time,
+                        original_end_time,
+                        original_duration,
                         original_text,
                         edited_text,
                         relevance_score,
                         reasoning,
+                        created_by_user,
                         is_selected,
+                        is_deleted,
                         edited_word_timings_json,
                         created_at,
                         updated_at
@@ -53,11 +58,16 @@ class DraftClipRepository:
                         :start_time,
                         :end_time,
                         :duration,
+                        :original_start_time,
+                        :original_end_time,
+                        :original_duration,
                         :original_text,
                         :edited_text,
                         :relevance_score,
                         :reasoning,
+                        :created_by_user,
                         :is_selected,
+                        :is_deleted,
                         :edited_word_timings_json,
                         NOW(),
                         NOW()
@@ -72,11 +82,16 @@ class DraftClipRepository:
                     "start_time": str(draft["start_time"]),
                     "end_time": str(draft["end_time"]),
                     "duration": float(draft["duration"]),
+                    "original_start_time": str(draft.get("original_start_time") or draft["start_time"]),
+                    "original_end_time": str(draft.get("original_end_time") or draft["end_time"]),
+                    "original_duration": float(draft.get("original_duration") or draft["duration"]),
                     "original_text": draft.get("original_text"),
                     "edited_text": draft.get("edited_text"),
                     "relevance_score": float(draft["relevance_score"]),
                     "reasoning": draft.get("reasoning"),
+                    "created_by_user": bool(draft.get("created_by_user", False)),
                     "is_selected": bool(draft.get("is_selected", True)),
+                    "is_deleted": bool(draft.get("is_deleted", False)),
                     "edited_word_timings_json": draft.get("edited_word_timings_json"),
                 },
             )
@@ -86,7 +101,12 @@ class DraftClipRepository:
         return created_ids
 
     @staticmethod
-    async def get_drafts_by_task(db: AsyncSession, task_id: str) -> List[Dict[str, Any]]:
+    async def get_drafts_by_task(
+        db: AsyncSession,
+        task_id: str,
+        include_deleted: bool = False,
+    ) -> List[Dict[str, Any]]:
+        where_deleted = "" if include_deleted else "AND is_deleted = false"
         result = await db.execute(
             sql_text(
                 """
@@ -97,16 +117,22 @@ class DraftClipRepository:
                     start_time,
                     end_time,
                     duration,
+                    original_start_time,
+                    original_end_time,
+                    original_duration,
                     original_text,
                     edited_text,
                     relevance_score,
                     reasoning,
+                    created_by_user,
                     is_selected,
+                    is_deleted,
                     edited_word_timings_json,
                     created_at,
                     updated_at
                 FROM task_clip_drafts
                 WHERE task_id = :task_id
+                """ + where_deleted + """
                 ORDER BY clip_order ASC
                 """
             ),
@@ -123,11 +149,16 @@ class DraftClipRepository:
                     "start_time": row.start_time,
                     "end_time": row.end_time,
                     "duration": float(row.duration),
+                    "original_start_time": row.original_start_time,
+                    "original_end_time": row.original_end_time,
+                    "original_duration": float(row.original_duration),
                     "original_text": row.original_text,
                     "edited_text": row.edited_text,
                     "relevance_score": float(row.relevance_score),
                     "reasoning": row.reasoning,
+                    "created_by_user": bool(row.created_by_user),
                     "is_selected": bool(row.is_selected),
+                    "is_deleted": bool(row.is_deleted),
                     "edited_word_timings_json": row.edited_word_timings_json,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                     "updated_at": row.updated_at.isoformat() if row.updated_at else None,
@@ -137,8 +168,12 @@ class DraftClipRepository:
         return drafts
 
     @staticmethod
-    async def get_draft_map_by_task(db: AsyncSession, task_id: str) -> Dict[str, Dict[str, Any]]:
-        drafts = await DraftClipRepository.get_drafts_by_task(db, task_id)
+    async def get_draft_map_by_task(
+        db: AsyncSession,
+        task_id: str,
+        include_deleted: bool = False,
+    ) -> Dict[str, Dict[str, Any]]:
+        drafts = await DraftClipRepository.get_drafts_by_task(db, task_id, include_deleted=include_deleted)
         return {draft["id"]: draft for draft in drafts}
 
     @staticmethod
@@ -182,7 +217,7 @@ class DraftClipRepository:
                     f"""
                     UPDATE task_clip_drafts
                     SET {', '.join(set_clauses)}
-                    WHERE task_id = :task_id AND id = :draft_id
+                    WHERE task_id = :task_id AND id = :draft_id AND is_deleted = false
                     """
                 ),
                 params,
@@ -199,6 +234,7 @@ class DraftClipRepository:
                 FROM task_clip_drafts
                 WHERE task_id = :task_id
                   AND is_selected = true
+                  AND is_deleted = false
                 """
             ),
             {"task_id": task_id},
@@ -224,10 +260,10 @@ class DraftClipRepository:
         await db.execute(
             sql_text(
                 """
-                UPDATE task_clip_drafts
-                SET edited_word_timings_json = :word_timings,
-                    updated_at = NOW()
-                WHERE task_id = :task_id AND id = :draft_id
+                    UPDATE task_clip_drafts
+                    SET edited_word_timings_json = :word_timings,
+                        updated_at = NOW()
+                    WHERE task_id = :task_id AND id = :draft_id AND is_deleted = false
                 """
             ),
             {
@@ -235,5 +271,147 @@ class DraftClipRepository:
                 "draft_id": draft_id,
                 "word_timings": word_timings,
             },
+        )
+        await db.commit()
+
+    @staticmethod
+    async def get_next_clip_order(db: AsyncSession, task_id: str) -> int:
+        result = await db.execute(
+            sql_text(
+                """
+                SELECT COALESCE(MAX(clip_order), 0) AS max_order
+                FROM task_clip_drafts
+                WHERE task_id = :task_id
+                """
+            ),
+            {"task_id": task_id},
+        )
+        max_order = int(result.scalar() or 0)
+        return max_order + 1
+
+    @staticmethod
+    async def create_draft(
+        db: AsyncSession,
+        task_id: str,
+        draft: Dict[str, Any],
+    ) -> str:
+        draft_id = str(uuid.uuid4())
+        result = await db.execute(
+            sql_text(
+                """
+                INSERT INTO task_clip_drafts (
+                    id,
+                    task_id,
+                    clip_order,
+                    start_time,
+                    end_time,
+                    duration,
+                    original_start_time,
+                    original_end_time,
+                    original_duration,
+                    original_text,
+                    edited_text,
+                    relevance_score,
+                    reasoning,
+                    created_by_user,
+                    is_selected,
+                    is_deleted,
+                    edited_word_timings_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :task_id,
+                    :clip_order,
+                    :start_time,
+                    :end_time,
+                    :duration,
+                    :original_start_time,
+                    :original_end_time,
+                    :original_duration,
+                    :original_text,
+                    :edited_text,
+                    :relevance_score,
+                    :reasoning,
+                    :created_by_user,
+                    :is_selected,
+                    :is_deleted,
+                    :edited_word_timings_json,
+                    NOW(),
+                    NOW()
+                )
+                RETURNING id
+                """
+            ),
+            {
+                "id": draft_id,
+                "task_id": task_id,
+                "clip_order": int(draft["clip_order"]),
+                "start_time": str(draft["start_time"]),
+                "end_time": str(draft["end_time"]),
+                "duration": float(draft["duration"]),
+                "original_start_time": str(draft.get("original_start_time") or draft["start_time"]),
+                "original_end_time": str(draft.get("original_end_time") or draft["end_time"]),
+                "original_duration": float(draft.get("original_duration") or draft["duration"]),
+                "original_text": draft.get("original_text"),
+                "edited_text": draft.get("edited_text"),
+                "relevance_score": float(draft.get("relevance_score") or 0.0),
+                "reasoning": draft.get("reasoning"),
+                "created_by_user": bool(draft.get("created_by_user", False)),
+                "is_selected": bool(draft.get("is_selected", True)),
+                "is_deleted": bool(draft.get("is_deleted", False)),
+                "edited_word_timings_json": draft.get("edited_word_timings_json"),
+            },
+        )
+        await db.commit()
+        return str(result.scalar())
+
+    @staticmethod
+    async def soft_delete_draft(db: AsyncSession, task_id: str, draft_id: str) -> bool:
+        result = await db.execute(
+            sql_text(
+                """
+                UPDATE task_clip_drafts
+                SET is_deleted = true,
+                    is_selected = false,
+                    updated_at = NOW()
+                WHERE task_id = :task_id
+                  AND id = :draft_id
+                  AND is_deleted = false
+                """
+            ),
+            {
+                "task_id": task_id,
+                "draft_id": draft_id,
+            },
+        )
+        await db.commit()
+        return bool(result.rowcount)
+
+    @staticmethod
+    async def restore_task_drafts(db: AsyncSession, task_id: str) -> None:
+        await db.execute(
+            sql_text(
+                """
+                UPDATE task_clip_drafts
+                SET start_time = original_start_time,
+                    end_time = original_end_time,
+                    duration = original_duration,
+                    edited_text = original_text,
+                    edited_word_timings_json = NULL,
+                    is_selected = CASE
+                        WHEN created_by_user THEN false
+                        ELSE true
+                    END,
+                    is_deleted = CASE
+                        WHEN created_by_user THEN true
+                        ELSE false
+                    END,
+                    updated_at = NOW()
+                WHERE task_id = :task_id
+                """
+            ),
+            {"task_id": task_id},
         )
         await db.commit()

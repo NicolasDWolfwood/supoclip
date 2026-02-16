@@ -25,6 +25,8 @@ export const MAX_TASK_TIMEOUT_SECONDS = 86400;
 
 export interface UserPreferences extends FontStyleOptions {
   transitionsEnabled: boolean;
+  reviewBeforeRenderEnabled: boolean;
+  timelineEditorEnabled: boolean;
   transcriptionProvider: TranscriptionProvider;
   whisperChunkingEnabled: boolean;
   whisperChunkDurationSeconds: number;
@@ -37,6 +39,8 @@ export interface UserPreferences extends FontStyleOptions {
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   ...DEFAULT_FONT_STYLE_OPTIONS,
   transitionsEnabled: false,
+  reviewBeforeRenderEnabled: true,
+  timelineEditorEnabled: true,
   transcriptionProvider: "local",
   whisperChunkingEnabled: true,
   whisperChunkDurationSeconds: 1200,
@@ -113,6 +117,8 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.shadowOffsetX === b.shadowOffsetX &&
     a.shadowOffsetY === b.shadowOffsetY &&
     a.transitionsEnabled === b.transitionsEnabled &&
+    a.reviewBeforeRenderEnabled === b.reviewBeforeRenderEnabled &&
+    a.timelineEditorEnabled === b.timelineEditorEnabled &&
     a.transcriptionProvider === b.transcriptionProvider &&
     a.whisperChunkingEnabled === b.whisperChunkingEnabled &&
     a.whisperChunkDurationSeconds === b.whisperChunkDurationSeconds &&

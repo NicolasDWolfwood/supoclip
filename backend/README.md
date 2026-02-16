@@ -85,9 +85,14 @@ When running locally or via Docker:
   - `DELETE /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
   - `PUT /tasks/ai-settings/zai/routing-mode` (`auto`, `subscription`, `metered`)
 - Review-before-render endpoints:
+  - `GET /tasks/{task_id}/source-video`
   - `GET /tasks/{task_id}/draft-clips`
+  - `POST /tasks/{task_id}/draft-clips` (create)
   - `PUT /tasks/{task_id}/draft-clips`
+  - `DELETE /tasks/{task_id}/draft-clips/{draft_id}` (soft delete)
+  - `POST /tasks/{task_id}/draft-clips/restore`
   - `POST /tasks/{task_id}/finalize`
+  - `PATCH /tasks/{task_id}` supports per-task `timeline_editor_enabled`
 
 ## Fonts
 

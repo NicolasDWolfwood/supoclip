@@ -763,6 +763,14 @@ function SettingsPageContent() {
         const nextPreferences: UserPreferences = {
           ...normalizedFontStyle,
           transitionsEnabled: Boolean(data.transitionsEnabled),
+          reviewBeforeRenderEnabled:
+            typeof data.reviewBeforeRenderEnabled === "boolean"
+              ? data.reviewBeforeRenderEnabled
+              : DEFAULT_USER_PREFERENCES.reviewBeforeRenderEnabled,
+          timelineEditorEnabled:
+            typeof data.timelineEditorEnabled === "boolean"
+              ? data.timelineEditorEnabled
+              : DEFAULT_USER_PREFERENCES.timelineEditorEnabled,
           transcriptionProvider:
             typeof data.transcriptionProvider === "string" && isTranscriptionProvider(data.transcriptionProvider)
               ? data.transcriptionProvider
@@ -1082,8 +1090,19 @@ function SettingsPageContent() {
               <SettingsSectionVideo
                 isSaving={isSavingPreferences}
                 transitionsEnabled={preferencesDraft.transitionsEnabled}
+                reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
+                timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
                 onToggleTransitions={() => {
                   setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
+                }}
+                onToggleReviewBeforeRender={() => {
+                  setPreferencesDraft((prev) => ({
+                    ...prev,
+                    reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
+                  }));
+                }}
+                onToggleTimelineEditor={() => {
+                  setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));
                 }}
               />
             ) : activeSection === "transcription" ? (

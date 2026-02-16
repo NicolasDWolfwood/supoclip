@@ -236,12 +236,14 @@ All services are connected via a Docker network and start automatically with pro
 ## Review-Before-Render Workflow
 
 New tasks now default to **review before render enabled**.
+You can change that default in **Settings -> Video**.
 
 Flow:
 1. Task runs download/transcription/AI analysis.
 2. Task enters `awaiting_review` (Needs Review).
-3. In the task page, edit draft clip timing/text and deselect clips.
-4. Click **Finalize & Render** to queue rendering from approved drafts.
+3. In the task page, edit draft clip timing/text, deselect clips, and optionally add/delete clips.
+4. (Default ON) Use the interactive timeline editor to drag clip ranges on the original source video in 0.5s steps with no overlap.
+5. Click **Finalize & Render** to queue rendering from approved drafts.
 
 If you disable review in the create form, tasks keep the original one-pass behavior (analysis + render in one run).
 

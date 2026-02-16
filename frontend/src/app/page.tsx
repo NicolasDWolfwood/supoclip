@@ -163,6 +163,7 @@ export default function Home() {
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
   const [reviewBeforeRenderEnabled, setReviewBeforeRenderEnabled] = useState(true);
+  const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
   const [whisperChunkingEnabled, setWhisperChunkingEnabled] = useState(DEFAULT_WHISPER_CHUNKING_ENABLED);
   const [whisperChunkDurationSeconds, setWhisperChunkDurationSeconds] = useState(DEFAULT_WHISPER_CHUNK_DURATION_SECONDS);
@@ -249,6 +250,8 @@ export default function Home() {
             shadowOffsetX?: unknown;
             shadowOffsetY?: unknown;
             transitionsEnabled?: unknown;
+            reviewBeforeRenderEnabled?: unknown;
+            timelineEditorEnabled?: unknown;
             transcriptionProvider?: unknown;
             whisperChunkingEnabled?: unknown;
             whisperChunkDurationSeconds?: unknown;
@@ -274,6 +277,12 @@ export default function Home() {
           setShadowOffsetX(normalizedFontStyle.shadowOffsetX);
           setShadowOffsetY(normalizedFontStyle.shadowOffsetY);
           setTransitionsEnabled(Boolean(data.transitionsEnabled));
+          setReviewBeforeRenderEnabled(
+            typeof data.reviewBeforeRenderEnabled === "boolean" ? data.reviewBeforeRenderEnabled : true,
+          );
+          setTimelineEditorEnabled(
+            typeof data.timelineEditorEnabled === "boolean" ? data.timelineEditorEnabled : true,
+          );
 
           const savedTranscriptionProvider = data.transcriptionProvider;
           if (savedTranscriptionProvider === "local" || savedTranscriptionProvider === "assemblyai") {
@@ -308,7 +317,7 @@ export default function Home() {
     };
 
     loadUserPreferences();
-  }, [session?.user?.id]);
+  }, [session?.user?.id, taskTimeoutCapSeconds]);
 
   useEffect(() => {
     const loadTranscriptionLimits = async () => {
@@ -549,6 +558,7 @@ export default function Home() {
             title: null
           },
           review_before_render_enabled: reviewBeforeRenderEnabled,
+          timeline_editor_enabled: timelineEditorEnabled,
           font_options: {
             font_family: fontFamily,
             font_size: fontSize,
@@ -1286,6 +1296,21 @@ export default function Home() {
                       type="checkbox"
                       checked={reviewBeforeRenderEnabled}
                       onChange={(event) => setReviewBeforeRenderEnabled(event.target.checked)}
+                      disabled={isLoading}
+                      className="mt-1 h-4 w-4"
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-4 rounded-md border border-gray-200 bg-white p-3">
+                    <div>
+                      <p className="text-sm font-medium text-black">Interactive timeline editor</p>
+                      <p className="text-xs text-gray-600">
+                        In review mode, show source video with draggable clip ranges and resize handles.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={timelineEditorEnabled}
+                      onChange={(event) => setTimelineEditorEnabled(event.target.checked)}
                       disabled={isLoading}
                       className="mt-1 h-4 w-4"
                     />

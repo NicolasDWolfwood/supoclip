@@ -22,6 +22,7 @@ import { useSession } from "@/lib/auth-client";
 import { ArrowLeft, Download, Clock, Timer, Star, AlertCircle, Trash2, Edit2, X, Check } from "lucide-react";
 import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
+import DraftTimelineEditor from "@/components/draft-timeline-editor";
 import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 
 interface Clip {
@@ -50,6 +51,7 @@ interface DraftClip {
   relevance_score: number;
   reasoning: string;
   is_selected: boolean;
+  created_by_user?: boolean;
   edited_word_timings_json?: Array<{ text: string; start: number; end: number }> | null;
   created_at?: string;
   updated_at?: string;
@@ -73,6 +75,7 @@ interface TaskDetails {
   font_color?: string;
   transitions_enabled?: boolean;
   review_before_render_enabled?: boolean;
+  timeline_editor_enabled?: boolean;
 }
 
 interface TranscriptProgressMetadata {
@@ -122,6 +125,27 @@ function formatSeconds(value?: number): string {
     return "0.0s";
   }
   return `${value.toFixed(1)}s`;
+}
+
+function parseTimestampToSeconds(value: string): number {
+  const normalized = (value || "").trim();
+  if (!normalized) return 0;
+  const parts = normalized.split(":");
+  if (parts.length === 2) {
+    const minutes = Number(parts[0]);
+    const seconds = Number(parts[1]);
+    if (!Number.isFinite(minutes) || !Number.isFinite(seconds)) return 0;
+    return minutes * 60 + seconds;
+  }
+  if (parts.length === 3) {
+    const hours = Number(parts[0]);
+    const minutes = Number(parts[1]);
+    const seconds = Number(parts[2]);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || !Number.isFinite(seconds)) return 0;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+  const raw = Number(normalized);
+  return Number.isFinite(raw) ? raw : 0;
 }
 
 function deriveStageProgress(
@@ -181,6 +205,9 @@ export default function TaskPage() {
   const [draftsDirty, setDraftsDirty] = useState(false);
   const [isSavingDrafts, setIsSavingDrafts] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [sourceVideoUrl, setSourceVideoUrl] = useState<string | null>(null);
+  const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
+  const [isUpdatingTaskOptions, setIsUpdatingTaskOptions] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +228,15 @@ export default function TaskPage() {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const taskId = Array.isArray(params.id) ? params.id[0] : params.id;
   const userId = session?.user?.id;
+  const sortDraftClips = useCallback((drafts: DraftClip[]) => {
+    return [...drafts].sort((a, b) => {
+      const startDiff = parseTimestampToSeconds(a.start_time) - parseTimestampToSeconds(b.start_time);
+      if (Math.abs(startDiff) > 1e-6) {
+        return startDiff;
+      }
+      return a.clip_order - b.clip_order;
+    });
+  }, []);
 
   useEffect(() => {
     progressRef.current = progress;
@@ -248,6 +284,9 @@ export default function TaskPage() {
 
       const taskData = await taskResponse.json();
       setTask(taskData);
+      setTimelineEditorEnabled(
+        typeof taskData.timeline_editor_enabled === "boolean" ? taskData.timeline_editor_enabled : true,
+      );
       const nextProgress = taskData.progress ?? 0;
       const nextMessage = taskData.progress_message ?? "";
       setProgress(nextProgress);
@@ -274,6 +313,7 @@ export default function TaskPage() {
         setDraftClips([]);
         setDraftsDirty(false);
         setDraftError(null);
+        setSourceVideoUrl(null);
       } else if (taskData.status === "awaiting_review") {
         const draftsResponse = await fetch(`${apiUrl}/tasks/${taskId}/draft-clips`, {
           headers,
@@ -284,15 +324,17 @@ export default function TaskPage() {
         }
 
         const draftsData = await draftsResponse.json();
-        setDraftClips((draftsData.draft_clips || []) as DraftClip[]);
+        setDraftClips(sortDraftClips((draftsData.draft_clips || []) as DraftClip[]));
         setDraftsDirty(false);
         setDraftError(null);
         setClips([]);
+        setSourceVideoUrl(`${apiUrl}/tasks/${taskId}/source-video?user_id=${encodeURIComponent(userId)}`);
       } else {
         setClips([]);
         setDraftClips([]);
         setDraftsDirty(false);
         setDraftError(null);
+        setSourceVideoUrl(null);
       }
 
       return true;
@@ -301,7 +343,7 @@ export default function TaskPage() {
       setError(err instanceof Error ? err.message : "Failed to load task");
       return false;
     }
-  }, [apiUrl, taskId, userId]);
+  }, [apiUrl, sortDraftClips, taskId, userId]);
 
   // Initial fetch
   useEffect(() => {
@@ -571,61 +613,201 @@ export default function TaskPage() {
     }
   };
 
-  const updateDraftClip = (draftId: string, patch: Partial<DraftClip>) => {
+  const updateDraftClip = useCallback((draftId: string, patch: Partial<DraftClip>) => {
     setDraftClips((prev) =>
-      prev.map((draft) => (draft.id === draftId ? { ...draft, ...patch } : draft))
+      sortDraftClips(prev.map((draft) => (draft.id === draftId ? { ...draft, ...patch } : draft)))
     );
     setDraftsDirty(true);
     setDraftError(null);
-  };
+  }, [sortDraftClips]);
 
-  const saveDraftClips = async (): Promise<boolean> => {
-    if (!session?.user?.id || !params.id) return false;
-    if (draftClips.length === 0) return true;
+  const updateDraftClipTiming = useCallback(
+    (draftId: string, startTime: string, endTime: string) => {
+      updateDraftClip(draftId, { start_time: startTime, end_time: endTime });
+    },
+    [updateDraftClip],
+  );
 
-    setIsSavingDrafts(true);
+  const saveDraftClips = useCallback(
+    async (options?: { force?: boolean; silent?: boolean }): Promise<boolean> => {
+      if (!session?.user?.id || !params.id) return false;
+      if (draftClips.length === 0) return true;
+      if (!draftsDirty && !options?.force) return true;
+      if (isSavingDrafts) return false;
+
+      setIsSavingDrafts(true);
+      if (!options?.silent) {
+        setDraftError(null);
+      }
+      try {
+        const response = await fetch(`${apiUrl}/tasks/${params.id}/draft-clips`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            user_id: session.user.id,
+          },
+          body: JSON.stringify({
+            draft_clips: draftClips.map((draft) => ({
+              id: draft.id,
+              start_time: draft.start_time,
+              end_time: draft.end_time,
+              edited_text: draft.edited_text,
+              is_selected: draft.is_selected,
+            })),
+          }),
+        });
+
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+          throw new Error(payload.detail || `Failed to save drafts: ${response.status}`);
+        }
+
+        const payload = (await response.json()) as { draft_clips?: DraftClip[] };
+        setDraftClips(sortDraftClips(payload.draft_clips || []));
+        setDraftsDirty(false);
+        return true;
+      } catch (saveError) {
+        const message =
+          saveError instanceof Error ? saveError.message : "Failed to save draft clips.";
+        setDraftError(message);
+        return false;
+      } finally {
+        setIsSavingDrafts(false);
+      }
+    },
+    [apiUrl, draftClips, draftsDirty, isSavingDrafts, params.id, session?.user?.id, sortDraftClips],
+  );
+
+  useEffect(() => {
+    if (!draftsDirty || isSavingDrafts || isFinalizing || task?.status !== "awaiting_review" || draftError) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      void saveDraftClips({ silent: true });
+    }, 700);
+    return () => window.clearTimeout(timeoutId);
+  }, [draftError, draftsDirty, isFinalizing, isSavingDrafts, saveDraftClips, task?.status]);
+
+  const handleCreateDraftClip = async (startTime: string, endTime: string) => {
+    if (!session?.user?.id || !params.id) return;
+
     setDraftError(null);
     try {
       const response = await fetch(`${apiUrl}/tasks/${params.id}/draft-clips`, {
-        method: "PUT",
+        method: "POST",
         headers: {
           "Content-Type": "application/json",
           user_id: session.user.id,
         },
         body: JSON.stringify({
-          draft_clips: draftClips.map((draft) => ({
-            id: draft.id,
-            start_time: draft.start_time,
-            end_time: draft.end_time,
-            edited_text: draft.edited_text,
-            is_selected: draft.is_selected,
-          })),
+          start_time: startTime,
+          end_time: endTime,
+          is_selected: true,
         }),
       });
-
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { detail?: string };
-        throw new Error(payload.detail || `Failed to save drafts: ${response.status}`);
+        throw new Error(payload.detail || `Failed to create draft clip: ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { draft_clip?: DraftClip };
+      if (payload.draft_clip) {
+        setDraftClips((prev) => sortDraftClips([...prev, payload.draft_clip as DraftClip]));
+      } else {
+        await fetchTaskStatus();
+      }
+      setDraftsDirty(false);
+    } catch (createError) {
+      const message =
+        createError instanceof Error ? createError.message : "Failed to create draft clip.";
+      setDraftError(message);
+    }
+  };
+
+  const handleDeleteDraftClip = async (draftId: string) => {
+    if (!session?.user?.id || !params.id) return;
+    setDraftError(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/${params.id}/draft-clips/${draftId}`, {
+        method: "DELETE",
+        headers: {
+          user_id: session.user.id,
+        },
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(payload.detail || `Failed to delete draft clip: ${response.status}`);
       }
 
       const payload = (await response.json()) as { draft_clips?: DraftClip[] };
-      setDraftClips(payload.draft_clips || []);
+      setDraftClips(sortDraftClips(payload.draft_clips || []));
       setDraftsDirty(false);
-      return true;
-    } catch (saveError) {
+    } catch (deleteError) {
       const message =
-        saveError instanceof Error ? saveError.message : "Failed to save draft clips.";
+        deleteError instanceof Error ? deleteError.message : "Failed to delete draft clip.";
       setDraftError(message);
-      return false;
+    }
+  };
+
+  const handleRestoreDrafts = async () => {
+    if (!session?.user?.id || !params.id) return;
+    setDraftError(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/${params.id}/draft-clips/restore`, {
+        method: "POST",
+        headers: {
+          user_id: session.user.id,
+        },
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(payload.detail || `Failed to restore draft clips: ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { draft_clips?: DraftClip[] };
+      setDraftClips(sortDraftClips(payload.draft_clips || []));
+      setDraftsDirty(false);
+    } catch (restoreError) {
+      const message =
+        restoreError instanceof Error ? restoreError.message : "Failed to restore draft clips.";
+      setDraftError(message);
+    }
+  };
+
+  const handleToggleTimelineEditor = async (enabled: boolean) => {
+    if (!session?.user?.id || !params.id || isUpdatingTaskOptions) return;
+    setIsUpdatingTaskOptions(true);
+    setDraftError(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/${params.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session.user.id,
+        },
+        body: JSON.stringify({
+          timeline_editor_enabled: enabled,
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(payload.detail || `Failed to update timeline option: ${response.status}`);
+      }
+      setTimelineEditorEnabled(enabled);
+      setTask((prev) => (prev ? { ...prev, timeline_editor_enabled: enabled } : prev));
+    } catch (toggleError) {
+      const message =
+        toggleError instanceof Error ? toggleError.message : "Failed to update timeline option.";
+      setDraftError(message);
     } finally {
-      setIsSavingDrafts(false);
+      setIsUpdatingTaskOptions(false);
     }
   };
 
   const handleFinalize = async () => {
     if (!session?.user?.id || !params.id || isFinalizing) return;
     if (draftsDirty) {
-      const saved = await saveDraftClips();
+      const saved = await saveDraftClips({ force: true });
       if (!saved) return;
     }
 
@@ -722,6 +904,7 @@ export default function TaskPage() {
     typeof transcriptProgress.chunk_end_seconds === "number"
       ? `${transcriptProgress.chunk_start_seconds.toFixed(1)}s -> ${transcriptProgress.chunk_end_seconds.toFixed(1)}s`
       : null;
+  const selectedDraftCount = draftClips.filter((clip) => clip.is_selected).length;
 
   if (isPending) {
     return (
@@ -1084,29 +1267,52 @@ export default function TaskPage() {
                   <div>
                     <h2 className="text-xl font-semibold text-black">Review Draft Clips</h2>
                     <p className="text-sm text-gray-600">
-                      Edit timing/text, deselect unwanted clips, then finalize rendering.
+                      Edit timing/text, add or delete clips, then finalize rendering.
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={() => void handleRestoreDrafts()}
+                      disabled={isSavingDrafts || isFinalizing || draftClips.length === 0}
+                    >
+                      Restore
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
                       onClick={() => void saveDraftClips()}
                       disabled={isSavingDrafts || isFinalizing || draftClips.length === 0}
                     >
-                      {isSavingDrafts ? "Saving..." : draftsDirty ? "Save Edits" : "Saved"}
+                      {isSavingDrafts ? "Saving..." : draftsDirty ? "Save Now" : "Saved"}
                     </Button>
                     <Button
                       size="sm"
                       onClick={() => void handleFinalize()}
-                      disabled={isSavingDrafts || isFinalizing || draftClips.length === 0}
+                      disabled={isSavingDrafts || isFinalizing || draftClips.length === 0 || selectedDraftCount === 0}
                     >
                       {isFinalizing ? "Finalizing..." : "Finalize & Render"}
                     </Button>
                   </div>
                 </div>
+                <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                  <label className="flex items-center gap-2 text-sm font-medium text-black">
+                    <input
+                      type="checkbox"
+                      checked={timelineEditorEnabled}
+                      onChange={(event) => void handleToggleTimelineEditor(event.target.checked)}
+                      disabled={isUpdatingTaskOptions || isSavingDrafts || isFinalizing}
+                      className="h-4 w-4"
+                    />
+                    Interactive timeline editor
+                  </label>
+                  <p className="mt-1 text-xs text-gray-600">
+                    Use the source video timeline to drag clip boundaries in 0.5s increments with snapping/no overlap.
+                  </p>
+                </div>
                 <p className="text-xs text-gray-500">
-                  Selected clips: {draftClips.filter((clip) => clip.is_selected).length}/{draftClips.length}
+                  Selected clips: {selectedDraftCount}/{draftClips.length} • Autosave: {draftsDirty ? "pending changes" : "up to date"}
                 </p>
                 {draftError && (
                   <Alert>
@@ -1117,14 +1323,27 @@ export default function TaskPage() {
               </CardContent>
             </Card>
 
+            {timelineEditorEnabled && (
+              <DraftTimelineEditor
+                sourceVideoUrl={sourceVideoUrl}
+                drafts={draftClips}
+                disabled={isSavingDrafts || isFinalizing}
+                onDraftTimingChange={updateDraftClipTiming}
+                onAddDraft={(startTime, endTime) => {
+                  void handleCreateDraftClip(startTime, endTime);
+                }}
+              />
+            )}
+
             {draftClips.length === 0 ? (
               <Card>
                 <CardContent className="p-6 text-center text-sm text-gray-600">
                   No draft clips are available for review.
+                  {timelineEditorEnabled ? " Use the timeline to add one at the playhead." : ""}
                 </CardContent>
               </Card>
             ) : (
-              draftClips.map((draft) => (
+              draftClips.map((draft, displayIndex) => (
                 <Card key={draft.id}>
                   <CardContent className="p-6 space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1138,18 +1357,34 @@ export default function TaskPage() {
                           disabled={isSavingDrafts || isFinalizing}
                           className="h-4 w-4"
                         />
-                        <h3 className="font-semibold text-black">Clip {draft.clip_order}</h3>
+                        <h3 className="font-semibold text-black">Clip {displayIndex + 1}</h3>
                         <Badge className={getScoreColor(draft.relevance_score)}>
                           <Star className="w-3 h-3 mr-1" />
                           {(draft.relevance_score * 100).toFixed(0)}%
                         </Badge>
+                        {draft.created_by_user && (
+                          <Badge variant="outline">Manual</Badge>
+                        )}
                       </div>
-                      <p className="text-xs text-gray-500">Current duration: {formatDuration(draft.duration)}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-gray-500">Current duration: {formatDuration(draft.duration)}</p>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+                          onClick={() => void handleDeleteDraftClip(draft.id)}
+                          disabled={isSavingDrafts || isFinalizing}
+                        >
+                          <Trash2 className="w-3 h-3 mr-1" />
+                          Delete
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-600">Start (MM:SS)</label>
+                        <label className="text-xs font-medium text-gray-600">Start (MM:SS or HH:MM:SS, .5 allowed)</label>
                         <Input
                           value={draft.start_time}
                           onChange={(event) =>
@@ -1159,7 +1394,7 @@ export default function TaskPage() {
                         />
                       </div>
                       <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-600">End (MM:SS)</label>
+                        <label className="text-xs font-medium text-gray-600">End (MM:SS or HH:MM:SS, .5 allowed)</label>
                         <Input
                           value={draft.end_time}
                           onChange={(event) =>

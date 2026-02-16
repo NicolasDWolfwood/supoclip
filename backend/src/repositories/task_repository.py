@@ -34,6 +34,7 @@ class TaskRepository:
         transcription_provider: str = "local",
         ai_provider: str = "openai",
         review_before_render_enabled: bool = True,
+        timeline_editor_enabled: bool = True,
     ) -> str:
         """Create a new task and return its ID."""
         result = await db.execute(
@@ -49,6 +50,7 @@ class TaskRepository:
                     transcription_provider,
                     ai_provider,
                     review_before_render_enabled,
+                    timeline_editor_enabled,
                     created_at,
                     updated_at
                 )
@@ -63,6 +65,7 @@ class TaskRepository:
                     :transcription_provider,
                     :ai_provider,
                     :review_before_render_enabled,
+                    :timeline_editor_enabled,
                     NOW(),
                     NOW()
                 )
@@ -79,6 +82,7 @@ class TaskRepository:
                 "transcription_provider": transcription_provider,
                 "ai_provider": ai_provider,
                 "review_before_render_enabled": review_before_render_enabled,
+                "timeline_editor_enabled": timeline_editor_enabled,
             }
         )
         await db.commit()
@@ -121,6 +125,7 @@ class TaskRepository:
             "transcription_provider": getattr(row, "transcription_provider", "local"),
             "ai_provider": getattr(row, "ai_provider", "openai"),
             "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
+            "timeline_editor_enabled": bool(getattr(row, "timeline_editor_enabled", True)),
             "created_at": row.created_at,
             "updated_at": row.updated_at
         }
@@ -199,6 +204,7 @@ class TaskRepository:
                 "transcription_provider": getattr(row, "transcription_provider", "local"),
                 "ai_provider": getattr(row, "ai_provider", "openai"),
                 "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
+                "timeline_editor_enabled": bool(getattr(row, "timeline_editor_enabled", True)),
                 "clips_count": row.clips_count,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at
@@ -532,6 +538,46 @@ class TaskRepository:
             {"user_id": user_id}
         )
         return result.fetchone() is not None
+
+    @staticmethod
+    async def get_user_default_timeline_editor_enabled(db: AsyncSession, user_id: str) -> bool:
+        """Get user-level default toggle for interactive timeline editor."""
+        result = await db.execute(
+            text("SELECT default_timeline_editor_enabled FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            return True
+        return bool(getattr(row, "default_timeline_editor_enabled", True))
+
+    @staticmethod
+    async def get_user_default_review_before_render_enabled(db: AsyncSession, user_id: str) -> bool:
+        """Get user-level default toggle for review-before-render workflow."""
+        result = await db.execute(
+            text("SELECT default_review_before_render_enabled FROM users WHERE id = :user_id"),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            return True
+        return bool(getattr(row, "default_review_before_render_enabled", True))
+
+    @staticmethod
+    async def update_task_timeline_editor_enabled(db: AsyncSession, task_id: str, enabled: bool) -> None:
+        """Update per-task timeline editor toggle."""
+        await db.execute(
+            text(
+                """
+                UPDATE tasks
+                SET timeline_editor_enabled = :enabled,
+                    updated_at = NOW()
+                WHERE id = :task_id
+                """
+            ),
+            {"task_id": task_id, "enabled": bool(enabled)},
+        )
+        await db.commit()
 
     @staticmethod
     async def delete_task(db: AsyncSession, task_id: str) -> None:

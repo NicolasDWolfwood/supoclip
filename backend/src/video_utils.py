@@ -1206,12 +1206,19 @@ def parse_timestamp_to_seconds(timestamp_str: str) -> float:
         if ':' in timestamp_str:
             parts = timestamp_str.split(':')
             if len(parts) == 2:
-                minutes, seconds = map(int, parts)
+                minutes = int(parts[0])
+                seconds = float(parts[1])
+                if seconds < 0 or seconds >= 60:
+                    raise ValueError("seconds must be in [0, 60)")
                 result = minutes * 60 + seconds
                 logger.info(f"Parsed '{timestamp_str}' -> {result}s")
                 return result
             elif len(parts) == 3:  # HH:MM:SS format
-                hours, minutes, seconds = map(int, parts)
+                hours = int(parts[0])
+                minutes = int(parts[1])
+                seconds = float(parts[2])
+                if minutes < 0 or minutes > 59 or seconds < 0 or seconds >= 60:
+                    raise ValueError("invalid HH:MM:SS timestamp")
                 result = hours * 3600 + minutes * 60 + seconds
                 logger.info(f"Parsed '{timestamp_str}' -> {result}s")
                 return result
