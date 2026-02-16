@@ -55,6 +55,18 @@ interface TaskDetails {
   font_color?: string;
 }
 
+interface TranscriptProgressMetadata {
+  mode?: "chunked" | "single";
+  chunk_index?: number;
+  chunk_total?: number;
+  chunks_completed?: number;
+  chunk_start_seconds?: number;
+  chunk_end_seconds?: number;
+  chunk_elapsed_seconds?: number;
+  total_elapsed_seconds?: number;
+  average_chunk_seconds?: number;
+}
+
 type StageKey = "download" | "transcript" | "analysis" | "clips" | "finalizing";
 
 const STAGE_LABELS: Record<StageKey, string> = {
@@ -83,6 +95,13 @@ const EMPTY_STAGE_NOTES: Record<StageKey, string> = {
 
 function clampPercent(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function formatSeconds(value?: number): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "0.0s";
+  }
+  return `${value.toFixed(1)}s`;
 }
 
 function deriveStageProgress(
@@ -144,6 +163,7 @@ export default function TaskPage() {
   const [progressMessage, setProgressMessage] = useState("");
   const [stageProgress, setStageProgress] = useState<Record<StageKey, number>>(EMPTY_STAGE_PROGRESS);
   const [stageNotes, setStageNotes] = useState<Record<StageKey, string>>(EMPTY_STAGE_NOTES);
+  const [transcriptProgress, setTranscriptProgress] = useState<TranscriptProgressMetadata | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -283,7 +303,20 @@ export default function TaskPage() {
             setStageNotes((prev) => ({ ...prev, ...inferredNotes }));
           }
         }
-        const metadata = (data?.metadata ?? {}) as { stage?: StageKey; stage_progress?: number; cached?: boolean };
+        const metadata = (data?.metadata ?? {}) as {
+          stage?: StageKey;
+          stage_progress?: number;
+          cached?: boolean;
+          mode?: "chunked" | "single";
+          chunk_index?: number;
+          chunk_total?: number;
+          chunks_completed?: number;
+          chunk_start_seconds?: number;
+          chunk_end_seconds?: number;
+          chunk_elapsed_seconds?: number;
+          total_elapsed_seconds?: number;
+          average_chunk_seconds?: number;
+        };
         if (metadata.stage && metadata.stage in STAGE_LABELS) {
           setStageProgress((prev) => ({
             ...prev,
@@ -302,6 +335,66 @@ export default function TaskPage() {
                     : "cached";
               return { ...prev, [metadata.stage as StageKey]: note };
             });
+          }
+          if (metadata.stage === "transcript") {
+            const hasChunkData =
+              metadata.mode ||
+              typeof metadata.chunk_total === "number" ||
+              typeof metadata.chunk_index === "number" ||
+              typeof metadata.chunks_completed === "number";
+
+            if (hasChunkData) {
+              setTranscriptProgress((prev) => ({
+                mode: metadata.mode ?? prev?.mode,
+                chunk_index:
+                  typeof metadata.chunk_index === "number"
+                    ? metadata.chunk_index
+                    : prev?.chunk_index,
+                chunk_total:
+                  typeof metadata.chunk_total === "number"
+                    ? metadata.chunk_total
+                    : prev?.chunk_total,
+                chunks_completed:
+                  typeof metadata.chunks_completed === "number"
+                    ? metadata.chunks_completed
+                    : prev?.chunks_completed,
+                chunk_start_seconds:
+                  typeof metadata.chunk_start_seconds === "number"
+                    ? metadata.chunk_start_seconds
+                    : prev?.chunk_start_seconds,
+                chunk_end_seconds:
+                  typeof metadata.chunk_end_seconds === "number"
+                    ? metadata.chunk_end_seconds
+                    : prev?.chunk_end_seconds,
+                chunk_elapsed_seconds:
+                  typeof metadata.chunk_elapsed_seconds === "number"
+                    ? metadata.chunk_elapsed_seconds
+                    : prev?.chunk_elapsed_seconds,
+                total_elapsed_seconds:
+                  typeof metadata.total_elapsed_seconds === "number"
+                    ? metadata.total_elapsed_seconds
+                    : prev?.total_elapsed_seconds,
+                average_chunk_seconds:
+                  typeof metadata.average_chunk_seconds === "number"
+                    ? metadata.average_chunk_seconds
+                    : prev?.average_chunk_seconds,
+              }));
+              if (
+                metadata.mode === "chunked" &&
+                typeof metadata.chunks_completed === "number" &&
+                typeof metadata.chunk_total === "number"
+              ) {
+                setStageNotes((prev) => ({
+                  ...prev,
+                  transcript: `chunk ${metadata.chunks_completed}/${metadata.chunk_total}`,
+                }));
+              } else if (metadata.mode === "single") {
+                setStageNotes((prev) => ({
+                  ...prev,
+                  transcript: "single pass",
+                }));
+              }
+            }
           }
         } else {
           const nextProgress = typeof data.progress === "number" ? data.progress : progressRef.current;
@@ -461,6 +554,22 @@ export default function TaskPage() {
 
     return `${stageProgress[stage]}%`;
   };
+
+  const transcriptChunkProgressPercent =
+    transcriptProgress &&
+    typeof transcriptProgress.chunk_total === "number" &&
+    transcriptProgress.chunk_total > 0
+      ? clampPercent(
+          ((transcriptProgress.chunks_completed ?? 0) / transcriptProgress.chunk_total) * 100
+        )
+      : 0;
+
+  const transcriptChunkWindowLabel =
+    transcriptProgress &&
+    typeof transcriptProgress.chunk_start_seconds === "number" &&
+    typeof transcriptProgress.chunk_end_seconds === "number"
+      ? `${transcriptProgress.chunk_start_seconds.toFixed(1)}s -> ${transcriptProgress.chunk_end_seconds.toFixed(1)}s`
+      : null;
 
   if (isPending) {
     return (
@@ -696,6 +805,51 @@ export default function TaskPage() {
                           </div>
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {transcriptProgress && (
+                    <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-900">Transcript Runtime</span>
+                        <span className="text-xs text-blue-800">
+                          {transcriptProgress.mode === "chunked" ? "Chunked Whisper" : "Single-pass Whisper"}
+                        </span>
+                      </div>
+
+                      {transcriptProgress.mode === "chunked" && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between text-xs text-blue-900">
+                            <span>
+                              Chunks: {transcriptProgress.chunks_completed ?? 0}/
+                              {transcriptProgress.chunk_total ?? 0}
+                            </span>
+                            <span>{transcriptChunkProgressPercent}%</span>
+                          </div>
+                          <div className="w-full bg-blue-100 rounded-full h-1.5">
+                            <div
+                              className="bg-blue-600 h-1.5 rounded-full transition-all duration-500 ease-out"
+                              style={{ width: `${transcriptChunkProgressPercent}%` }}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 gap-1 text-xs text-blue-900 sm:grid-cols-2">
+                        <span>
+                          Current chunk:{" "}
+                          {typeof transcriptProgress.chunk_index === "number" &&
+                          typeof transcriptProgress.chunk_total === "number"
+                            ? `${transcriptProgress.chunk_index}/${transcriptProgress.chunk_total}`
+                            : "n/a"}
+                        </span>
+                        <span>Last chunk time: {formatSeconds(transcriptProgress.chunk_elapsed_seconds)}</span>
+                        <span>Total transcript time: {formatSeconds(transcriptProgress.total_elapsed_seconds)}</span>
+                        <span>Avg chunk time: {formatSeconds(transcriptProgress.average_chunk_seconds)}</span>
+                      </div>
+                      {transcriptChunkWindowLabel && (
+                        <p className="text-xs text-blue-800">Chunk window: {transcriptChunkWindowLabel}</p>
+                      )}
                     </div>
                   )}
 

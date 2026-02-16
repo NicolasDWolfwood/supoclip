@@ -102,6 +102,7 @@ class VideoService:
         whisper_chunking_enabled: Optional[bool] = None,
         whisper_chunk_duration_seconds: Optional[int] = None,
         whisper_chunk_overlap_seconds: Optional[int] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> str:
         """
         Generate transcript from video using configured transcription provider.
@@ -116,6 +117,7 @@ class VideoService:
             whisper_chunking_enabled,
             whisper_chunk_duration_seconds,
             whisper_chunk_overlap_seconds,
+            progress_callback,
         )
         logger.info(f"Transcript generated: {len(transcript)} characters")
         return transcript
@@ -153,6 +155,37 @@ class VideoService:
 
         heartbeat_task = None
         stop_heartbeat = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def on_transcription_progress(progress_event: Dict[str, Any]) -> None:
+            if not progress_callback:
+                return
+            try:
+                stage_progress = int(progress_event.get("stage_progress", 0) or 0)
+                stage_progress = max(0, min(100, stage_progress))
+                overall_progress = 30 + int((stage_progress / 100) * 20)
+                message = str(progress_event.get("message") or "Generating transcript...")
+                metadata = {
+                    "stage": "transcript",
+                    "stage_progress": stage_progress,
+                    "overall_progress": overall_progress,
+                    "transcription_provider": transcription_provider,
+                    **progress_event,
+                }
+                future = asyncio.run_coroutine_threadsafe(
+                    progress_callback(overall_progress, message, metadata),
+                    loop,
+                )
+
+                def _log_callback_error(done_future: "asyncio.Future[Any]") -> None:
+                    try:
+                        done_future.result()
+                    except Exception as exc:
+                        logger.warning(f"Failed to publish transcription progress event: {exc}")
+
+                future.add_done_callback(_log_callback_error)
+            except Exception as exc:
+                logger.warning(f"Failed to prepare transcription progress event: {exc}")
 
         async def heartbeat():
             # Transcript stage maps to overall progress range 30..50.
@@ -187,6 +220,7 @@ class VideoService:
                 whisper_chunking_enabled=whisper_chunking_enabled,
                 whisper_chunk_duration_seconds=whisper_chunk_duration_seconds,
                 whisper_chunk_overlap_seconds=whisper_chunk_overlap_seconds,
+                progress_callback=on_transcription_progress,
             )
             return transcript
         finally:

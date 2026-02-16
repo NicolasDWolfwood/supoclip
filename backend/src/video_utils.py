@@ -15,6 +15,7 @@ import threading
 import urllib.request
 import subprocess
 import tempfile
+import time
 
 import cv2
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
@@ -315,6 +316,18 @@ def _resolve_whisper_chunking_settings(
     return chunking_enabled, chunk_duration_seconds, chunk_overlap_seconds
 
 
+def _emit_transcription_progress(
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]],
+    payload: Dict[str, Any],
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(payload)
+    except Exception as exc:
+        logger.warning(f"Failed to emit transcription progress payload: {exc}")
+
+
 def _extract_audio_chunk_for_whisper(
     video_path: Path,
     output_path: Path,
@@ -473,11 +486,26 @@ def _transcribe_with_local_whisper_chunked(
     use_fp16: bool,
     chunk_ranges: List[Tuple[float, float]],
     overlap_seconds: int,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
+    total_chunks = len(chunk_ranges)
+    transcription_started_at = time.perf_counter()
+
     logger.info(
         "Starting chunked local Whisper transcription (%s chunks, overlap=%ss)",
-        len(chunk_ranges),
+        total_chunks,
         overlap_seconds,
+    )
+    _emit_transcription_progress(
+        progress_callback,
+        {
+            "mode": "chunked",
+            "chunk_total": total_chunks,
+            "chunks_completed": 0,
+            "overlap_seconds": overlap_seconds,
+            "stage_progress": 5,
+            "message": f"Starting chunked Whisper transcription ({total_chunks} chunks)",
+        },
     )
 
     all_words: List[Dict[str, Any]] = []
@@ -485,10 +513,11 @@ def _transcribe_with_local_whisper_chunked(
         temp_dir_path = Path(temp_dir)
 
         for idx, (start_sec, end_sec) in enumerate(chunk_ranges, start=1):
+            chunk_started_at = time.perf_counter()
             logger.info(
                 "Whisper chunk %s/%s: %.1fs -> %.1fs",
                 idx,
-                len(chunk_ranges),
+                total_chunks,
                 start_sec,
                 end_sec,
             )
@@ -507,12 +536,61 @@ def _transcribe_with_local_whisper_chunked(
                 min_end_ms=min_end_ms,
             )
             all_words.extend(chunk_words)
+            chunk_elapsed_seconds = round(time.perf_counter() - chunk_started_at, 2)
+            total_elapsed_seconds = round(time.perf_counter() - transcription_started_at, 2)
+            completed_chunks = idx
+            stage_progress = min(95, max(5, int((completed_chunks / total_chunks) * 95)))
+            _emit_transcription_progress(
+                progress_callback,
+                {
+                    "mode": "chunked",
+                    "chunk_index": idx,
+                    "chunk_total": total_chunks,
+                    "chunks_completed": completed_chunks,
+                    "chunk_start_seconds": round(start_sec, 2),
+                    "chunk_end_seconds": round(end_sec, 2),
+                    "chunk_elapsed_seconds": chunk_elapsed_seconds,
+                    "total_elapsed_seconds": total_elapsed_seconds,
+                    "average_chunk_seconds": round(total_elapsed_seconds / completed_chunks, 2),
+                    "overlap_seconds": overlap_seconds,
+                    "stage_progress": stage_progress,
+                    "message": (
+                        f"Whisper chunk {idx}/{total_chunks} processed "
+                        f"({chunk_elapsed_seconds:.1f}s)"
+                    ),
+                },
+            )
 
     deduped_words = _dedupe_transcript_words(all_words)
     if not deduped_words:
         raise Exception("Chunked transcription produced no timestamped words")
 
     transcript_text = " ".join(word["text"] for word in deduped_words).strip()
+    total_elapsed_seconds = round(time.perf_counter() - transcription_started_at, 2)
+    logger.info(
+        "Chunked Whisper transcription complete: chunks=%s total_seconds=%.2f avg_seconds=%.2f words=%s",
+        total_chunks,
+        total_elapsed_seconds,
+        (total_elapsed_seconds / total_chunks) if total_chunks else 0.0,
+        len(deduped_words),
+    )
+    _emit_transcription_progress(
+        progress_callback,
+        {
+            "mode": "chunked",
+            "chunk_total": total_chunks,
+            "chunks_completed": total_chunks,
+            "total_elapsed_seconds": total_elapsed_seconds,
+            "average_chunk_seconds": round(total_elapsed_seconds / total_chunks, 2)
+            if total_chunks
+            else total_elapsed_seconds,
+            "stage_progress": 100,
+            "message": (
+                "Chunked Whisper transcription complete "
+                f"({total_chunks} chunks, {total_elapsed_seconds:.1f}s)"
+            ),
+        },
+    )
     return {"words": deduped_words, "text": transcript_text}
 
 
@@ -521,6 +599,7 @@ def _transcribe_with_local_whisper(
     chunking_enabled_override: Optional[bool] = None,
     chunk_duration_seconds_override: Optional[int] = None,
     chunk_overlap_seconds_override: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
     model_name = config.whisper_model or "medium"
     device, use_fp16 = _resolve_whisper_device()
@@ -557,8 +636,20 @@ def _transcribe_with_local_whisper(
                     use_fp16=use_fp16,
                     chunk_ranges=chunk_ranges,
                     overlap_seconds=overlap_seconds,
+                    progress_callback=progress_callback,
                 )
 
+    _emit_transcription_progress(
+        progress_callback,
+        {
+            "mode": "single",
+            "chunk_total": 1,
+            "chunks_completed": 0,
+            "stage_progress": 5,
+            "message": "Starting Whisper transcription (single pass)",
+        },
+    )
+    transcription_started_at = time.perf_counter()
     result = _run_whisper_transcription(model, video_path, use_fp16)
     transcript_text = str(result.get("text") or "").strip()
     words_data = _extract_words_from_whisper_result(result)
@@ -566,6 +657,26 @@ def _transcribe_with_local_whisper(
     if not words_data:
         raise Exception("Transcription produced no timestamped words")
 
+    total_elapsed_seconds = round(time.perf_counter() - transcription_started_at, 2)
+    logger.info(
+        "Single-pass Whisper transcription complete: total_seconds=%.2f words=%s",
+        total_elapsed_seconds,
+        len(words_data),
+    )
+    _emit_transcription_progress(
+        progress_callback,
+        {
+            "mode": "single",
+            "chunk_index": 1,
+            "chunk_total": 1,
+            "chunks_completed": 1,
+            "chunk_elapsed_seconds": total_elapsed_seconds,
+            "total_elapsed_seconds": total_elapsed_seconds,
+            "average_chunk_seconds": total_elapsed_seconds,
+            "stage_progress": 100,
+            "message": f"Whisper transcription complete ({total_elapsed_seconds:.1f}s)",
+        },
+    )
     return {"words": words_data, "text": transcript_text}
 
 
@@ -619,6 +730,7 @@ def get_video_transcript(
     whisper_chunking_enabled: Optional[bool] = None,
     whisper_chunk_duration_seconds: Optional[int] = None,
     whisper_chunk_overlap_seconds: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """Get transcript using configured provider with word-level timings."""
     video_path = Path(video_path)
@@ -636,6 +748,7 @@ def get_video_transcript(
                 chunking_enabled_override=whisper_chunking_enabled,
                 chunk_duration_seconds_override=whisper_chunk_duration_seconds,
                 chunk_overlap_seconds_override=whisper_chunk_overlap_seconds,
+                progress_callback=progress_callback,
             )
 
         cache_transcript_data(video_path, transcript_data)
