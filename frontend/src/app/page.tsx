@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback, type CSSProperties } from "react";
+import { useState, useRef, useEffect, useId, useCallback, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import {
   normalizeShadowBlur,
   normalizeShadowOffset,
   normalizeShadowOpacity,
+  normalizeStrokeBlur,
   normalizeStrokeWidth,
   TEXT_ALIGN_OPTIONS,
   TEXT_TRANSFORM_OPTIONS,
@@ -83,17 +84,6 @@ function applyTextTransform(text: string, mode: TextTransformOption): string {
   return text;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const sanitized = hex.replace("#", "");
-  if (sanitized.length !== 6) {
-    return `rgba(0, 0, 0, ${alpha})`;
-  }
-  const r = Number.parseInt(sanitized.slice(0, 2), 16);
-  const g = Number.parseInt(sanitized.slice(2, 4), 16);
-  const b = Number.parseInt(sanitized.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 function formatTextOption(option: string): string {
   return option.charAt(0).toUpperCase() + option.slice(1);
 }
@@ -138,6 +128,8 @@ export default function Home() {
   const [sourceTitle, setSourceTitle] = useState<string | null>(null);
   const youtubeInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement | null>(null);
+  const previewMeasureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const { data: session, isPending } = useSession();
 
   // Font customization states
@@ -151,6 +143,7 @@ export default function Home() {
   const [textAlign, setTextAlign] = useState<TextAlignOption>("center");
   const [strokeColor, setStrokeColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(2);
+  const [strokeBlur, setStrokeBlur] = useState(0.6);
   const [shadowColor, setShadowColor] = useState("#000000");
   const [shadowOpacity, setShadowOpacity] = useState(0.5);
   const [shadowBlur, setShadowBlur] = useState(2);
@@ -162,7 +155,6 @@ export default function Home() {
   const [fontUploadError, setFontUploadError] = useState<string | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
-  const [reviewBeforeRenderEnabled, setReviewBeforeRenderEnabled] = useState(true);
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
   const [whisperChunkingEnabled, setWhisperChunkingEnabled] = useState(DEFAULT_WHISPER_CHUNKING_ENABLED);
@@ -177,6 +169,7 @@ export default function Home() {
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
   const [isLoadingLatest, setIsLoadingLatest] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [previewContainerWidth, setPreviewContainerWidth] = useState(0);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -244,13 +237,13 @@ export default function Home() {
             textAlign?: unknown;
             strokeColor?: unknown;
             strokeWidth?: unknown;
+            strokeBlur?: unknown;
             shadowColor?: unknown;
             shadowOpacity?: unknown;
             shadowBlur?: unknown;
             shadowOffsetX?: unknown;
             shadowOffsetY?: unknown;
             transitionsEnabled?: unknown;
-            reviewBeforeRenderEnabled?: unknown;
             timelineEditorEnabled?: unknown;
             transcriptionProvider?: unknown;
             whisperChunkingEnabled?: unknown;
@@ -271,15 +264,13 @@ export default function Home() {
           setTextAlign(normalizedFontStyle.textAlign);
           setStrokeColor(normalizedFontStyle.strokeColor);
           setStrokeWidth(normalizedFontStyle.strokeWidth);
+          setStrokeBlur(normalizedFontStyle.strokeBlur);
           setShadowColor(normalizedFontStyle.shadowColor);
           setShadowOpacity(normalizedFontStyle.shadowOpacity);
           setShadowBlur(normalizedFontStyle.shadowBlur);
           setShadowOffsetX(normalizedFontStyle.shadowOffsetX);
           setShadowOffsetY(normalizedFontStyle.shadowOffsetY);
           setTransitionsEnabled(Boolean(data.transitionsEnabled));
-          setReviewBeforeRenderEnabled(
-            typeof data.reviewBeforeRenderEnabled === "boolean" ? data.reviewBeforeRenderEnabled : true,
-          );
           setTimelineEditorEnabled(
             typeof data.timelineEditorEnabled === "boolean" ? data.timelineEditorEnabled : true,
           );
@@ -557,7 +548,7 @@ export default function Home() {
             url: videoUrl,
             title: null
           },
-          review_before_render_enabled: reviewBeforeRenderEnabled,
+          review_before_render_enabled: true,
           timeline_editor_enabled: timelineEditorEnabled,
           font_options: {
             font_family: fontFamily,
@@ -570,6 +561,7 @@ export default function Home() {
             text_align: textAlign,
             stroke_color: strokeColor,
             stroke_width: strokeWidth,
+            stroke_blur: strokeBlur,
             shadow_color: shadowColor,
             shadow_opacity: shadowOpacity,
             shadow_blur: shadowBlur,
@@ -622,20 +614,109 @@ export default function Home() {
     }
   };
 
+  useEffect(() => {
+    if (!showAdvancedOptions) {
+      return;
+    }
+
+    const previewContainer = previewContainerRef.current;
+    if (!previewContainer) {
+      return;
+    }
+
+    const updateWidth = () => {
+      setPreviewContainerWidth(previewContainer.clientWidth);
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const resizeObserver = new ResizeObserver(updateWidth);
+    resizeObserver.observe(previewContainer);
+
+    return () => {
+      resizeObserver.disconnect();
+    };
+  }, [showAdvancedOptions]);
+
+  const previewFilterBaseId = useId().replace(/:/g, "");
+  const previewStrokeFilterId = `${previewFilterBaseId}-stroke`;
+  const previewShadowFilterId = `${previewFilterBaseId}-shadow`;
+  const previewText = `Preview: ${applyTextTransform("Your subtitle will look like this", textTransform)}`;
+  const previewContainerWidthPx = previewContainerWidth > 0 ? previewContainerWidth : 640;
+  const previewEffectPadding = Math.max(
+    strokeWidth + strokeBlur + 2,
+    Math.abs(shadowOffsetX) + shadowBlur + 2,
+    Math.abs(shadowOffsetY) + shadowBlur + 2,
+  );
+  const previewHorizontalPadding = 24 + previewEffectPadding * 2;
+  const previewMaxTextWidth = Math.max(1, previewContainerWidthPx - previewHorizontalPadding);
+
+  const measurePreviewTextWidth = (text: string, textSizePx: number): number => {
+    const fallbackWidth = text.length * textSizePx * 0.6 + Math.max(0, text.length - 1) * letterSpacing;
+    if (typeof document === "undefined") {
+      return fallbackWidth;
+    }
+    if (!previewMeasureCanvasRef.current) {
+      previewMeasureCanvasRef.current = document.createElement("canvas");
+    }
+    const context = previewMeasureCanvasRef.current.getContext("2d");
+    if (!context) {
+      return fallbackWidth;
+    }
+    context.font = `${fontWeight} ${textSizePx}px '${fontFamily}', system-ui, -apple-system, sans-serif`;
+    return context.measureText(text).width + Math.max(0, text.length - 1) * letterSpacing;
+  };
+
+  const previewWords = previewText.split(/\s+/);
+  const previewLines: string[] = [];
+  let currentPreviewLine = "";
+
+  for (const word of previewWords) {
+    const candidateLine = currentPreviewLine ? `${currentPreviewLine} ${word}` : word;
+    if (currentPreviewLine && measurePreviewTextWidth(candidateLine, fontSize) > previewMaxTextWidth) {
+      previewLines.push(currentPreviewLine);
+      currentPreviewLine = word;
+      continue;
+    }
+    currentPreviewLine = candidateLine;
+  }
+
+  if (currentPreviewLine) {
+    previewLines.push(currentPreviewLine);
+  }
+  if (previewLines.length === 0) {
+    previewLines.push(previewText);
+  }
+
+  const previewLongestLineWidth = previewLines.reduce(
+    (maxWidth, line) => Math.max(maxWidth, measurePreviewTextWidth(line, fontSize)),
+    0,
+  );
+  const previewScale = previewLongestLineWidth > 0 ? Math.min(1, previewMaxTextWidth / previewLongestLineWidth) : 1;
+  const previewRenderedFontSize = Math.max(10, fontSize * previewScale);
+  const previewLineAdvance = previewRenderedFontSize * lineHeight;
+  const previewTextBlockHeight = previewLineAdvance * Math.max(0, previewLines.length - 1);
+  const previewSvgHeight = Math.max(
+    70,
+    Math.ceil(previewLineAdvance + previewTextBlockHeight + previewEffectPadding * 4 + 12),
+  );
+  const previewFirstLineY = (previewSvgHeight - previewTextBlockHeight) / 2;
+  const previewLineYPositions = previewLines.map((_, index) => previewFirstLineY + index * previewLineAdvance);
+  const previewTextAnchor: "start" | "middle" | "end" =
+    textAlign === "left" ? "start" : textAlign === "right" ? "end" : "middle";
+  const previewTextX = textAlign === "left" ? "6%" : textAlign === "right" ? "94%" : "50%";
   const previewTextStyle: CSSProperties = {
-    color: fontColor,
-    fontSize: `${fontSize}px`,
+    fontSize: `${previewRenderedFontSize}px`,
     fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
     fontWeight,
-    textAlign,
-    lineHeight,
     letterSpacing: `${letterSpacing}px`,
-    WebkitTextStroke: strokeWidth > 0 ? `${strokeWidth}px ${strokeColor}` : undefined,
-    textShadow:
-      shadowOpacity > 0
-        ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px ${hexToRgba(shadowColor, shadowOpacity)}`
-        : undefined,
   };
+  const previewStrokeStdDeviation = Math.max(0, strokeBlur / 2);
+  const previewShadowStdDeviation = Math.max(0, shadowBlur / 2);
 
   if (isPending) {
     return (
@@ -1019,7 +1100,7 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="grid gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
                       <label className="text-sm font-medium text-black">Line Height: {lineHeight.toFixed(1)}</label>
                       <div className="px-2 pt-5">
@@ -1179,6 +1260,20 @@ export default function Home() {
                         />
                       </div>
                     </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium text-black">Stroke Blur: {strokeBlur.toFixed(1)}px</label>
+                      <div className="px-2 pt-5">
+                        <Slider
+                          value={[strokeBlur]}
+                          onValueChange={(value) => setStrokeBlur(normalizeStrokeBlur(value[0]))}
+                          min={0}
+                          max={4}
+                          step={0.1}
+                          disabled={isLoading}
+                          className="w-full"
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -1279,27 +1374,85 @@ export default function Home() {
                     </div>
                   </div>
 
-                  <div className="mt-4 p-3 bg-black rounded-lg">
-                    <p style={previewTextStyle} className="w-full">
-                      Preview: {applyTextTransform("Your subtitle will look like this", textTransform)}
-                    </p>
+                  <div className="mt-4 overflow-hidden rounded-lg bg-black p-3">
+                    <div ref={previewContainerRef} className="relative w-full">
+                      <svg
+                        className="block w-full"
+                        height={previewSvgHeight}
+                        role="img"
+                        aria-label={previewText}
+                      >
+                        <defs>
+                          {shadowOpacity > 0 && (
+                            <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                              <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                              <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                              <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                              <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                            </filter>
+                          )}
+                          {strokeWidth > 0 && (
+                            <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                              <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                              <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                              <feFlood floodColor={strokeColor} result="stroke-color" />
+                              <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                              <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                            </filter>
+                          )}
+                        </defs>
+
+                        {shadowOpacity > 0 &&
+                          previewLines.map((line, index) => (
+                            <text
+                              key={`preview-shadow-${index}`}
+                              aria-hidden
+                              x={previewTextX}
+                              y={previewLineYPositions[index]}
+                              textAnchor={previewTextAnchor}
+                              dominantBaseline="middle"
+                              style={previewTextStyle}
+                              fill="#FFFFFF"
+                              filter={`url(#${previewShadowFilterId})`}
+                            >
+                              {line}
+                            </text>
+                          ))}
+
+                        {strokeWidth > 0 &&
+                          previewLines.map((line, index) => (
+                            <text
+                              key={`preview-stroke-${index}`}
+                              aria-hidden
+                              x={previewTextX}
+                              y={previewLineYPositions[index]}
+                              textAnchor={previewTextAnchor}
+                              dominantBaseline="middle"
+                              style={previewTextStyle}
+                              fill="#FFFFFF"
+                              filter={`url(#${previewStrokeFilterId})`}
+                            >
+                              {line}
+                            </text>
+                          ))}
+
+                        {previewLines.map((line, index) => (
+                          <text
+                            key={`preview-fill-${index}`}
+                            x={previewTextX}
+                            y={previewLineYPositions[index]}
+                            textAnchor={previewTextAnchor}
+                            dominantBaseline="middle"
+                            style={previewTextStyle}
+                            fill={fontColor}
+                          >
+                            {line}
+                          </text>
+                        ))}
+                      </svg>
+                    </div>
                   </div>
 
-                  <div className="flex items-start justify-between gap-4 rounded-md border border-gray-200 bg-white p-3">
-                    <div>
-                      <p className="text-sm font-medium text-black">Review clips before rendering</p>
-                      <p className="text-xs text-gray-600">
-                        Pause after AI analysis so you can edit timing/text and choose clips before final render.
-                      </p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={reviewBeforeRenderEnabled}
-                      onChange={(event) => setReviewBeforeRenderEnabled(event.target.checked)}
-                      disabled={isLoading}
-                      className="mt-1 h-4 w-4"
-                    />
-                  </div>
                   <div className="flex items-start justify-between gap-4 rounded-md border border-gray-200 bg-white p-3">
                     <div>
                       <p className="text-sm font-medium text-black">Interactive timeline editor</p>

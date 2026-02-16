@@ -17,7 +17,8 @@ from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
 from ...config import Config
-from ...subtitle_style import normalize_subtitle_style
+from ...subtitle_style import DEFAULT_SUBTITLE_STYLE, normalize_subtitle_style
+from ...task_subtitle_style import build_normalized_subtitle_style_for_task
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
 DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected"}
 DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected"}
+SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
+MAX_SUBTITLE_STYLE_BACKFILL_LIMIT = 1000
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -242,6 +245,35 @@ def _require_user_id(request: Request) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="User authentication required")
     return user_id
+
+
+async def _read_optional_json_object(request: Request) -> Dict[str, Any]:
+    try:
+        raw_data = await request.json()
+    except Exception:
+        return {}
+    if raw_data is None:
+        return {}
+    if not isinstance(raw_data, dict):
+        raise HTTPException(status_code=400, detail="Payload must be a JSON object")
+    return raw_data
+
+
+def _normalize_task_id_list(raw_task_ids: Any) -> List[str]:
+    if raw_task_ids is None:
+        return []
+    if not isinstance(raw_task_ids, list):
+        raise HTTPException(status_code=400, detail="task_ids must be an array of task IDs")
+
+    task_ids: List[str] = []
+    for raw in raw_task_ids:
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="task_ids must contain strings")
+        normalized = raw.strip()
+        if not normalized:
+            continue
+        task_ids.append(normalized)
+    return task_ids
 
 
 @router.get("/")
@@ -625,6 +657,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             font_family=font_family,
             font_size=font_size,
             font_color=font_color,
+            subtitle_style=subtitle_style,
             transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
@@ -731,6 +764,140 @@ async def cancel_all_tasks(request: Request, db: AsyncSession = Depends(get_db))
     except Exception as e:
         logger.error(f"Error cancelling all tasks: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error cancelling tasks: {str(e)}")
+
+
+@router.post("/admin/backfill-awaiting-review-subtitle-styles")
+async def backfill_awaiting_review_subtitle_styles(request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Backfill missing/partial tasks.subtitle_style for awaiting_review tasks.
+    Uses task font fields + user default style values as reconstruction sources.
+    """
+    _require_admin_access(request)
+    data = await _read_optional_json_object(request)
+
+    dry_run = _coerce_bool(data.get("dry_run"), default=False)
+    include_existing = _coerce_bool(data.get("include_existing"), default=False)
+    user_filter = str(data.get("user_id") or "").strip() or None
+    task_ids = _normalize_task_id_list(data.get("task_ids"))
+
+    raw_limit = data.get("limit")
+    if raw_limit is None:
+        limit = None
+    else:
+        limit = _coerce_int(raw_limit, "limit")
+        if limit < 1 or limit > MAX_SUBTITLE_STYLE_BACKFILL_LIMIT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"limit must be between 1 and {MAX_SUBTITLE_STYLE_BACKFILL_LIMIT}",
+            )
+
+    task_service = TaskService(db)
+    task_rows = await task_service.task_repo.get_tasks_for_subtitle_style_backfill(
+        db,
+        statuses=["awaiting_review"],
+        user_id=user_filter,
+        task_ids=task_ids or None,
+        include_existing=include_existing,
+        limit=limit,
+    )
+
+    updates: Dict[str, Dict[str, Any]] = {}
+    unchanged_count = 0
+    for task_row in task_rows:
+        normalized_style = build_normalized_subtitle_style_for_task(task_row)
+        existing_style = task_row.get("subtitle_style")
+        if isinstance(existing_style, dict):
+            if normalize_subtitle_style(existing_style) == normalized_style:
+                unchanged_count += 1
+                continue
+        updates[str(task_row["id"])] = normalized_style
+
+    if dry_run:
+        updated_count = len(updates)
+    else:
+        updated_count = await task_service.task_repo.update_task_subtitle_styles_bulk(db, updates)
+
+    updated_task_ids = list(updates.keys())
+    return {
+        "message": "Subtitle style backfill complete" if not dry_run else "Subtitle style backfill dry run complete",
+        "dry_run": dry_run,
+        "scanned_tasks": len(task_rows),
+        "would_update_tasks": len(updates),
+        "updated_tasks": updated_count,
+        "unchanged_tasks": unchanged_count,
+        "updated_task_ids_preview": updated_task_ids[:25],
+    }
+
+
+@router.patch("/admin/{task_id}/subtitle-style")
+async def patch_task_subtitle_style(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """
+    Admin endpoint for patching one task's subtitle_style.
+    Defaults to merge payload with existing style and requires awaiting_review status.
+    """
+    _require_admin_access(request)
+    data = await _read_optional_json_object(request)
+
+    merge_with_existing = _coerce_bool(data.get("merge_with_existing"), default=True)
+    dry_run = _coerce_bool(data.get("dry_run"), default=False)
+    allow_non_review = _coerce_bool(data.get("allow_non_review"), default=False)
+
+    if "subtitle_style" in data:
+        raw_style = data.get("subtitle_style")
+    else:
+        control_fields = {"merge_with_existing", "dry_run", "allow_non_review"}
+        if any(field in data for field in control_fields):
+            raise HTTPException(status_code=400, detail="subtitle_style is required when control fields are provided")
+        raw_style = data
+
+    if not isinstance(raw_style, dict) or not raw_style:
+        raise HTTPException(status_code=400, detail="subtitle_style must be a non-empty object")
+
+    unknown_fields = set(raw_style.keys()) - SUBTITLE_STYLE_FIELDS
+    if unknown_fields:
+        unknown_list = ", ".join(sorted(unknown_fields))
+        raise HTTPException(status_code=400, detail=f"Unsupported subtitle_style fields: {unknown_list}")
+
+    task_service = TaskService(db)
+    task_rows = await task_service.task_repo.get_tasks_for_subtitle_style_backfill(
+        db,
+        statuses=[],
+        task_ids=[task_id],
+        include_existing=True,
+        limit=1,
+    )
+    if not task_rows:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    task_row = task_rows[0]
+    task_status = str(task_row.get("status") or "")
+    if task_status != "awaiting_review" and not allow_non_review:
+        raise HTTPException(
+            status_code=400,
+            detail="Task subtitle_style patching is limited to awaiting_review tasks unless allow_non_review=true",
+        )
+
+    normalized_style = build_normalized_subtitle_style_for_task(
+        task_row,
+        patch=raw_style,
+        merge_with_existing=merge_with_existing,
+    )
+
+    if dry_run:
+        updated = False
+    else:
+        updated = await task_service.task_repo.update_task_subtitle_style(db, task_id, normalized_style)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+    return {
+        "task_id": task_id,
+        "status": task_status,
+        "dry_run": dry_run,
+        "merge_with_existing": merge_with_existing,
+        "subtitle_style": normalized_style,
+        "updated": updated,
+    }
 
 
 @router.delete("/")
@@ -1072,13 +1239,16 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
     if not source_url or not source_type:
         raise HTTPException(status_code=400, detail="Task source is missing; cannot finalize")
 
-    subtitle_style = normalize_subtitle_style(
-        {
-            "font_family": task.get("font_family"),
-            "font_size": task.get("font_size"),
-            "font_color": task.get("font_color"),
-        }
-    )
+    persisted_subtitle_style = task.get("subtitle_style")
+    if isinstance(persisted_subtitle_style, dict):
+        subtitle_style_seed = dict(persisted_subtitle_style)
+    else:
+        subtitle_style_seed = {}
+
+    subtitle_style_seed.setdefault("font_family", task.get("font_family"))
+    subtitle_style_seed.setdefault("font_size", task.get("font_size"))
+    subtitle_style_seed.setdefault("font_color", task.get("font_color"))
+    subtitle_style = normalize_subtitle_style(subtitle_style_seed)
 
     await task_service.task_repo.update_task_status(
         db,
@@ -1095,9 +1265,9 @@ async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depen
             source_url,
             source_type,
             user_id,
-            task.get("font_family") or subtitle_style["font_family"],
-            int(task.get("font_size") or subtitle_style["font_size"]),
-            task.get("font_color") or subtitle_style["font_color"],
+            subtitle_style["font_family"],
+            int(subtitle_style["font_size"]),
+            subtitle_style["font_color"],
             _coerce_bool(task.get("transitions_enabled"), default=False),
             task.get("transcription_provider") or "local",
             task.get("ai_provider") or _default_ai_provider(),

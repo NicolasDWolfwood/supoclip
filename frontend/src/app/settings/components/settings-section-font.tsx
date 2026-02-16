@@ -1,4 +1,4 @@
-import type { ChangeEvent, CSSProperties } from "react";
+import { useId, type ChangeEvent, type CSSProperties } from "react";
 import { Palette, Type } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +19,7 @@ interface SettingsSectionFontProps {
   textAlign: TextAlignOption;
   strokeColor: string;
   strokeWidth: number;
+  strokeBlur: number;
   shadowColor: string;
   shadowOpacity: number;
   shadowBlur: number;
@@ -37,6 +38,7 @@ interface SettingsSectionFontProps {
   onTextAlignChange: (align: TextAlignOption) => void;
   onStrokeColorChange: (color: string) => void;
   onStrokeWidthChange: (width: number) => void;
+  onStrokeBlurChange: (blur: number) => void;
   onShadowColorChange: (color: string) => void;
   onShadowOpacityChange: (opacity: number) => void;
   onShadowBlurChange: (blur: number) => void;
@@ -61,17 +63,6 @@ function applyTextTransform(text: string, mode: TextTransformOption): string {
   return text;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const sanitized = hex.replace("#", "");
-  if (sanitized.length !== 6) {
-    return `rgba(0, 0, 0, ${alpha})`;
-  }
-  const r = Number.parseInt(sanitized.slice(0, 2), 16);
-  const g = Number.parseInt(sanitized.slice(2, 4), 16);
-  const b = Number.parseInt(sanitized.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 function formatTextOption(option: string): string {
   return option.charAt(0).toUpperCase() + option.slice(1);
 }
@@ -89,6 +80,7 @@ export function SettingsSectionFont({
   textAlign,
   strokeColor,
   strokeWidth,
+  strokeBlur,
   shadowColor,
   shadowOpacity,
   shadowBlur,
@@ -107,6 +99,7 @@ export function SettingsSectionFont({
   onTextAlignChange,
   onStrokeColorChange,
   onStrokeWidthChange,
+  onStrokeBlurChange,
   onShadowColorChange,
   onShadowOpacityChange,
   onShadowBlurChange,
@@ -114,20 +107,22 @@ export function SettingsSectionFont({
   onShadowOffsetYChange,
   onFontUpload,
 }: SettingsSectionFontProps) {
-  const previewStyle: CSSProperties = {
-    color: fontColor,
+  const previewFilterBaseId = useId().replace(/:/g, "");
+  const previewStrokeFilterId = `${previewFilterBaseId}-stroke`;
+  const previewShadowFilterId = `${previewFilterBaseId}-shadow`;
+  const previewText = applyTextTransform(PREVIEW_TEXT, textTransform);
+  const previewTextAnchor: "start" | "middle" | "end" =
+    textAlign === "left" ? "start" : textAlign === "right" ? "end" : "middle";
+  const previewTextX = textAlign === "left" ? "4%" : textAlign === "right" ? "96%" : "50%";
+  const previewTextStyle: CSSProperties = {
     fontSize: `${fontSize}px`,
     fontFamily: `'${fontFamily}', system-ui, -apple-system, sans-serif`,
     fontWeight,
-    textAlign,
-    lineHeight,
     letterSpacing: `${letterSpacing}px`,
-    WebkitTextStroke: strokeWidth > 0 ? `${strokeWidth}px ${strokeColor}` : undefined,
-    textShadow:
-      shadowOpacity > 0
-        ? `${shadowOffsetX}px ${shadowOffsetY}px ${shadowBlur}px ${hexToRgba(shadowColor, shadowOpacity)}`
-        : undefined,
   };
+  const previewSvgHeight = Math.max(70, Math.ceil(fontSize * lineHeight * 2.2));
+  const previewStrokeStdDeviation = Math.max(0, strokeBlur / 2);
+  const previewShadowStdDeviation = Math.max(0, shadowBlur / 2);
 
   return (
     <div className="space-y-6">
@@ -305,7 +300,7 @@ export function SettingsSectionFont({
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
         <div className="space-y-2">
           <Label className="text-sm font-medium text-black">Stroke Color</Label>
           <div className="flex items-center gap-2">
@@ -350,6 +345,20 @@ export function SettingsSectionFont({
               min={0}
               max={8}
               step={1}
+              disabled={isSaving || isUploadingFont}
+              className="w-full"
+            />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Label className="text-sm font-medium text-black">Stroke Blur: {strokeBlur.toFixed(1)}px</Label>
+          <div className="px-2 pt-5">
+            <Slider
+              value={[strokeBlur]}
+              onValueChange={(value) => onStrokeBlurChange(value[0])}
+              min={0}
+              max={4}
+              step={0.1}
               disabled={isSaving || isUploadingFont}
               className="w-full"
             />
@@ -461,9 +470,75 @@ export function SettingsSectionFont({
       <div className="space-y-2">
         <Label className="text-sm font-medium text-black">Preview</Label>
         <div className="p-6 bg-black rounded-lg min-h-[120px] flex items-center">
-          <p style={previewStyle} className="w-full">
-            {applyTextTransform(PREVIEW_TEXT, textTransform)}
-          </p>
+          <div className="relative w-full">
+            <svg
+              className="block w-full overflow-visible"
+              height={previewSvgHeight}
+              role="img"
+              aria-label={previewText}
+            >
+              <defs>
+                {shadowOpacity > 0 && (
+                  <filter id={previewShadowFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                    <feOffset in="SourceAlpha" dx={shadowOffsetX} dy={shadowOffsetY} result="shadow-offset" />
+                    <feGaussianBlur in="shadow-offset" stdDeviation={previewShadowStdDeviation} result="shadow-blur" />
+                    <feFlood floodColor={shadowColor} floodOpacity={shadowOpacity} result="shadow-color" />
+                    <feComposite in="shadow-color" in2="shadow-blur" operator="in" result="shadow-only" />
+                  </filter>
+                )}
+                {strokeWidth > 0 && (
+                  <filter id={previewStrokeFilterId} x="-50%" y="-50%" width="200%" height="200%" colorInterpolationFilters="sRGB">
+                    <feMorphology in="SourceAlpha" operator="dilate" radius={strokeWidth} result="stroke-expanded" />
+                    <feComposite in="stroke-expanded" in2="SourceAlpha" operator="out" result="stroke-outer" />
+                    <feFlood floodColor={strokeColor} result="stroke-color" />
+                    <feComposite in="stroke-color" in2="stroke-outer" operator="in" result="stroke-only" />
+                    <feGaussianBlur in="stroke-only" stdDeviation={previewStrokeStdDeviation} result="stroke-final" />
+                  </filter>
+                )}
+              </defs>
+
+              {shadowOpacity > 0 && (
+                <text
+                  aria-hidden
+                  x={previewTextX}
+                  y="50%"
+                  textAnchor={previewTextAnchor}
+                  dominantBaseline="middle"
+                  style={previewTextStyle}
+                  fill="#FFFFFF"
+                  filter={`url(#${previewShadowFilterId})`}
+                >
+                  {previewText}
+                </text>
+              )}
+
+              {strokeWidth > 0 && (
+                <text
+                  aria-hidden
+                  x={previewTextX}
+                  y="50%"
+                  textAnchor={previewTextAnchor}
+                  dominantBaseline="middle"
+                  style={previewTextStyle}
+                  fill="#FFFFFF"
+                  filter={`url(#${previewStrokeFilterId})`}
+                >
+                  {previewText}
+                </text>
+              )}
+
+              <text
+                x={previewTextX}
+                y="50%"
+                textAnchor={previewTextAnchor}
+                dominantBaseline="middle"
+                style={previewTextStyle}
+                fill={fontColor}
+              >
+                {previewText}
+              </text>
+            </svg>
+          </div>
         </div>
       </div>
     </div>

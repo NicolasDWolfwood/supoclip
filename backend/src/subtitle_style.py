@@ -20,6 +20,7 @@ DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "text_align": "center",
     "stroke_color": "#000000",
     "stroke_width": 2,
+    "stroke_blur": 0.6,
     "shadow_color": "#000000",
     "shadow_opacity": 0.5,
     "shadow_blur": 2,
@@ -110,6 +111,9 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     normalized["stroke_color"] = _normalize_hex_color(source.get("stroke_color"), DEFAULT_SUBTITLE_STYLE["stroke_color"])
     normalized["stroke_width"] = _normalize_int(source.get("stroke_width"), DEFAULT_SUBTITLE_STYLE["stroke_width"], 0, 8, 1)
+    normalized["stroke_blur"] = _normalize_float(
+        source.get("stroke_blur"), DEFAULT_SUBTITLE_STYLE["stroke_blur"], 0.0, 4.0, 1
+    )
     normalized["shadow_color"] = _normalize_hex_color(source.get("shadow_color"), DEFAULT_SUBTITLE_STYLE["shadow_color"])
     normalized["shadow_opacity"] = _normalize_float(
         source.get("shadow_opacity"), DEFAULT_SUBTITLE_STYLE["shadow_opacity"], 0.0, 1.0, 2

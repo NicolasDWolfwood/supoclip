@@ -41,6 +41,7 @@ model User {
   default_text_align      String? @default("center") @db.VarChar(10)
   default_stroke_color    String? @default("#000000") @db.VarChar(7)
   default_stroke_width    Int?    @default(2)
+  default_stroke_blur     Float?  @default(0.6)
   default_shadow_color    String? @default("#000000") @db.VarChar(7)
   default_shadow_opacity  Float?  @default(0.5)
   default_shadow_blur     Int?    @default(2)

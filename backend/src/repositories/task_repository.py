@@ -2,7 +2,8 @@
 Task repository - handles all database operations for tasks.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
+from sqlalchemy.dialects.postgresql import JSONB
 from typing import Optional, Dict, Any, List
 import logging
 import uuid
@@ -30,6 +31,7 @@ class TaskRepository:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        subtitle_style: Optional[Dict[str, Any]] = None,
         transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
@@ -46,6 +48,7 @@ class TaskRepository:
                     font_family,
                     font_size,
                     font_color,
+                    subtitle_style,
                     transitions_enabled,
                     transcription_provider,
                     ai_provider,
@@ -61,6 +64,7 @@ class TaskRepository:
                     :font_family,
                     :font_size,
                     :font_color,
+                    :subtitle_style,
                     :transitions_enabled,
                     :transcription_provider,
                     :ai_provider,
@@ -70,7 +74,7 @@ class TaskRepository:
                     NOW()
                 )
                 RETURNING id
-            """),
+            """).bindparams(bindparam("subtitle_style", type_=JSONB)),
             {
                 "user_id": user_id,
                 "source_id": source_id,
@@ -78,6 +82,7 @@ class TaskRepository:
                 "font_family": font_family,
                 "font_size": font_size,
                 "font_color": font_color,
+                "subtitle_style": subtitle_style,
                 "transitions_enabled": transitions_enabled,
                 "transcription_provider": transcription_provider,
                 "ai_provider": ai_provider,
@@ -121,6 +126,7 @@ class TaskRepository:
             "font_family": row.font_family,
             "font_size": row.font_size,
             "font_color": row.font_color,
+            "subtitle_style": getattr(row, "subtitle_style", None),
             "transitions_enabled": bool(getattr(row, "transitions_enabled", False)),
             "transcription_provider": getattr(row, "transcription_provider", "local"),
             "ai_provider": getattr(row, "ai_provider", "openai"),
@@ -129,6 +135,179 @@ class TaskRepository:
             "created_at": row.created_at,
             "updated_at": row.updated_at
         }
+
+    @staticmethod
+    async def get_tasks_for_subtitle_style_backfill(
+        db: AsyncSession,
+        statuses: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+        task_ids: Optional[List[str]] = None,
+        include_existing: bool = False,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch tasks plus user default style fields used to reconstruct subtitle_style.
+        """
+        where_clauses: List[str] = []
+        params: Dict[str, Any] = {}
+
+        if statuses is None:
+            normalized_statuses = ["awaiting_review"]
+        else:
+            normalized_statuses = [status.strip() for status in statuses if status and status.strip()]
+        if normalized_statuses:
+            where_clauses.append("t.status = ANY(:statuses)")
+            params["statuses"] = normalized_statuses
+
+        if user_id:
+            where_clauses.append("t.user_id = :user_id")
+            params["user_id"] = user_id
+
+        normalized_task_ids = [task_id.strip() for task_id in (task_ids or []) if isinstance(task_id, str) and task_id.strip()]
+        if normalized_task_ids:
+            where_clauses.append("t.id = ANY(:task_ids)")
+            params["task_ids"] = normalized_task_ids
+
+        if not include_existing:
+            where_clauses.append("t.subtitle_style IS NULL")
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        limit_sql = ""
+        if limit is not None:
+            limit_sql = "LIMIT :limit"
+            params["limit"] = max(1, int(limit))
+
+        result = await db.execute(
+            text(
+                f"""
+                SELECT
+                    t.id,
+                    t.user_id,
+                    t.status,
+                    t.font_family,
+                    t.font_size,
+                    t.font_color,
+                    t.subtitle_style,
+                    u.default_font_weight,
+                    u.default_line_height,
+                    u.default_letter_spacing,
+                    u.default_text_transform,
+                    u.default_text_align,
+                    u.default_stroke_color,
+                    u.default_stroke_width,
+                    u.default_stroke_blur,
+                    u.default_shadow_color,
+                    u.default_shadow_opacity,
+                    u.default_shadow_blur,
+                    u.default_shadow_offset_x,
+                    u.default_shadow_offset_y
+                FROM tasks t
+                INNER JOIN users u ON u.id = t.user_id
+                {where_sql}
+                ORDER BY t.created_at ASC
+                {limit_sql}
+                """
+            ),
+            params,
+        )
+
+        tasks: List[Dict[str, Any]] = []
+        for row in result.fetchall():
+            tasks.append(
+                {
+                    "id": row.id,
+                    "user_id": row.user_id,
+                    "status": row.status,
+                    "font_family": row.font_family,
+                    "font_size": row.font_size,
+                    "font_color": row.font_color,
+                    "subtitle_style": getattr(row, "subtitle_style", None),
+                    "default_font_weight": getattr(row, "default_font_weight", None),
+                    "default_line_height": getattr(row, "default_line_height", None),
+                    "default_letter_spacing": getattr(row, "default_letter_spacing", None),
+                    "default_text_transform": getattr(row, "default_text_transform", None),
+                    "default_text_align": getattr(row, "default_text_align", None),
+                    "default_stroke_color": getattr(row, "default_stroke_color", None),
+                    "default_stroke_width": getattr(row, "default_stroke_width", None),
+                    "default_stroke_blur": getattr(row, "default_stroke_blur", None),
+                    "default_shadow_color": getattr(row, "default_shadow_color", None),
+                    "default_shadow_opacity": getattr(row, "default_shadow_opacity", None),
+                    "default_shadow_blur": getattr(row, "default_shadow_blur", None),
+                    "default_shadow_offset_x": getattr(row, "default_shadow_offset_x", None),
+                    "default_shadow_offset_y": getattr(row, "default_shadow_offset_y", None),
+                }
+            )
+        return tasks
+
+    @staticmethod
+    async def update_task_subtitle_style(
+        db: AsyncSession,
+        task_id: str,
+        subtitle_style: Dict[str, Any],
+    ) -> bool:
+        """
+        Persist normalized subtitle style and keep top-level font fields in sync.
+        """
+        result = await db.execute(
+            text(
+                """
+                UPDATE tasks
+                SET
+                    subtitle_style = :subtitle_style,
+                    font_family = :font_family,
+                    font_size = :font_size,
+                    font_color = :font_color,
+                    updated_at = NOW()
+                WHERE id = :task_id
+                """
+            ).bindparams(bindparam("subtitle_style", type_=JSONB)),
+            {
+                "task_id": task_id,
+                "subtitle_style": subtitle_style,
+                "font_family": subtitle_style.get("font_family"),
+                "font_size": subtitle_style.get("font_size"),
+                "font_color": subtitle_style.get("font_color"),
+            },
+        )
+        await db.commit()
+        return (result.rowcount or 0) > 0
+
+    @staticmethod
+    async def update_task_subtitle_styles_bulk(
+        db: AsyncSession,
+        styles_by_task_id: Dict[str, Dict[str, Any]],
+    ) -> int:
+        """
+        Bulk variant of update_task_subtitle_style.
+        Returns count of tasks updated.
+        """
+        updated_count = 0
+        for task_id, subtitle_style in styles_by_task_id.items():
+            result = await db.execute(
+                text(
+                    """
+                    UPDATE tasks
+                    SET
+                        subtitle_style = :subtitle_style,
+                        font_family = :font_family,
+                        font_size = :font_size,
+                        font_color = :font_color,
+                        updated_at = NOW()
+                    WHERE id = :task_id
+                    """
+                ).bindparams(bindparam("subtitle_style", type_=JSONB)),
+                {
+                    "task_id": task_id,
+                    "subtitle_style": subtitle_style,
+                    "font_family": subtitle_style.get("font_family"),
+                    "font_size": subtitle_style.get("font_size"),
+                    "font_color": subtitle_style.get("font_color"),
+                },
+            )
+            if (result.rowcount or 0) > 0:
+                updated_count += 1
+        await db.commit()
+        return updated_count
 
     @staticmethod
     async def update_task_status(

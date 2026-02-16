@@ -26,6 +26,7 @@ import {
   normalizeShadowBlur,
   normalizeShadowOffset,
   normalizeShadowOpacity,
+  normalizeStrokeBlur,
   normalizeStrokeWidth,
   type TextAlignOption,
   type TextTransformOption,
@@ -337,6 +338,7 @@ function SettingsPageContent() {
         const resolvedAiModel = preferencesDraft.aiModel.trim() || DEFAULT_AI_MODELS[preferencesDraft.aiProvider];
         const payload: UserPreferences = {
           ...preferencesDraft,
+          reviewBeforeRenderEnabled: true,
           aiModel: resolvedAiModel,
         };
 
@@ -763,10 +765,7 @@ function SettingsPageContent() {
         const nextPreferences: UserPreferences = {
           ...normalizedFontStyle,
           transitionsEnabled: Boolean(data.transitionsEnabled),
-          reviewBeforeRenderEnabled:
-            typeof data.reviewBeforeRenderEnabled === "boolean"
-              ? data.reviewBeforeRenderEnabled
-              : DEFAULT_USER_PREFERENCES.reviewBeforeRenderEnabled,
+          reviewBeforeRenderEnabled: true,
           timelineEditorEnabled:
             typeof data.timelineEditorEnabled === "boolean"
               ? data.timelineEditorEnabled
@@ -1031,6 +1030,7 @@ function SettingsPageContent() {
                 textAlign={preferencesDraft.textAlign}
                 strokeColor={preferencesDraft.strokeColor}
                 strokeWidth={preferencesDraft.strokeWidth}
+                strokeBlur={preferencesDraft.strokeBlur}
                 shadowColor={preferencesDraft.shadowColor}
                 shadowOpacity={preferencesDraft.shadowOpacity}
                 shadowBlur={preferencesDraft.shadowBlur}
@@ -1069,6 +1069,9 @@ function SettingsPageContent() {
                 onStrokeWidthChange={(strokeWidth) => {
                   setPreferencesDraft((prev) => ({ ...prev, strokeWidth: normalizeStrokeWidth(strokeWidth) }));
                 }}
+                onStrokeBlurChange={(strokeBlur) => {
+                  setPreferencesDraft((prev) => ({ ...prev, strokeBlur: normalizeStrokeBlur(strokeBlur) }));
+                }}
                 onShadowColorChange={(shadowColor) => {
                   setPreferencesDraft((prev) => ({ ...prev, shadowColor }));
                 }}
@@ -1090,16 +1093,9 @@ function SettingsPageContent() {
               <SettingsSectionVideo
                 isSaving={isSavingPreferences}
                 transitionsEnabled={preferencesDraft.transitionsEnabled}
-                reviewBeforeRenderEnabled={preferencesDraft.reviewBeforeRenderEnabled}
                 timelineEditorEnabled={preferencesDraft.timelineEditorEnabled}
                 onToggleTransitions={() => {
                   setPreferencesDraft((prev) => ({ ...prev, transitionsEnabled: !prev.transitionsEnabled }));
-                }}
-                onToggleReviewBeforeRender={() => {
-                  setPreferencesDraft((prev) => ({
-                    ...prev,
-                    reviewBeforeRenderEnabled: !prev.reviewBeforeRenderEnabled,
-                  }));
                 }}
                 onToggleTimelineEditor={() => {
                   setPreferencesDraft((prev) => ({ ...prev, timelineEditorEnabled: !prev.timelineEditorEnabled }));

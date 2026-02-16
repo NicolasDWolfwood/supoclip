@@ -39,6 +39,7 @@ class User(Base):
     default_text_align: Mapped[str] = mapped_column(String(10), nullable=False, server_default=text("'center'"))
     default_stroke_color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#000000'"))
     default_stroke_width: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
+    default_stroke_blur: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("0.6"))
     default_shadow_color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#000000'"))
     default_shadow_opacity: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("0.5"))
     default_shadow_blur: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("2"))
@@ -102,6 +103,7 @@ class Task(Base):
     font_family: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, server_default=text("'TikTokSans-Regular'"))
     font_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, server_default=text("'24'"))
     font_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True, server_default=text("'#FFFFFF'"))  # Hex color code
+    subtitle_style: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))

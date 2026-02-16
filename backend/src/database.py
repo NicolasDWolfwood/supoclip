@@ -124,6 +124,14 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS subtitle_style JSONB
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -380,6 +388,14 @@ async def init_db():
                 """
                 ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_stroke_width INTEGER DEFAULT 2
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_stroke_blur DOUBLE PRECISION DEFAULT 0.6
                 """
             )
         )

@@ -106,4 +106,7 @@ When running locally or via Docker:
 ## Admin Task API
 
 - `POST /tasks/admin/cancel-all`: cancel all `queued`/`processing` tasks and drain queued ARQ jobs.
+- `POST /tasks/admin/backfill-awaiting-review-subtitle-styles`: one-time backfill for missing/partial `tasks.subtitle_style` on `awaiting_review` tasks.
+- `PATCH /tasks/admin/{task_id}/subtitle-style`: patch one task's subtitle style (for recovery when old tasks are missing custom style fields).
 - If `ADMIN_API_KEY` is set, include it as `x-admin-key` request header.
+- One-time CLI helper: `./backend/bin/backfill_awaiting_review_subtitle_styles.py --dry-run` (remove `--dry-run` to apply).

@@ -15,6 +15,7 @@ export interface FontStyleOptions {
   textAlign: TextAlignOption;
   strokeColor: string;
   strokeWidth: number;
+  strokeBlur: number;
   shadowColor: string;
   shadowOpacity: number;
   shadowBlur: number;
@@ -33,6 +34,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   textAlign: "center",
   strokeColor: "#000000",
   strokeWidth: 2,
+  strokeBlur: 0.6,
   shadowColor: "#000000",
   shadowOpacity: 0.5,
   shadowBlur: 2,
@@ -124,6 +126,10 @@ export function normalizeStrokeWidth(value: unknown): number {
   return normalizeInteger(value, DEFAULT_FONT_STYLE_OPTIONS.strokeWidth, 0, 8, 1);
 }
 
+export function normalizeStrokeBlur(value: unknown): number {
+  return normalizeFloat(value, DEFAULT_FONT_STYLE_OPTIONS.strokeBlur, 0, 4, 1);
+}
+
 export function normalizeShadowOpacity(value: unknown): number {
   return normalizeFloat(value, DEFAULT_FONT_STYLE_OPTIONS.shadowOpacity, 0, 1, 2);
 }
@@ -153,6 +159,7 @@ export function normalizeFontStyleOptions(
     textAlign: isTextAlign(raw?.textAlign) ? raw.textAlign : DEFAULT_FONT_STYLE_OPTIONS.textAlign,
     strokeColor: normalizeHexColor(raw?.strokeColor, DEFAULT_FONT_STYLE_OPTIONS.strokeColor),
     strokeWidth: normalizeStrokeWidth(raw?.strokeWidth),
+    strokeBlur: normalizeStrokeBlur(raw?.strokeBlur),
     shadowColor: normalizeHexColor(raw?.shadowColor, DEFAULT_FONT_STYLE_OPTIONS.shadowColor),
     shadowOpacity: normalizeShadowOpacity(raw?.shadowOpacity),
     shadowBlur: normalizeShadowBlur(raw?.shadowBlur),

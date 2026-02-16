@@ -111,6 +111,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.textAlign === b.textAlign &&
     a.strokeColor === b.strokeColor &&
     a.strokeWidth === b.strokeWidth &&
+    a.strokeBlur === b.strokeBlur &&
     a.shadowColor === b.shadowColor &&
     a.shadowOpacity === b.shadowOpacity &&
     a.shadowBlur === b.shadowBlur &&

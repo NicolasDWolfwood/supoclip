@@ -14,6 +14,7 @@ import {
   normalizeShadowBlur,
   normalizeShadowOffset,
   normalizeShadowOpacity,
+  normalizeStrokeBlur,
   normalizeStrokeWidth,
 } from "@/lib/font-style-options";
 
@@ -50,6 +51,7 @@ export async function GET() {
         default_text_align: true,
         default_stroke_color: true,
         default_stroke_width: true,
+        default_stroke_blur: true,
         default_shadow_color: true,
         default_shadow_opacity: true,
         default_shadow_blur: true,
@@ -94,6 +96,7 @@ export async function GET() {
         ? user.default_stroke_color.toUpperCase()
         : DEFAULT_FONT_STYLE_OPTIONS.strokeColor,
       strokeWidth: normalizeStrokeWidth(user.default_stroke_width),
+      strokeBlur: normalizeStrokeBlur(user.default_stroke_blur),
       shadowColor: isHexColor(user.default_shadow_color)
         ? user.default_shadow_color.toUpperCase()
         : DEFAULT_FONT_STYLE_OPTIONS.shadowColor,
@@ -149,6 +152,7 @@ export async function PATCH(request: NextRequest) {
       textAlign,
       strokeColor,
       strokeWidth,
+      strokeBlur,
       shadowColor,
       shadowOpacity,
       shadowBlur,
@@ -198,6 +202,9 @@ export async function PATCH(request: NextRequest) {
     }
     if (strokeWidth !== undefined && !isIntegerInRange(strokeWidth, 0, 8)) {
       return NextResponse.json({ error: "Invalid strokeWidth (must be an integer from 0 to 8)" }, { status: 400 });
+    }
+    if (strokeBlur !== undefined && !isNumberInRange(strokeBlur, 0, 4)) {
+      return NextResponse.json({ error: "Invalid strokeBlur (must be a number from 0 to 4)" }, { status: 400 });
     }
     if (shadowColor !== undefined && !isHexColor(shadowColor)) {
       return NextResponse.json({ error: "Invalid shadowColor (must be hex format like #000000)" }, { status: 400 });
@@ -315,6 +322,7 @@ export async function PATCH(request: NextRequest) {
         ...(textAlign !== undefined && { default_text_align: textAlign }),
         ...(strokeColor !== undefined && { default_stroke_color: strokeColor.toUpperCase() }),
         ...(strokeWidth !== undefined && { default_stroke_width: normalizeStrokeWidth(strokeWidth) }),
+        ...(strokeBlur !== undefined && { default_stroke_blur: normalizeStrokeBlur(strokeBlur) }),
         ...(shadowColor !== undefined && { default_shadow_color: shadowColor.toUpperCase() }),
         ...(shadowOpacity !== undefined && { default_shadow_opacity: normalizeShadowOpacity(shadowOpacity) }),
         ...(shadowBlur !== undefined && { default_shadow_blur: normalizeShadowBlur(shadowBlur) }),
@@ -348,6 +356,7 @@ export async function PATCH(request: NextRequest) {
         default_text_align: true,
         default_stroke_color: true,
         default_stroke_width: true,
+        default_stroke_blur: true,
         default_shadow_color: true,
         default_shadow_opacity: true,
         default_shadow_blur: true,
@@ -385,6 +394,7 @@ export async function PATCH(request: NextRequest) {
         ? updatedUser.default_stroke_color.toUpperCase()
         : DEFAULT_FONT_STYLE_OPTIONS.strokeColor,
       strokeWidth: normalizeStrokeWidth(updatedUser.default_stroke_width),
+      strokeBlur: normalizeStrokeBlur(updatedUser.default_stroke_blur),
       shadowColor: isHexColor(updatedUser.default_shadow_color)
         ? updatedUser.default_shadow_color.toUpperCase()
         : DEFAULT_FONT_STYLE_OPTIONS.shadowColor,

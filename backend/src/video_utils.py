@@ -1521,6 +1521,7 @@ def create_assemblyai_subtitles(
         stroke_width = max(0, int(round(base_stroke_width * stroke_scale)))
     else:
         stroke_width = base_stroke_width
+    stroke_blur = float(style["stroke_blur"])
     interline = max(0, int(round((style["line_height"] - 1.0) * final_font_size)))
     letter_spacing = int(style["letter_spacing"])
     text_transform = str(style["text_transform"])
@@ -1557,32 +1558,100 @@ def create_assemblyai_subtitles(
             subtitle_box_width = max(240, int(video_width * 0.92))
             subtitle_box_height = max(62, int(final_font_size * 2.8))
 
-            text_clip_kwargs = {
+            base_text_clip_kwargs = {
                 "text": text,
                 "font": processor.font_path,
                 "font_size": final_font_size,
-                "color": style["font_color"],
-                "stroke_color": style["stroke_color"],
-                "stroke_width": stroke_width,
                 "text_align": text_align,
                 "interline": interline,
             }
+            fill_text_clip_kwargs = {
+                **base_text_clip_kwargs,
+                "color": style["font_color"],
+                "stroke_width": 0,
+            }
+            # MoviePy stroke is centered on glyph edges; drawing stroke in a lower
+            # layer and fill above it produces an outside-only visual outline.
+            rendered_outline_width = stroke_width * 2 if stroke_width > 0 else 0
+            stroke_text_clip_kwargs: Optional[Dict[str, Any]]
+            soft_stroke_text_clip_kwargs: Optional[Dict[str, Any]]
+            soft_stroke_opacity = 0.0
+            if rendered_outline_width > 0:
+                stroke_text_clip_kwargs = {
+                    **base_text_clip_kwargs,
+                    "color": style["stroke_color"],
+                    "stroke_color": style["stroke_color"],
+                    "stroke_width": rendered_outline_width,
+                }
+                if stroke_blur > 0:
+                    soft_outline_expansion = max(1, int(round(stroke_blur * 2)))
+                    soft_stroke_text_clip_kwargs = {
+                        **base_text_clip_kwargs,
+                        "color": style["stroke_color"],
+                        "stroke_color": style["stroke_color"],
+                        "stroke_width": rendered_outline_width + soft_outline_expansion,
+                    }
+                    soft_stroke_opacity = max(0.18, min(0.7, stroke_blur / 2.5))
+                else:
+                    soft_stroke_text_clip_kwargs = None
+            else:
+                stroke_text_clip_kwargs = None
+                soft_stroke_text_clip_kwargs = None
 
             render_method = "caption"
             try:
-                text_clip = TextClip(
-                    **text_clip_kwargs,
+                fill_text_clip = TextClip(
+                    **fill_text_clip_kwargs,
                     method="caption",
                     size=(subtitle_box_width, subtitle_box_height),
+                )
+                soft_stroke_clip = (
+                    TextClip(
+                        **soft_stroke_text_clip_kwargs,
+                        method="caption",
+                        size=(subtitle_box_width, subtitle_box_height),
+                    )
+                    if soft_stroke_text_clip_kwargs
+                    else None
+                )
+                stroke_text_clip = (
+                    TextClip(
+                        **stroke_text_clip_kwargs,
+                        method="caption",
+                        size=(subtitle_box_width, subtitle_box_height),
+                    )
+                    if stroke_text_clip_kwargs
+                    else None
                 )
             except Exception:
                 # Fallback when caption rendering is unavailable in the runtime.
                 render_method = "label"
-                text_clip = TextClip(**text_clip_kwargs, method="label")
+                fill_text_clip = TextClip(**fill_text_clip_kwargs, method="label")
+                soft_stroke_clip = (
+                    TextClip(**soft_stroke_text_clip_kwargs, method="label")
+                    if soft_stroke_text_clip_kwargs
+                    else None
+                )
+                stroke_text_clip = (
+                    TextClip(**stroke_text_clip_kwargs, method="label")
+                    if stroke_text_clip_kwargs
+                    else None
+                )
 
-            text_clip = text_clip.with_duration(segment_duration).with_start(segment_start)
+            fill_text_clip = fill_text_clip.with_duration(segment_duration).with_start(segment_start)
+            if soft_stroke_clip is not None:
+                soft_stroke_clip = soft_stroke_clip.with_duration(segment_duration).with_start(segment_start)
+            if stroke_text_clip is not None:
+                stroke_text_clip = stroke_text_clip.with_duration(segment_duration).with_start(segment_start)
 
-            text_height = text_clip.size[1] if text_clip.size else subtitle_box_height
+            text_heights = [subtitle_box_height]
+            if fill_text_clip.size:
+                text_heights.append(fill_text_clip.size[1])
+            if soft_stroke_clip is not None and soft_stroke_clip.size:
+                text_heights.append(soft_stroke_clip.size[1])
+            if stroke_text_clip is not None and stroke_text_clip.size:
+                text_heights.append(stroke_text_clip.size[1])
+            text_height = max(text_heights)
             base_y = int(video_height * 0.70 - text_height // 2)
             max_y = max(0, video_height - text_height)
             base_y = max(0, min(base_y, max_y))
@@ -1626,6 +1695,14 @@ def create_assemblyai_subtitles(
                 except Exception as shadow_error:
                     logger.warning(f"Failed to create subtitle shadow for '{text}': {shadow_error}")
 
+            if soft_stroke_clip is not None and soft_stroke_opacity > 0:
+                layered_clips.append(
+                    soft_stroke_clip.with_position((base_x, base_y)).with_opacity(soft_stroke_opacity)
+                )
+
+            if stroke_text_clip is not None:
+                layered_clips.append(stroke_text_clip.with_position((base_x, base_y)))
+
             weight_offsets: List[Tuple[int, int]] = []
             if font_weight >= 600:
                 weight_offsets.append((1, 0))
@@ -1634,9 +1711,9 @@ def create_assemblyai_subtitles(
             for offset_x, offset_y in weight_offsets:
                 layer_x = max(0, min(base_x + offset_x, max_x))
                 layer_y = max(0, min(base_y + offset_y, max_y))
-                layered_clips.append(text_clip.with_position((layer_x, layer_y)).with_opacity(0.8))
+                layered_clips.append(fill_text_clip.with_position((layer_x, layer_y)).with_opacity(0.8))
 
-            layered_clips.append(text_clip.with_position((base_x, base_y)))
+            layered_clips.append(fill_text_clip.with_position((base_x, base_y)))
             subtitle_clips.extend(layered_clips)
 
         except Exception as e:
