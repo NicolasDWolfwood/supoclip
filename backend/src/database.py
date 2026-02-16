@@ -58,6 +58,14 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE sources
+                ADD COLUMN IF NOT EXISTS url TEXT
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF NOT EXISTS (

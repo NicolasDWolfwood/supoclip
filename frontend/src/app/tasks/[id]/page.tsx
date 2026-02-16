@@ -19,9 +19,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { useSession } from "@/lib/auth-client";
-import { ArrowLeft, Download, Clock, Star, AlertCircle, Trash2, Edit2, X, Check } from "lucide-react";
+import { ArrowLeft, Download, Clock, Timer, Star, AlertCircle, Trash2, Edit2, X, Check } from "lucide-react";
 import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
+import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 
 interface Clip {
   id: string;
@@ -44,6 +45,7 @@ interface TaskDetails {
   source_id: string;
   source_title: string;
   source_type: string;
+  source_url?: string | null;
   status: string;
   progress?: number;
   progress_message?: string;
@@ -169,6 +171,7 @@ export default function TaskPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const progressRef = useRef(progress);
   const progressMessageRef = useRef(progressMessage);
   const sourceTypeRef = useRef<string | undefined>(task?.source_type);
@@ -187,6 +190,15 @@ export default function TaskPage() {
   useEffect(() => {
     sourceTypeRef.current = task?.source_type;
   }, [task?.source_type]);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    if (!task?.status || (task.status !== "queued" && task.status !== "processing")) {
+      return;
+    }
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [task?.status]);
 
   const fetchTaskStatus = useCallback(async (retryCount = 0, maxRetries = 5) => {
     if (!taskId || !userId) return false;
@@ -716,12 +728,36 @@ export default function TaskPage() {
                 )}
               </div>
               <div className="flex items-center gap-4 text-sm text-gray-600">
-                <Badge variant="outline" className="capitalize">
-                  {task.source_type}
-                </Badge>
+                {task.source_url ? (
+                  isHttpUrl(task.source_url) ? (
+                    <a
+                      href={task.source_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex max-w-[28rem]"
+                      title={task.source_url}
+                    >
+                      <Badge variant="outline" className="max-w-full truncate normal-case">
+                        {task.source_url}
+                      </Badge>
+                    </a>
+                  ) : (
+                    <Badge variant="outline" className="max-w-[28rem] truncate normal-case" title={task.source_url}>
+                      {task.source_url}
+                    </Badge>
+                  )
+                ) : (
+                  <Badge variant="outline" className="normal-case">
+                    {formatSourceTypeLabel(task.source_type)}
+                  </Badge>
+                )}
                 <span className="flex items-center gap-1">
                   <Clock className="w-4 h-4" />
                   {new Date(task.created_at).toLocaleDateString()}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Timer className="w-4 h-4" />
+                  {formatTaskRuntime(task.created_at, task.updated_at, task.status, nowMs)}
                 </span>
                 {task.status === "completed" ? (
                   <span>
@@ -747,10 +783,10 @@ export default function TaskPage() {
         {task?.status === "processing" || task?.status === "queued" || !task ? (
           <div className="space-y-6">
             <div className="text-center mb-8">
-              <h2 className="text-xl font-semibold text-black mb-2">
+              <h2 className="text-xl font-semibold text-foreground mb-2">
                 {!task ? "Initializing..." : task.status === "queued" ? "Queued for Processing" : "Processing Video"}
               </h2>
-              <p className="text-gray-600">
+              <p className="text-muted-foreground">
                 {!task
                   ? "Setting up your task. This should only take a moment..."
                   : task.status === "queued"
@@ -765,7 +801,7 @@ export default function TaskPage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-center gap-3">
                     <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-                    <p className="text-sm font-medium text-black">
+                    <p className="text-sm font-medium text-foreground">
                       {displayProgressMessage ||
                         (!task ? "Initializing your task..." : "Processing video and generating clips...")}
                     </p>
@@ -775,10 +811,10 @@ export default function TaskPage() {
                   {progress > 0 && (
                     <div className="w-full">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs text-gray-500">Overall</span>
-                        <span className="text-xs font-medium text-blue-600">{progress}%</span>
+                        <span className="text-xs text-muted-foreground">Overall</span>
+                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">{progress}%</span>
                       </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div className="w-full bg-muted rounded-full h-2">
                         <div
                           className="bg-blue-600 h-2 rounded-full transition-all duration-500 ease-out"
                           style={{ width: `${progress}%` }}
@@ -792,12 +828,12 @@ export default function TaskPage() {
                       {(Object.keys(STAGE_LABELS) as StageKey[]).map((stage) => (
                         <div key={stage} className="w-full">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs text-gray-500">{STAGE_LABELS[stage]}</span>
-                            <span className="text-xs font-medium text-gray-700">
+                            <span className="text-xs text-muted-foreground">{STAGE_LABELS[stage]}</span>
+                            <span className="text-xs font-medium text-muted-foreground">
                               {getStageStatusLabel(stage)}
                             </span>
                           </div>
-                          <div className="w-full bg-gray-200 rounded-full h-1.5">
+                          <div className="w-full bg-muted rounded-full h-1.5">
                             <div
                               className="bg-blue-500 h-1.5 rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${stageProgress[stage]}%` }}
@@ -809,33 +845,33 @@ export default function TaskPage() {
                   )}
 
                   {transcriptProgress && (
-                    <div className="rounded-md border border-blue-200 bg-blue-50/40 p-3 space-y-2">
+                    <div className="rounded-md border border-sky-300/70 bg-sky-50 p-3 space-y-2 dark:border-sky-700/60 dark:bg-sky-950/40">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-blue-900">Transcript Runtime</span>
-                        <span className="text-xs text-blue-800">
+                        <span className="text-xs font-medium text-sky-900 dark:text-sky-100">Transcript Runtime</span>
+                        <span className="text-xs text-sky-700 dark:text-sky-200">
                           {transcriptProgress.mode === "chunked" ? "Chunked Whisper" : "Single-pass Whisper"}
                         </span>
                       </div>
 
                       {transcriptProgress.mode === "chunked" && (
                         <div className="space-y-2">
-                          <div className="flex items-center justify-between text-xs text-blue-900">
+                          <div className="flex items-center justify-between text-xs text-sky-800 dark:text-sky-100">
                             <span>
                               Chunks: {transcriptProgress.chunks_completed ?? 0}/
                               {transcriptProgress.chunk_total ?? 0}
                             </span>
                             <span>{transcriptChunkProgressPercent}%</span>
                           </div>
-                          <div className="w-full bg-blue-100 rounded-full h-1.5">
+                          <div className="w-full bg-sky-200 rounded-full h-1.5 dark:bg-sky-900/80">
                             <div
-                              className="bg-blue-600 h-1.5 rounded-full transition-all duration-500 ease-out"
+                              className="bg-blue-600 h-1.5 rounded-full transition-all duration-500 ease-out dark:bg-blue-400"
                               style={{ width: `${transcriptChunkProgressPercent}%` }}
                             />
                           </div>
                         </div>
                       )}
 
-                      <div className="grid grid-cols-1 gap-1 text-xs text-blue-900 sm:grid-cols-2">
+                      <div className="grid grid-cols-1 gap-1 text-xs text-sky-800 sm:grid-cols-2 dark:text-sky-100">
                         <span>
                           Current chunk:{" "}
                           {typeof transcriptProgress.chunk_index === "number" &&
@@ -848,12 +884,12 @@ export default function TaskPage() {
                         <span>Avg chunk time: {formatSeconds(transcriptProgress.average_chunk_seconds)}</span>
                       </div>
                       {transcriptChunkWindowLabel && (
-                        <p className="text-xs text-blue-800">Chunk window: {transcriptChunkWindowLabel}</p>
+                        <p className="text-xs text-sky-700 dark:text-sky-200">Chunk window: {transcriptChunkWindowLabel}</p>
                       )}
                     </div>
                   )}
 
-                  <p className="text-xs text-gray-500 text-center">
+                  <p className="text-xs text-muted-foreground text-center">
                     This page will automatically update when your clips are ready
                   </p>
                 </div>

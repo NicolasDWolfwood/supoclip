@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, type CSSProperties } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
@@ -15,7 +16,8 @@ import { Slider } from "@/components/ui/slider";
 import { useSession } from "@/lib/auth-client";
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock } from "lucide-react";
+import { ArrowRight, Youtube, CheckCircle, AlertCircle, Loader2, Palette, Type, Paintbrush, Clock, Timer } from "lucide-react";
+import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 import {
   normalizeFontSize,
   normalizeFontStyleOptions,
@@ -36,9 +38,11 @@ interface LatestTask {
   id: string;
   source_title: string;
   source_type: string;
+  source_url?: string | null;
   status: string;
   clips_count: number;
   created_at: string;
+  updated_at: string;
 }
 
 const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
@@ -122,6 +126,7 @@ function normalizeTaskTimeoutSecondsOnForm(value: unknown, timeoutCapSeconds: nu
 }
 
 export default function Home() {
+  const router = useRouter();
   const [url, setUrl] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -169,6 +174,7 @@ export default function Home() {
   // Latest task state
   const [latestTask, setLatestTask] = useState<LatestTask | null>(null);
   const [isLoadingLatest, setIsLoadingLatest] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -360,6 +366,15 @@ export default function Home() {
 
     fetchLatestTask();
   }, [session?.user?.id, apiUrl]);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    if (!latestTask?.status || (latestTask.status !== "queued" && latestTask.status !== "processing")) {
+      return;
+    }
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [latestTask?.status]);
 
   // Always treat file input as uncontrolled, and store file in a ref
   const fileRef = useRef<File | null>(null);
@@ -724,46 +739,84 @@ export default function Home() {
                 </Link>
               </div>
 
-              <Link href={`/tasks/${latestTask.id}`}>
-                <Card className="hover:shadow-md transition-shadow cursor-pointer">
-                  <CardContent className="p-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-lg font-semibold text-black mb-2 truncate">
-                          {latestTask.source_title}
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
-                          <Badge variant="outline" className="capitalize">
-                            {latestTask.source_type}
-                          </Badge>
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-4 h-4" />
-                            {new Date(latestTask.created_at).toLocaleDateString()}
-                          </span>
-                          <span>
-                            {latestTask.clips_count} {latestTask.clips_count === 1 ? "clip" : "clips"}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex-shrink-0">
-                        {latestTask.status === "completed" ? (
-                          <Badge className="bg-green-100 text-green-800">
-                            <CheckCircle className="w-3 h-3 mr-1" />
-                            Completed
-                          </Badge>
-                        ) : latestTask.status === "processing" ? (
-                          <Badge className="bg-blue-100 text-blue-800">
-                            <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-                            Processing
-                          </Badge>
+              <Card
+                className="hover:shadow-md transition-shadow cursor-pointer"
+                role="button"
+                tabIndex={0}
+                onClick={() => router.push(`/tasks/${latestTask.id}`)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    router.push(`/tasks/${latestTask.id}`);
+                  }
+                }}
+              >
+                <CardContent className="p-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-lg font-semibold text-black mb-2 truncate">
+                        {latestTask.source_title}
+                      </h3>
+                      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
+                        {latestTask.source_url ? (
+                          isHttpUrl(latestTask.source_url) ? (
+                            <a
+                              href={latestTask.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={latestTask.source_url}
+                              onClick={(event) => event.stopPropagation()}
+                              className="inline-flex max-w-[22rem]"
+                            >
+                              <Badge variant="outline" className="max-w-full truncate normal-case">
+                                {latestTask.source_url}
+                              </Badge>
+                            </a>
+                          ) : (
+                            <Badge
+                              variant="outline"
+                              className="max-w-[22rem] truncate normal-case"
+                              title={latestTask.source_url}
+                            >
+                              {latestTask.source_url}
+                            </Badge>
+                          )
                         ) : (
-                          <Badge variant="outline">{latestTask.status}</Badge>
+                          <Badge variant="outline" className="normal-case">
+                            {formatSourceTypeLabel(latestTask.source_type)}
+                          </Badge>
                         )}
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          {new Date(latestTask.created_at).toLocaleDateString()}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Timer className="w-4 h-4" />
+                          {formatTaskRuntime(latestTask.created_at, latestTask.updated_at, latestTask.status, nowMs)}
+                        </span>
+                        <span>
+                          {latestTask.clips_count} {latestTask.clips_count === 1 ? "clip" : "clips"}
+                        </span>
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
-              </Link>
+                    <div className="flex-shrink-0">
+                      {latestTask.status === "completed" ? (
+                        <Badge className="bg-green-100 text-green-800">
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          Completed
+                        </Badge>
+                      ) : latestTask.status === "processing" ? (
+                        <Badge className="bg-blue-100 text-blue-800">
+                          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                          Processing
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">{latestTask.status}</Badge>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
 
               <Separator className="my-8" />
             </div>

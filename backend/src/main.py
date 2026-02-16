@@ -135,6 +135,7 @@ async def start_task(request: Request):
 
     source = Source()
     source.type = source.decide_source_type(raw_source["url"])
+    source.url = raw_source["url"]
     logger.info(f"📺 Source type detected: {source.type}")
 
     if source.type == "youtube":
@@ -308,6 +309,7 @@ async def start_task_with_progress(request: Request):
 
         source = Source()
         source.type = source.decide_source_type(raw_source["url"])
+        source.url = raw_source["url"]
 
         # Get actual title based on source type
         if source.type == "youtube":
@@ -512,7 +514,7 @@ async def get_task_details(task_id: str, db: AsyncSession = Depends(get_db)):
     # Get task details
     task_result = await db.execute(
       text("""
-        SELECT t.*, s.title as source_title, s.type as source_type
+        SELECT t.*, s.title as source_title, s.type as source_type, s.url as source_url
         FROM tasks t
         LEFT JOIN sources s ON t.source_id = s.id
         WHERE t.id = :task_id
@@ -536,6 +538,7 @@ async def get_task_details(task_id: str, db: AsyncSession = Depends(get_db)):
       "source_id": task.source_id,
       "source_title": task.source_title,
       "source_type": task.source_type,
+      "source_url": getattr(task, "source_url", None),
       "status": task.status,
       "generated_clips_ids": task.generated_clips_ids,
       "clips_count": clips_count,

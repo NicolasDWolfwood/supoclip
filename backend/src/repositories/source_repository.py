@@ -26,7 +26,6 @@ class SourceRepository:
         source.type = source_type
         source.title = title
         source.url = url
-        source.metadata = metadata
 
         db.add(source)
         await db.flush()

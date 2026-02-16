@@ -7,8 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useSession } from "@/lib/auth-client";
-import { ArrowLeft, Clock, PlayCircle, AlertCircle, CheckCircle, Loader2, Trash2 } from "lucide-react";
+import { ArrowLeft, Clock, Timer, PlayCircle, AlertCircle, CheckCircle, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
+import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 
 interface Task {
   id: string;
@@ -16,6 +17,7 @@ interface Task {
   source_id: string;
   source_title: string;
   source_type: string;
+  source_url?: string | null;
   status: string;
   clips_count: number;
   created_at: string;
@@ -29,6 +31,7 @@ export default function ListPage() {
   const [error, setError] = useState<string | null>(null);
   const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -60,6 +63,16 @@ export default function ListPage() {
 
     fetchTasks();
   }, [session?.user?.id, apiUrl]);
+
+  useEffect(() => {
+    setNowMs(Date.now());
+    const hasRunningTask = tasks.some((task) => task.status === "queued" || task.status === "processing");
+    if (!hasRunningTask) {
+      return;
+    }
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [tasks]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -282,25 +295,49 @@ export default function ListPage() {
               <Card key={task.id} className="hover:shadow-md transition-shadow">
                 <CardContent className="p-6">
                   <div className="flex items-start justify-between gap-4">
-                    <Link href={`/tasks/${task.id}`} className="flex-1 min-w-0">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-lg font-semibold text-black mb-2 truncate">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="text-lg font-semibold text-black mb-2 truncate">
+                        <Link href={`/tasks/${task.id}`} className="hover:underline">
                           {task.source_title}
-                        </h3>
-                        <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
-                          <Badge variant="outline" className="capitalize">
-                            {task.source_type}
+                        </Link>
+                      </h3>
+                      <div className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
+                        {task.source_url ? (
+                          isHttpUrl(task.source_url) ? (
+                            <a
+                              href={task.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={task.source_url}
+                              className="inline-flex max-w-[22rem]"
+                            >
+                              <Badge variant="outline" className="max-w-full truncate normal-case">
+                                {task.source_url}
+                              </Badge>
+                            </a>
+                          ) : (
+                            <Badge variant="outline" className="max-w-[22rem] truncate normal-case" title={task.source_url}>
+                              {task.source_url}
+                            </Badge>
+                          )
+                        ) : (
+                          <Badge variant="outline" className="normal-case">
+                            {formatSourceTypeLabel(task.source_type)}
                           </Badge>
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-4 h-4" />
-                            {formatDate(task.created_at)}
-                          </span>
-                          <span>
-                            {task.clips_count} {task.clips_count === 1 ? "clip" : "clips"}
-                          </span>
-                        </div>
+                        )}
+                        <span className="flex items-center gap-1">
+                          <Clock className="w-4 h-4" />
+                          {formatDate(task.created_at)}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Timer className="w-4 h-4" />
+                          {formatTaskRuntime(task.created_at, task.updated_at, task.status, nowMs)}
+                        </span>
+                        <span>
+                          {task.clips_count} {task.clips_count === 1 ? "clip" : "clips"}
+                        </span>
                       </div>
-                    </Link>
+                    </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <div>
                         {getStatusBadge(task.status)}
