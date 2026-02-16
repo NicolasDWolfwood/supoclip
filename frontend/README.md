@@ -4,7 +4,7 @@ Built with Next.js 15 + ShadCN + TailwindCSS.
 
 ## Runtime
 
-- Node.js `20+` (see `.nvmrc` / `.node-version`)
+- Node.js `20.19+` (see `.nvmrc` / `.node-version`)
 - npm `10+`
 
 ## Local Development

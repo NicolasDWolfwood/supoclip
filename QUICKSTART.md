@@ -12,7 +12,7 @@ Run MrglSnips with Docker in just one command!
      - [Anthropic API Key](https://console.anthropic.com/)
      - [z.ai API Key](https://docs.z.ai/api-reference/introduction)
 3. **For local frontend development (non-Docker):**
-   - Node.js 20+
+   - Node.js 20.19+
    - npm 10+
 
 ## Quick Start (Single Command)
