@@ -4,7 +4,7 @@ Task API routes using refactored architecture.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, List
 import json
 import logging
 
@@ -30,6 +30,7 @@ MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0
 MAX_WHISPER_CHUNK_OVERLAP_SECONDS = 120
 MIN_TASK_TIMEOUT_SECONDS = 300
 MAX_TASK_TIMEOUT_SECONDS = 86400
+DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_selected"}
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -46,6 +47,10 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
         if lowered in {"0", "false", "no", "off"}:
             return False
     return default
+
+
+def _resolve_review_before_render_enabled(raw: object) -> bool:
+    return _coerce_bool(raw, default=True)
 
 
 def _resolve_transcription_provider(raw: object) -> str:
@@ -555,6 +560,9 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
         ai_model = ai_model_raw.strip() or None
     else:
         raise HTTPException(status_code=400, detail="ai_options.model must be a string")
+    review_before_render_enabled = _resolve_review_before_render_enabled(
+        data.get("review_before_render_enabled")
+    )
 
     if not raw_source or not raw_source.get("url"):
         raise HTTPException(status_code=400, detail="Source URL is required")
@@ -594,8 +602,10 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             font_family=font_family,
             font_size=font_size,
             font_color=font_color,
+            transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            review_before_render_enabled=review_before_render_enabled,
         )
 
         # Get source type for worker
@@ -646,6 +656,7 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
             "transcription_options": transcription_runtime_options,
             "ai_provider": ai_provider,
             "ai_routing_mode": resolved_zai_routing_mode,
+            "review_before_render_enabled": review_before_render_enabled,
             "message": "Task created and queued for processing"
         }
 
@@ -771,6 +782,162 @@ async def get_task_clips(task_id: str, request: Request, db: AsyncSession = Depe
         raise HTTPException(status_code=500, detail=f"Error retrieving clips: {str(e)}")
 
 
+@router.get("/{task_id}/draft-clips")
+async def get_task_draft_clips(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Get editable draft clips for a task in awaiting_review state."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    try:
+        task_service = TaskService(db)
+        task = await task_service.task_repo.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if task["user_id"] != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to access this task")
+
+        draft_clips = await task_service.get_task_draft_clips(task_id)
+        return {
+            "task_id": task_id,
+            "status": task.get("status"),
+            "draft_clips": draft_clips,
+            "total_drafts": len(draft_clips),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving draft clips: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving draft clips: {str(e)}")
+
+
+@router.put("/{task_id}/draft-clips")
+async def update_task_draft_clips(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Bulk update draft clip timing/text/selection before finalizing."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this task")
+    if task.get("status") != "awaiting_review":
+        raise HTTPException(status_code=400, detail="Draft clips can only be edited while task is awaiting_review")
+
+    data = await request.json()
+    draft_clips = data.get("draft_clips")
+    if not isinstance(draft_clips, list) or len(draft_clips) == 0:
+        raise HTTPException(status_code=400, detail="draft_clips must be a non-empty list")
+
+    for item in draft_clips:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=400, detail="Each draft clip update must be an object")
+        unknown_fields = set(item.keys()) - DRAFT_UPDATE_FIELDS
+        if unknown_fields:
+            unknown_list = ", ".join(sorted(unknown_fields))
+            raise HTTPException(status_code=400, detail=f"Unsupported draft clip fields: {unknown_list}")
+
+    try:
+        updated_drafts = await task_service.update_task_draft_clips(task_id, draft_clips)
+        return {
+            "task_id": task_id,
+            "draft_clips": updated_drafts,
+            "total_drafts": len(updated_drafts),
+            "message": "Draft clips updated",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating draft clips: {e}")
+        raise HTTPException(status_code=500, detail=f"Error updating draft clips: {str(e)}")
+
+
+@router.post("/{task_id}/finalize")
+async def finalize_task(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Queue rendering from reviewed draft clips."""
+    user_id = request.headers.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to finalize this task")
+    if task.get("status") != "awaiting_review":
+        raise HTTPException(status_code=400, detail="Task is not awaiting review")
+
+    selected_count = await task_service.draft_clip_repo.count_selected_drafts(db, task_id)
+    if selected_count <= 0:
+        raise HTTPException(status_code=400, detail="Finalize requires at least one selected draft clip")
+
+    source_url = task.get("source_url")
+    source_type = task.get("source_type")
+    if not source_url or not source_type:
+        raise HTTPException(status_code=400, detail="Task source is missing; cannot finalize")
+
+    subtitle_style = normalize_subtitle_style(
+        {
+            "font_family": task.get("font_family"),
+            "font_size": task.get("font_size"),
+            "font_color": task.get("font_color"),
+        }
+    )
+
+    await task_service.task_repo.update_task_status(
+        db,
+        task_id,
+        "queued",
+        progress=0,
+        progress_message="Queued rendering from approved draft clips...",
+    )
+
+    try:
+        job_id = await JobQueue.enqueue_job(
+            "process_video_task",
+            task_id,
+            source_url,
+            source_type,
+            user_id,
+            task.get("font_family") or subtitle_style["font_family"],
+            int(task.get("font_size") or subtitle_style["font_size"]),
+            task.get("font_color") or subtitle_style["font_color"],
+            _coerce_bool(task.get("transitions_enabled"), default=False),
+            task.get("transcription_provider") or "local",
+            task.get("ai_provider") or _default_ai_provider(),
+            None,
+            subtitle_style,
+            None,
+            {},
+            queue_name=config.arq_local_queue_name,
+            render_from_drafts=True,
+        )
+    except Exception as enqueue_error:
+        logger.error(f"Failed to enqueue finalize job for task {task_id}: {enqueue_error}")
+        await task_service.task_repo.update_task_status(
+            db,
+            task_id,
+            "awaiting_review",
+            progress=100,
+            progress_message="Failed to queue finalize job. Please try again.",
+        )
+        raise HTTPException(status_code=503, detail="Failed to queue finalize job")
+
+    return {
+        "task_id": task_id,
+        "job_id": job_id,
+        "selected_clips": selected_count,
+        "status": "queued",
+        "message": "Finalize job queued",
+    }
+
+
 @router.get("/{task_id}/progress")
 async def get_task_progress_sse(task_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """
@@ -803,8 +970,8 @@ async def get_task_progress_sse(task_id: str, request: Request, db: AsyncSession
             })
         }
 
-        # If task is already completed or error, close connection
-        if task.get("status") in ["completed", "error"]:
+        # If task is already in a terminal stream state, close connection.
+        if task.get("status") in ["completed", "error", "awaiting_review"]:
             yield {
                 "event": "close",
                 "data": json.dumps({"status": task.get("status")})
@@ -826,8 +993,8 @@ async def get_task_progress_sse(task_id: str, request: Request, db: AsyncSession
                     "data": json.dumps(progress_data)
                 }
 
-                # Close connection if task is done
-                if progress_data.get("status") in ["completed", "error"]:
+                # Close connection if task is done for this stream phase.
+                if progress_data.get("status") in ["completed", "error", "awaiting_review"]:
                     yield {
                         "event": "close",
                         "data": json.dumps({"status": progress_data.get("status")})

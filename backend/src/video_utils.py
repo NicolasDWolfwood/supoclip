@@ -16,6 +16,8 @@ import urllib.request
 import subprocess
 import tempfile
 import time
+from difflib import SequenceMatcher
+import re
 
 import cv2
 from moviepy import VideoFileClip, CompositeVideoClip, TextClip, ColorClip
@@ -1223,6 +1225,158 @@ def parse_timestamp_to_seconds(timestamp_str: str) -> float:
         logger.error(f"Failed to parse timestamp '{timestamp_str}': {e}")
         return 0.0
 
+
+_ALIGNMENT_TOKEN_RE = re.compile(r"[A-Za-z0-9']+")
+
+
+def _tokenize_alignment_text(text: str) -> List[str]:
+    return [match.group(0) for match in _ALIGNMENT_TOKEN_RE.finditer(text or "")]
+
+
+def _normalize_alignment_token(token: str) -> str:
+    return re.sub(r"[^a-z0-9']", "", (token or "").strip().lower())
+
+
+def _extract_clip_words_for_alignment(
+    video_path: Path,
+    clip_start: float,
+    clip_end: float,
+) -> List[Dict[str, Any]]:
+    clip_duration = max(0.01, float(clip_end) - float(clip_start))
+    if clip_duration <= 0:
+        raise ValueError("Invalid clip range for subtitle alignment")
+
+    model_name = config.whisper_model or "medium"
+    device, use_fp16 = _resolve_whisper_device()
+    model = _get_whisper_model(model_name, device)
+
+    with tempfile.TemporaryDirectory(prefix=f"{video_path.stem}_align_", dir=str(video_path.parent)) as temp_dir:
+        audio_path = Path(temp_dir) / "alignment_clip.wav"
+        _extract_audio_chunk_for_whisper(video_path, audio_path, clip_start, clip_end)
+        result = _run_whisper_transcription(model, audio_path, use_fp16)
+        raw_words = _extract_words_from_whisper_result(result)
+
+    aligned_words: List[Dict[str, Any]] = []
+    for word in raw_words:
+        text = str(word.get("text") or "").strip()
+        if not text:
+            continue
+
+        normalized = _normalize_alignment_token(text)
+        if not normalized:
+            continue
+
+        start_seconds = max(0.0, min(clip_duration, float(word.get("start", 0)) / 1000.0))
+        end_seconds = max(0.0, min(clip_duration, float(word.get("end", 0)) / 1000.0))
+        if end_seconds <= start_seconds:
+            continue
+
+        aligned_words.append(
+            {
+                "text": text,
+                "normalized": normalized,
+                "start": start_seconds,
+                "end": end_seconds,
+            }
+        )
+
+    return aligned_words
+
+
+def align_edited_text_to_clip_audio(
+    video_path: Union[Path, str],
+    clip_start: float,
+    clip_end: float,
+    edited_text: str,
+) -> List[Dict[str, Any]]:
+    """
+    Align edited subtitle text to clip audio and return per-word timings relative to clip start.
+    """
+    video_path = Path(video_path)
+    target_tokens = _tokenize_alignment_text(edited_text)
+    if not target_tokens:
+        raise ValueError("Edited subtitle text is empty after tokenization")
+
+    reference_words = _extract_clip_words_for_alignment(video_path, clip_start, clip_end)
+    if not reference_words:
+        raise ValueError("Could not derive word timings from clip audio")
+
+    target_normalized = [_normalize_alignment_token(token) for token in target_tokens]
+    reference_normalized = [word["normalized"] for word in reference_words]
+    clip_duration = max(0.01, float(clip_end) - float(clip_start))
+
+    matcher = SequenceMatcher(a=reference_normalized, b=target_normalized, autojunk=False)
+    timings: List[Optional[Dict[str, float]]] = [None] * len(target_tokens)
+
+    for tag, ref_start, ref_end, target_start, target_end in matcher.get_opcodes():
+        if tag != "equal":
+            continue
+        for offset in range(min(ref_end - ref_start, target_end - target_start)):
+            ref_word = reference_words[ref_start + offset]
+            timings[target_start + offset] = {
+                "start": float(ref_word["start"]),
+                "end": float(ref_word["end"]),
+            }
+
+    # Interpolate timings for unmatched words based on nearest matched anchors.
+    index = 0
+    while index < len(timings):
+        if timings[index] is not None:
+            index += 1
+            continue
+
+        span_start = index
+        while index < len(timings) and timings[index] is None:
+            index += 1
+        span_end = index - 1
+        span_count = span_end - span_start + 1
+
+        left_anchor = timings[span_start - 1]["end"] if span_start > 0 and timings[span_start - 1] else 0.0
+        right_anchor = timings[index]["start"] if index < len(timings) and timings[index] else clip_duration
+
+        if right_anchor <= left_anchor:
+            right_anchor = min(clip_duration, left_anchor + (0.14 * span_count))
+            if right_anchor <= left_anchor:
+                right_anchor = left_anchor + (0.08 * span_count)
+
+        step = max(0.05, (right_anchor - left_anchor) / max(1, span_count))
+        cursor = left_anchor
+        for span_index in range(span_start, span_end + 1):
+            start_time = max(0.0, min(clip_duration, cursor))
+            end_time = max(start_time + 0.05, min(clip_duration, cursor + step))
+            timings[span_index] = {"start": start_time, "end": end_time}
+            cursor += step
+
+    # Final monotonic pass so words are strictly ordered and inside clip duration.
+    aligned_words: List[Dict[str, Any]] = []
+    previous_end = 0.0
+    for token, timing in zip(target_tokens, timings):
+        if timing is None:
+            continue
+
+        start_time = max(previous_end, min(clip_duration, float(timing["start"])))
+        end_time = max(start_time + 0.05, min(clip_duration, float(timing["end"])))
+        if end_time <= start_time:
+            end_time = min(clip_duration, start_time + 0.05)
+            if end_time <= start_time:
+                start_time = max(0.0, clip_duration - 0.05)
+                end_time = clip_duration
+
+        aligned_words.append(
+            {
+                "text": token,
+                "start": round(start_time, 3),
+                "end": round(end_time, 3),
+            }
+        )
+        previous_end = end_time
+
+    if not aligned_words:
+        raise ValueError("Word-level alignment produced no timings")
+
+    return aligned_words
+
+
 def _apply_text_transform(text: str, transform: str) -> str:
     if transform == "uppercase":
         return text.upper()
@@ -1282,48 +1436,71 @@ def create_assemblyai_subtitles(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
+    word_timings_override: Optional[List[Dict[str, Any]]] = None,
 ) -> List[TextClip]:
     """Create subtitles using cached word timings."""
     video_path = Path(video_path)
-    transcript_data = load_cached_transcript_data(video_path)
     style = normalize_subtitle_style(subtitle_style)
     style["font_family"] = font_family or style["font_family"]
     style["font_size"] = int(font_size or style["font_size"])
     style["font_color"] = font_color or style["font_color"]
 
-    if not transcript_data or not transcript_data.get("words"):
-        logger.warning("No cached transcript data available for subtitles")
-        return []
-
     # Convert clip timing to milliseconds
     clip_start_ms = int(clip_start * 1000)
     clip_end_ms = int(clip_end * 1000)
+    clip_duration_seconds = max(0.0, clip_end - clip_start)
 
-    # Find words that fall within our clip timerange
     relevant_words = []
-    for word_data in transcript_data["words"]:
-        word_start = word_data["start"]
-        word_end = word_data["end"]
+    if word_timings_override:
+        for word_data in word_timings_override:
+            text = str(word_data.get("text") or "").strip()
+            if not text:
+                continue
+            start_seconds = float(word_data.get("start") or 0.0)
+            end_seconds = float(word_data.get("end") or 0.0)
+            start_seconds = max(0.0, min(clip_duration_seconds, start_seconds))
+            end_seconds = max(0.0, min(clip_duration_seconds, end_seconds))
+            if end_seconds <= start_seconds:
+                continue
+            relevant_words.append(
+                {
+                    "text": text,
+                    "start": start_seconds,
+                    "end": end_seconds,
+                    "confidence": float(word_data.get("confidence", 1.0) or 1.0),
+                }
+            )
+    else:
+        transcript_data = load_cached_transcript_data(video_path)
+        if not transcript_data or not transcript_data.get("words"):
+            logger.warning("No cached transcript data available for subtitles")
+            return []
 
-        # Check if word overlaps with clip
-        if word_start < clip_end_ms and word_end > clip_start_ms:
-            # Adjust timing relative to clip start
-            relative_start = max(0, (word_start - clip_start_ms) / 1000.0)
-            relative_end = min((clip_end_ms - clip_start_ms) / 1000.0, (word_end - clip_start_ms) / 1000.0)
+        # Find words that fall within our clip timerange
+        for word_data in transcript_data["words"]:
+            word_start = word_data["start"]
+            word_end = word_data["end"]
 
-            if relative_end > relative_start:
-                relevant_words.append(
-                    {
-                        "text": word_data["text"],
-                        "start": relative_start,
-                        "end": relative_end,
-                        "confidence": word_data.get("confidence", 1.0),
-                    }
-                )
+            # Check if word overlaps with clip
+            if word_start < clip_end_ms and word_end > clip_start_ms:
+                # Adjust timing relative to clip start
+                relative_start = max(0, (word_start - clip_start_ms) / 1000.0)
+                relative_end = min((clip_end_ms - clip_start_ms) / 1000.0, (word_end - clip_start_ms) / 1000.0)
+
+                if relative_end > relative_start:
+                    relevant_words.append(
+                        {
+                            "text": word_data["text"],
+                            "start": relative_start,
+                            "end": relative_end,
+                            "confidence": word_data.get("confidence", 1.0),
+                        }
+                    )
 
     if not relevant_words:
         logger.warning("No words found in clip timerange")
         return []
+    relevant_words.sort(key=lambda word: (float(word.get("start", 0.0)), float(word.get("end", 0.0))))
 
     # Group words into short subtitle segments for readability.
     subtitle_clips = []
@@ -1472,6 +1649,7 @@ def create_optimized_clip(
     font_size: int = 24,
     font_color: str = "#FFFFFF",
     subtitle_style: Optional[Dict[str, Any]] = None,
+    subtitle_word_timings: Optional[List[Dict[str, Any]]] = None,
     error_collector: Optional[List[str]] = None,
 ) -> bool:
     """Create optimized 9:16 clip with word-timed subtitles."""
@@ -1520,6 +1698,7 @@ def create_optimized_clip(
                 font_size,
                 font_color,
                 subtitle_style=subtitle_style,
+                word_timings_override=subtitle_word_timings,
             )
             final_clips.extend(subtitle_clips)
 
@@ -1603,6 +1782,7 @@ def create_clips_from_segments(
                 font_size,
                 font_color,
                 subtitle_style,
+                subtitle_word_timings=segment.get("subtitle_word_timings"),
                 error_collector=clip_errors,
             )
 

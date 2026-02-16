@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import List, Optional
 from sqlalchemy import Column, String, DateTime, ForeignKey, CheckConstraint, ARRAY, Boolean, Float, Integer, Text, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from sqlalchemy.sql import func
 import uuid
@@ -92,11 +93,13 @@ class Task(Base):
     source_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("sources.id", ondelete="SET NULL"), nullable=True)
     generated_clips_ids: Mapped[Optional[List[str]]] = mapped_column(ARRAY(String(36)), nullable=True)
     status: Mapped[str] = mapped_column(String(20), server_default=text("'pending'"), nullable=False)
+    review_before_render_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
 
     # Font customization fields
     font_family: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, server_default=text("'TikTokSans-Regular'"))
     font_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, server_default=text("'24'"))
     font_color: Mapped[Optional[str]] = mapped_column(String(7), nullable=True, server_default=text("'#FFFFFF'"))  # Hex color code
+    transitions_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
     transcription_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'local'"))
     ai_provider: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'openai'"))
 
@@ -107,6 +110,7 @@ class Task(Base):
     user: Mapped["User"] = relationship("User", back_populates="tasks")
     source: Mapped[Optional["Source"]] = relationship("Source", back_populates="tasks")
     generated_clips: Mapped[List["GeneratedClip"]] = relationship("GeneratedClip", back_populates="task", cascade="all, delete-orphan")
+    draft_clips: Mapped[List["TaskClipDraft"]] = relationship("TaskClipDraft", back_populates="task", cascade="all, delete-orphan")
 
 class Source(Base):
     __tablename__ = "sources"
@@ -152,3 +156,24 @@ class GeneratedClip(Base):
 
     # Relationships
     task: Mapped["Task"] = relationship("Task", back_populates="generated_clips")
+
+
+class TaskClipDraft(Base):
+    __tablename__ = "task_clip_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid_string)
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    clip_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_time: Mapped[str] = mapped_column(String(20), nullable=False)
+    end_time: Mapped[str] = mapped_column(String(20), nullable=False)
+    duration: Mapped[float] = mapped_column(Float, nullable=False)
+    original_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    edited_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    relevance_score: Mapped[float] = mapped_column(Float, nullable=False)
+    reasoning: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_selected: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("true"))
+    edited_word_timings_json: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    task: Mapped["Task"] = relationship("Task", back_populates="draft_clips")

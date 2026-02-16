@@ -104,6 +104,12 @@ export default function ListPage() {
             Error
           </Badge>
         );
+      case "awaiting_review":
+        return (
+          <Badge className="bg-amber-100 text-amber-800">
+            Needs Review
+          </Badge>
+        );
       default:
         return <Badge variant="outline">{status}</Badge>;
     }

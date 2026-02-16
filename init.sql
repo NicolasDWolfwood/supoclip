@@ -56,6 +56,7 @@ CREATE TABLE tasks (
     source_id VARCHAR(36) REFERENCES sources(id) ON DELETE SET NULL,
     generated_clips_ids VARCHAR(36)[], -- Array of clip IDs
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    review_before_render_enabled BOOLEAN NOT NULL DEFAULT true,
 
     -- Progress tracking fields
     progress INTEGER DEFAULT 0 CHECK (progress >= 0 AND progress <= 100),
@@ -65,8 +66,9 @@ CREATE TABLE tasks (
     font_family VARCHAR(100) DEFAULT 'TikTokSans-Regular',
     font_size INTEGER DEFAULT 24,
     font_color VARCHAR(7) DEFAULT '#FFFFFF', -- Hex color code
+    transitions_enabled BOOLEAN NOT NULL DEFAULT false,
     transcription_provider VARCHAR(20) NOT NULL DEFAULT 'local' CHECK (transcription_provider IN ('local', 'assemblyai')),
-    ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai' CHECK (ai_provider IN ('openai', 'google', 'anthropic')),
+    ai_provider VARCHAR(20) NOT NULL DEFAULT 'openai' CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai')),
 
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -85,6 +87,24 @@ CREATE TABLE generated_clips (
     relevance_score FLOAT NOT NULL,
     reasoning TEXT,                  -- AI reasoning for selection
     clip_order INTEGER NOT NULL,     -- Order within the task
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Editable draft clips used by optional review-before-render workflow.
+CREATE TABLE task_clip_drafts (
+    id VARCHAR(36) PRIMARY KEY DEFAULT uuid_generate_v4()::text,
+    task_id VARCHAR(36) NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    clip_order INTEGER NOT NULL,
+    start_time VARCHAR(20) NOT NULL,
+    end_time VARCHAR(20) NOT NULL,
+    duration FLOAT NOT NULL,
+    original_text TEXT,
+    edited_text TEXT,
+    relevance_score FLOAT NOT NULL,
+    reasoning TEXT,
+    is_selected BOOLEAN NOT NULL DEFAULT true,
+    edited_word_timings_json JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -136,6 +156,9 @@ CREATE INDEX idx_sources_created_at ON sources(created_at);
 CREATE INDEX idx_generated_clips_task_id ON generated_clips(task_id);
 CREATE INDEX idx_generated_clips_clip_order ON generated_clips(clip_order);
 CREATE INDEX idx_generated_clips_created_at ON generated_clips(created_at);
+CREATE INDEX idx_task_clip_drafts_task_id ON task_clip_drafts(task_id);
+CREATE INDEX idx_task_clip_drafts_clip_order ON task_clip_drafts(clip_order);
+CREATE UNIQUE INDEX uq_task_clip_drafts_task_order ON task_clip_drafts(task_id, clip_order);
 CREATE INDEX idx_session_token ON session(token);
 CREATE INDEX idx_session_userId ON session("userId");
 CREATE INDEX idx_account_userId ON account("userId");
@@ -167,6 +190,7 @@ CREATE TRIGGER update_users_updatedAt BEFORE UPDATE ON users FOR EACH ROW EXECUT
 CREATE TRIGGER update_tasks_updated_at BEFORE UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_sources_updated_at BEFORE UPDATE ON sources FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER update_generated_clips_updated_at BEFORE UPDATE ON generated_clips FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER update_task_clip_drafts_updated_at BEFORE UPDATE ON task_clip_drafts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Better Auth tables use camelCase "updatedAt"
 CREATE TRIGGER update_session_updatedAt BEFORE UPDATE ON session FOR EACH ROW EXECUTE FUNCTION update_updatedAt_column();

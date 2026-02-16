@@ -1,6 +1,8 @@
 """
 Task service - orchestrates task creation and processing workflow.
 """
+from __future__ import annotations
+
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any, Optional, Callable, Awaitable, List, Tuple
 import logging
@@ -9,6 +11,7 @@ import asyncio
 from ..repositories.task_repository import TaskRepository
 from ..repositories.source_repository import SourceRepository
 from ..repositories.clip_repository import ClipRepository
+from ..repositories.draft_clip_repository import DraftClipRepository
 from .video_service import VideoService
 from .secret_service import SecretService
 from .ai_model_catalog_service import list_models_for_provider
@@ -25,6 +28,8 @@ DEFAULT_AI_MODELS = {
 }
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
+DRAFT_MIN_DURATION_SECONDS = 3
+DRAFT_MAX_DURATION_SECONDS = 180
 
 
 class TaskService:
@@ -35,6 +40,7 @@ class TaskService:
         self.task_repo = TaskRepository()
         self.source_repo = SourceRepository()
         self.clip_repo = ClipRepository()
+        self.draft_clip_repo = DraftClipRepository()
         self.video_service = VideoService()
         self.secret_service = SecretService()
 
@@ -46,46 +52,45 @@ class TaskService:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
+        review_before_render_enabled: bool = True,
     ) -> str:
         """
         Create a new task with associated source.
         Returns the task ID.
         """
-        # Validate user exists
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
 
-        # Determine source type
         source_type = self.video_service.determine_source_type(url)
 
-        # Get or generate title
         if not title:
             if source_type == "youtube":
                 title = await self.video_service.get_video_title(url)
             else:
                 title = "Uploaded Video"
 
-        # Create source
         source_id = await self.source_repo.create_source(
             self.db,
             source_type=source_type,
             title=title,
-            url=url
+            url=url,
         )
 
-        # Create task
         task_id = await self.task_repo.create_task(
             self.db,
             user_id=user_id,
             source_id=source_id,
-            status="queued",  # Changed from "processing" to "queued"
+            status="queued",
             font_family=font_family,
             font_size=font_size,
             font_color=font_color,
+            transitions_enabled=transitions_enabled,
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            review_before_render_enabled=review_before_render_enabled,
         )
 
         logger.info(f"Created task {task_id} for user {user_id}")
@@ -110,6 +115,66 @@ class TaskService:
         if normalized not in SUPPORTED_ZAI_ROUTING_MODES:
             return "auto"
         return normalized
+
+    @staticmethod
+    def _normalize_text_for_compare(value: Optional[str]) -> str:
+        return " ".join((value or "").split()).strip().lower()
+
+    @staticmethod
+    def _parse_timestamp_to_seconds_strict(raw_timestamp: Any) -> float:
+        value = str(raw_timestamp or "").strip()
+        if not value:
+            raise ValueError("timestamp is required")
+
+        parts = value.split(":")
+        if len(parts) == 2:
+            minute_text, second_text = parts
+            if not (minute_text.isdigit() and second_text.isdigit()):
+                raise ValueError(f"Invalid timestamp format: {value}")
+            minutes = int(minute_text)
+            seconds = int(second_text)
+            if seconds > 59:
+                raise ValueError(f"Invalid timestamp format: {value}")
+            return float(minutes * 60 + seconds)
+
+        if len(parts) == 3:
+            hour_text, minute_text, second_text = parts
+            if not (hour_text.isdigit() and minute_text.isdigit() and second_text.isdigit()):
+                raise ValueError(f"Invalid timestamp format: {value}")
+            hours = int(hour_text)
+            minutes = int(minute_text)
+            seconds = int(second_text)
+            if minutes > 59 or seconds > 59:
+                raise ValueError(f"Invalid timestamp format: {value}")
+            return float(hours * 3600 + minutes * 60 + seconds)
+
+        raise ValueError(f"Invalid timestamp format: {value}")
+
+    @staticmethod
+    def _format_seconds_to_timestamp(seconds: float) -> str:
+        total_seconds = max(0, int(round(seconds)))
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        remainder_seconds = total_seconds % 60
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{remainder_seconds:02d}"
+        return f"{minutes:02d}:{remainder_seconds:02d}"
+
+    def _validate_clip_window(
+        self,
+        start_time: str,
+        end_time: str,
+    ) -> tuple[float, float, float]:
+        start_seconds = self._parse_timestamp_to_seconds_strict(start_time)
+        end_seconds = self._parse_timestamp_to_seconds_strict(end_time)
+        if start_seconds >= end_seconds:
+            raise ValueError("start_time must be less than end_time")
+        duration_seconds = end_seconds - start_seconds
+        if duration_seconds < DRAFT_MIN_DURATION_SECONDS or duration_seconds > DRAFT_MAX_DURATION_SECONDS:
+            raise ValueError(
+                f"Clip duration must be between {DRAFT_MIN_DURATION_SECONDS}s and {DRAFT_MAX_DURATION_SECONDS}s"
+            )
+        return start_seconds, end_seconds, duration_seconds
 
     async def get_user_zai_routing_mode(self, user_id: str) -> str:
         if not await self.task_repo.user_exists(self.db, user_id):
@@ -241,6 +306,450 @@ class TaskService:
 
         return attempts, resolved_mode
 
+    def _compute_completion_message(self, result: Dict[str, Any], clip_ids: List[str]) -> str:
+        completion_message = "Complete!"
+        if len(clip_ids) > 0:
+            return completion_message
+
+        analysis_diagnostics = result.get("analysis_diagnostics") or {}
+        clip_diagnostics = result.get("clip_generation_diagnostics") or {}
+        raw_segments = analysis_diagnostics.get("raw_segments")
+        validated_segments = analysis_diagnostics.get("validated_segments")
+        error_text = analysis_diagnostics.get("error")
+
+        if error_text:
+            return f"No clips generated: AI analysis failed ({error_text})"
+
+        if validated_segments == 0:
+            rejected_counts = analysis_diagnostics.get("rejected_counts") or {}
+            human_labels = {
+                "insufficient_text": "too little text",
+                "identical_timestamps": "same start/end timestamp",
+                "invalid_duration": "invalid duration",
+                "too_short": "segment too short",
+                "invalid_timestamp_format": "bad timestamp format",
+            }
+            reject_bits = []
+            for key, label in human_labels.items():
+                count = rejected_counts.get(key, 0)
+                if count:
+                    reject_bits.append(f"{label}: {count}")
+            rejection_summary = " ".join(reject_bits) if reject_bits else "no valid segments met timing/quality checks."
+            return (
+                "No clips generated: transcript did not contain strong standalone moments "
+                f"(hooks, value, emotion, complete thought, 10-45s). {rejection_summary}"
+            )
+
+        created_clips = clip_diagnostics.get("created_clips", 0)
+        attempted_segments = clip_diagnostics.get("attempted_segments", validated_segments or 0)
+        sample_failures = clip_diagnostics.get("failure_samples") or []
+        if attempted_segments > 0 and created_clips == 0:
+            sample_error = sample_failures[0].get("error") if sample_failures else "rendering error"
+            return (
+                f"No clips generated: AI found {validated_segments} clip-worthy segments, "
+                f"but rendering failed for all {attempted_segments}. Example error: {sample_error}"
+            )
+
+        return (
+            f"No clips generated: AI returned {raw_segments or 0} segments, "
+            f"{validated_segments or 0} passed validation, but none were rendered successfully."
+        )
+
+    async def _persist_generated_clips(
+        self,
+        task_id: str,
+        clips: List[Dict[str, Any]],
+    ) -> List[str]:
+        clip_ids: List[str] = []
+        for i, clip_info in enumerate(clips):
+            clip_id = await self.clip_repo.create_clip(
+                self.db,
+                task_id=task_id,
+                filename=clip_info["filename"],
+                file_path=clip_info["path"],
+                start_time=clip_info["start_time"],
+                end_time=clip_info["end_time"],
+                duration=clip_info["duration"],
+                text=clip_info.get("text"),
+                relevance_score=clip_info.get("relevance_score", 0.0),
+                reasoning=clip_info.get("reasoning"),
+                clip_order=i + 1,
+            )
+            clip_ids.append(clip_id)
+
+        await self.task_repo.update_task_clips(self.db, task_id, clip_ids)
+        return clip_ids
+
+    async def _resolve_processing_credentials(
+        self,
+        transcription_provider: str,
+        ai_provider: str,
+        ai_routing_mode: Optional[str],
+        user_id: Optional[str],
+    ) -> Tuple[Optional[str], str, Optional[str], Optional[str], List[str], List[str]]:
+        assembly_api_key: Optional[str] = None
+        if transcription_provider == "assemblyai":
+            stored_encrypted_key = None
+            if user_id:
+                stored_encrypted_key = await self.task_repo.get_user_encrypted_assembly_key(self.db, user_id)
+            if stored_encrypted_key:
+                assembly_api_key = self.secret_service.decrypt(stored_encrypted_key)
+            else:
+                assembly_api_key = config.assembly_ai_api_key
+
+        selected_ai_provider = (ai_provider or "openai").strip().lower()
+        resolved_zai_routing_mode: Optional[str] = None
+        ai_key_attempts: List[Dict[str, str]] = []
+        if selected_ai_provider in SUPPORTED_AI_PROVIDERS and user_id:
+            ai_key_attempts, resolved_zai_routing_mode = await self.get_effective_user_ai_api_key_attempts(
+                user_id=user_id,
+                provider=selected_ai_provider,
+                zai_routing_mode=ai_routing_mode,
+            )
+        elif selected_ai_provider in SUPPORTED_AI_PROVIDERS:
+            fallback_key = self._env_ai_key_for_provider(selected_ai_provider)
+            if fallback_key:
+                ai_key_attempts = [{"label": "env", "key": fallback_key}]
+
+        ai_api_key = ai_key_attempts[0]["key"] if ai_key_attempts else None
+        ai_api_key_fallbacks = [attempt["key"] for attempt in ai_key_attempts[1:]]
+        ai_key_labels = [attempt["label"] for attempt in ai_key_attempts]
+
+        return (
+            assembly_api_key,
+            selected_ai_provider,
+            resolved_zai_routing_mode,
+            ai_api_key,
+            ai_api_key_fallbacks,
+            ai_key_labels,
+        )
+
+    async def _process_review_enabled_analysis(
+        self,
+        task_id: str,
+        url: str,
+        source_type: str,
+        transcription_provider: str,
+        ai_provider: str,
+        ai_model: Optional[str],
+        ai_routing_mode: Optional[str],
+        transcription_options: Optional[Dict[str, Any]],
+        subtitle_style: Optional[Dict[str, Any]],
+        progress_callback: Optional[Callable],
+        cancel_check: Optional[Callable[[], Awaitable[None]]],
+        user_id: Optional[str],
+        update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
+    ) -> Dict[str, Any]:
+        (
+            assembly_api_key,
+            selected_ai_provider,
+            resolved_zai_routing_mode,
+            ai_api_key,
+            ai_api_key_fallbacks,
+            ai_key_labels,
+        ) = await self._resolve_processing_credentials(
+            transcription_provider=transcription_provider,
+            ai_provider=ai_provider,
+            ai_routing_mode=ai_routing_mode,
+            user_id=user_id,
+        )
+
+        analysis_result = await self.video_service.process_video_analysis(
+            url=url,
+            source_type=source_type,
+            transcription_provider=transcription_provider,
+            assembly_api_key=assembly_api_key,
+            ai_provider=selected_ai_provider,
+            ai_api_key=ai_api_key,
+            ai_api_key_fallbacks=ai_api_key_fallbacks,
+            ai_key_labels=ai_key_labels,
+            ai_routing_mode=resolved_zai_routing_mode,
+            ai_model=ai_model,
+            transcription_options=transcription_options,
+            progress_callback=update_progress,
+            cancel_check=cancel_check,
+        )
+
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "processing",
+            progress=95,
+            progress_message="Saving draft clips...",
+        )
+
+        drafts_payload: List[Dict[str, Any]] = []
+        for index, segment in enumerate(analysis_result.get("segments") or [], start=1):
+            start_time = str(segment.get("start_time") or "00:00")
+            end_time = str(segment.get("end_time") or "00:00")
+            try:
+                _, _, duration_seconds = self._validate_clip_window(start_time, end_time)
+            except ValueError as validation_error:
+                logger.warning(
+                    "Skipping invalid draft segment for task %s (%s -> %s): %s",
+                    task_id,
+                    start_time,
+                    end_time,
+                    validation_error,
+                )
+                continue
+
+            text_value = str(segment.get("text") or "").strip()
+            drafts_payload.append(
+                {
+                    "clip_order": index,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration": duration_seconds,
+                    "original_text": text_value,
+                    "edited_text": text_value,
+                    "relevance_score": float(segment.get("relevance_score") or 0.0),
+                    "reasoning": segment.get("reasoning"),
+                    "is_selected": True,
+                    "edited_word_timings_json": None,
+                }
+            )
+
+        await self.draft_clip_repo.replace_task_drafts(self.db, task_id, drafts_payload)
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "awaiting_review",
+            progress=100,
+            progress_message="Analysis complete. Review draft clips before rendering.",
+        )
+
+        return {
+            "task_id": task_id,
+            "drafts_count": len(drafts_payload),
+            "segments": analysis_result.get("segments") or [],
+            "summary": analysis_result.get("summary"),
+            "key_topics": analysis_result.get("key_topics"),
+            "final_status": "awaiting_review",
+            "final_progress": 100,
+            "final_message": "Analysis complete. Awaiting review.",
+        }
+
+    async def _process_non_review_pipeline(
+        self,
+        task_id: str,
+        url: str,
+        source_type: str,
+        font_family: str,
+        font_size: int,
+        font_color: str,
+        transitions_enabled: bool,
+        transcription_provider: str,
+        ai_provider: str,
+        ai_model: Optional[str],
+        ai_routing_mode: Optional[str],
+        transcription_options: Optional[Dict[str, Any]],
+        subtitle_style: Optional[Dict[str, Any]],
+        progress_callback: Optional[Callable],
+        cancel_check: Optional[Callable[[], Awaitable[None]]],
+        user_id: Optional[str],
+        update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
+    ) -> Dict[str, Any]:
+        (
+            assembly_api_key,
+            selected_ai_provider,
+            resolved_zai_routing_mode,
+            ai_api_key,
+            ai_api_key_fallbacks,
+            ai_key_labels,
+        ) = await self._resolve_processing_credentials(
+            transcription_provider=transcription_provider,
+            ai_provider=ai_provider,
+            ai_routing_mode=ai_routing_mode,
+            user_id=user_id,
+        )
+
+        result = await self.video_service.process_video_complete(
+            url=url,
+            source_type=source_type,
+            font_family=font_family,
+            font_size=font_size,
+            font_color=font_color,
+            transitions_enabled=transitions_enabled,
+            transcription_provider=transcription_provider,
+            assembly_api_key=assembly_api_key,
+            ai_provider=selected_ai_provider,
+            ai_api_key=ai_api_key,
+            ai_api_key_fallbacks=ai_api_key_fallbacks,
+            ai_key_labels=ai_key_labels,
+            ai_routing_mode=resolved_zai_routing_mode,
+            ai_model=ai_model,
+            transcription_options=transcription_options,
+            subtitle_style=subtitle_style,
+            progress_callback=update_progress,
+            cancel_check=cancel_check,
+        )
+
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "processing",
+            progress=95,
+            progress_message="Saving clips...",
+        )
+
+        await self.draft_clip_repo.delete_drafts_by_task(self.db, task_id)
+        clip_ids = await self._persist_generated_clips(task_id, result.get("clips") or [])
+
+        completion_message = self._compute_completion_message(result, clip_ids)
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "completed",
+            progress=100,
+            progress_message=completion_message,
+        )
+
+        logger.info(f"Task {task_id} completed successfully with {len(clip_ids)} clips")
+
+        return {
+            "task_id": task_id,
+            "clips_count": len(clip_ids),
+            "segments": result.get("segments") or [],
+            "summary": result.get("summary"),
+            "key_topics": result.get("key_topics"),
+            "final_status": "completed",
+            "final_progress": 100,
+            "final_message": completion_message,
+        }
+
+    async def _render_from_drafts(
+        self,
+        task_id: str,
+        url: str,
+        source_type: str,
+        font_family: str,
+        font_size: int,
+        font_color: str,
+        transitions_enabled: bool,
+        subtitle_style: Optional[Dict[str, Any]],
+        cancel_check: Optional[Callable[[], Awaitable[None]]],
+        update_progress: Callable[[int, str, Optional[Dict[str, Any]]], Awaitable[None]],
+    ) -> Dict[str, Any]:
+        await update_progress(10, "Loading approved draft clips...")
+
+        drafts = await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+        selected_drafts = [draft for draft in drafts if draft.get("is_selected")]
+        if not selected_drafts:
+            raise ValueError("Finalize requires at least one selected draft clip")
+
+        selected_drafts.sort(key=lambda draft: int(draft.get("clip_order") or 0))
+
+        await update_progress(15, "Preparing source media...")
+        video_path = await self.video_service.resolve_video_path(url=url, source_type=source_type)
+
+        rendered_segments: List[Dict[str, Any]] = []
+        total_selected = len(selected_drafts)
+        for index, draft in enumerate(selected_drafts, start=1):
+            start_time = str(draft.get("start_time") or "").strip()
+            end_time = str(draft.get("end_time") or "").strip()
+            start_seconds, end_seconds, duration_seconds = self._validate_clip_window(start_time, end_time)
+
+            original_text = str(draft.get("original_text") or "").strip()
+            edited_text = str(draft.get("edited_text") or "").strip() or original_text
+            if not edited_text:
+                raise ValueError(f"Selected clip {draft.get('clip_order')} has empty subtitle text")
+
+            text_was_edited = self._normalize_text_for_compare(edited_text) != self._normalize_text_for_compare(original_text)
+            word_timings_override = None
+            if text_was_edited:
+                await update_progress(
+                    20,
+                    f"Aligning edited subtitles ({index}/{total_selected})...",
+                    {
+                        "stage": "analysis",
+                        "stage_progress": int((index / total_selected) * 100),
+                        "overall_progress": 20,
+                    },
+                )
+                try:
+                    word_timings_override = await self.video_service.align_edited_subtitle_words(
+                        video_path=video_path,
+                        clip_start=start_seconds,
+                        clip_end=end_seconds,
+                        edited_text=edited_text,
+                    )
+                except Exception as alignment_error:
+                    raise ValueError(
+                        f"Failed to align edited subtitles for clip {draft.get('clip_order')}: {alignment_error}"
+                    ) from alignment_error
+
+                await self.draft_clip_repo.update_draft_word_timings(
+                    self.db,
+                    task_id=task_id,
+                    draft_id=str(draft["id"]),
+                    word_timings=word_timings_override,
+                )
+            else:
+                if draft.get("edited_word_timings_json") is not None:
+                    await self.draft_clip_repo.update_draft_word_timings(
+                        self.db,
+                        task_id=task_id,
+                        draft_id=str(draft["id"]),
+                        word_timings=None,
+                    )
+
+            rendered_segments.append(
+                {
+                    "start_time": self._format_seconds_to_timestamp(start_seconds),
+                    "end_time": self._format_seconds_to_timestamp(end_seconds),
+                    "duration": duration_seconds,
+                    "text": edited_text,
+                    "relevance_score": float(draft.get("relevance_score") or 0.0),
+                    "reasoning": draft.get("reasoning"),
+                    "subtitle_word_timings": word_timings_override,
+                }
+            )
+
+        await update_progress(65, "Rendering approved clips...")
+        render_result = await self.video_service.render_video_segments(
+            video_path=video_path,
+            segments=rendered_segments,
+            font_family=font_family,
+            font_size=font_size,
+            font_color=font_color,
+            subtitle_style=subtitle_style,
+            transitions_enabled=transitions_enabled,
+            progress_callback=update_progress,
+            cancel_check=cancel_check,
+        )
+
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "processing",
+            progress=95,
+            progress_message="Saving clips...",
+        )
+
+        await self.clip_repo.delete_clips_by_task(self.db, task_id)
+        clip_ids = await self._persist_generated_clips(task_id, render_result.get("clips") or [])
+
+        completion_message = "Complete!" if clip_ids else "No clips were rendered from selected draft clips."
+        await self.task_repo.update_task_status(
+            self.db,
+            task_id,
+            "completed",
+            progress=100,
+            progress_message=completion_message,
+        )
+
+        return {
+            "task_id": task_id,
+            "clips_count": len(clip_ids),
+            "segments": rendered_segments,
+            "summary": None,
+            "key_topics": None,
+            "final_status": "completed",
+            "final_progress": 100,
+            "final_message": completion_message,
+        }
+
     async def process_task(
         self,
         task_id: str,
@@ -259,68 +768,86 @@ class TaskService:
         progress_callback: Optional[Callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
         user_id: Optional[str] = None,
+        render_from_drafts: bool = False,
     ) -> Dict[str, Any]:
         """
-        Process a task: download video, analyze, create clips.
-        Returns processing results.
+        Process a task.
+        - default path: full one-pass processing (or analysis-only when review is enabled)
+        - finalize path: render clips from reviewed drafts
         """
         try:
-            logger.info(f"Starting processing for task {task_id}")
+            logger.info(f"Starting processing for task {task_id} (render_from_drafts={render_from_drafts})")
 
-            # Update status to processing
             await self.task_repo.update_task_status(
-                self.db, task_id, "processing", progress=0, progress_message="Starting..."
+                self.db,
+                task_id,
+                "processing",
+                progress=0,
+                progress_message="Starting...",
             )
             if cancel_check:
                 await cancel_check()
 
-            # Progress callback wrapper
             progress_lock = asyncio.Lock()
 
-            async def update_progress(progress: int, message: str, metadata: Optional[Dict[str, Any]] = None):
-                # Progress updates can arrive from background thread callbacks.
-                # Serialize DB updates to avoid AsyncSession concurrent-use errors.
+            async def update_progress(
+                progress: int,
+                message: str,
+                metadata: Optional[Dict[str, Any]] = None,
+            ) -> None:
                 async with progress_lock:
                     if cancel_check:
                         await cancel_check()
                     await self.task_repo.update_task_status(
-                        self.db, task_id, "processing", progress=progress, progress_message=message
+                        self.db,
+                        task_id,
+                        "processing",
+                        progress=progress,
+                        progress_message=message,
                     )
                     if progress_callback:
                         await progress_callback(progress, message, metadata)
                     if cancel_check:
                         await cancel_check()
 
-            # Process video with progress updates
-            assembly_api_key: Optional[str] = None
-            if transcription_provider == "assemblyai":
-                stored_encrypted_key = None
-                if user_id:
-                    stored_encrypted_key = await self.task_repo.get_user_encrypted_assembly_key(self.db, user_id)
-                if stored_encrypted_key:
-                    assembly_api_key = self.secret_service.decrypt(stored_encrypted_key)
-                else:
-                    assembly_api_key = config.assembly_ai_api_key
-
-            selected_ai_provider = (ai_provider or "openai").strip().lower()
-            resolved_zai_routing_mode: Optional[str] = None
-            ai_key_attempts: List[Dict[str, str]] = []
-            if selected_ai_provider in SUPPORTED_AI_PROVIDERS and user_id:
-                ai_key_attempts, resolved_zai_routing_mode = await self.get_effective_user_ai_api_key_attempts(
-                    user_id=user_id,
-                    provider=selected_ai_provider,
-                    zai_routing_mode=ai_routing_mode,
+            if render_from_drafts:
+                return await self._render_from_drafts(
+                    task_id=task_id,
+                    url=url,
+                    source_type=source_type,
+                    font_family=font_family,
+                    font_size=font_size,
+                    font_color=font_color,
+                    transitions_enabled=transitions_enabled,
+                    subtitle_style=subtitle_style,
+                    cancel_check=cancel_check,
+                    update_progress=update_progress,
                 )
-            elif selected_ai_provider in SUPPORTED_AI_PROVIDERS:
-                fallback_key = self._env_ai_key_for_provider(selected_ai_provider)
-                if fallback_key:
-                    ai_key_attempts = [{"label": "env", "key": fallback_key}]
 
-            ai_api_key = ai_key_attempts[0]["key"] if ai_key_attempts else None
-            ai_api_key_fallbacks = [attempt["key"] for attempt in ai_key_attempts[1:]]
-            ai_key_labels = [attempt["label"] for attempt in ai_key_attempts]
+            task_record = await self.task_repo.get_task_by_id(self.db, task_id)
+            review_before_render_enabled = bool(
+                (task_record or {}).get("review_before_render_enabled", True)
+            )
 
-            result = await self.video_service.process_video_complete(
+            if review_before_render_enabled:
+                return await self._process_review_enabled_analysis(
+                    task_id=task_id,
+                    url=url,
+                    source_type=source_type,
+                    transcription_provider=transcription_provider,
+                    ai_provider=ai_provider,
+                    ai_model=ai_model,
+                    ai_routing_mode=ai_routing_mode,
+                    transcription_options=transcription_options,
+                    subtitle_style=subtitle_style,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                    user_id=user_id,
+                    update_progress=update_progress,
+                )
+
+            return await self._process_non_review_pipeline(
+                task_id=task_id,
                 url=url,
                 source_type=source_type,
                 font_family=font_family,
@@ -328,110 +855,100 @@ class TaskService:
                 font_color=font_color,
                 transitions_enabled=transitions_enabled,
                 transcription_provider=transcription_provider,
-                assembly_api_key=assembly_api_key,
-                ai_provider=selected_ai_provider,
-                ai_api_key=ai_api_key,
-                ai_api_key_fallbacks=ai_api_key_fallbacks,
-                ai_key_labels=ai_key_labels,
-                ai_routing_mode=resolved_zai_routing_mode,
+                ai_provider=ai_provider,
                 ai_model=ai_model,
+                ai_routing_mode=ai_routing_mode,
                 transcription_options=transcription_options,
                 subtitle_style=subtitle_style,
-                progress_callback=update_progress,
+                progress_callback=progress_callback,
                 cancel_check=cancel_check,
+                user_id=user_id,
+                update_progress=update_progress,
             )
-
-            # Save clips to database
-            await self.task_repo.update_task_status(
-                self.db, task_id, "processing", progress=95, progress_message="Saving clips..."
-            )
-
-            clip_ids = []
-            for i, clip_info in enumerate(result["clips"]):
-                clip_id = await self.clip_repo.create_clip(
-                    self.db,
-                    task_id=task_id,
-                    filename=clip_info["filename"],
-                    file_path=clip_info["path"],
-                    start_time=clip_info["start_time"],
-                    end_time=clip_info["end_time"],
-                    duration=clip_info["duration"],
-                    text=clip_info["text"],
-                    relevance_score=clip_info["relevance_score"],
-                    reasoning=clip_info["reasoning"],
-                    clip_order=i + 1
-                )
-                clip_ids.append(clip_id)
-
-            # Update task with clip IDs
-            await self.task_repo.update_task_clips(self.db, task_id, clip_ids)
-
-            completion_message = "Complete!"
-            if len(clip_ids) == 0:
-                analysis_diagnostics = result.get("analysis_diagnostics") or {}
-                clip_diagnostics = result.get("clip_generation_diagnostics") or {}
-                raw_segments = analysis_diagnostics.get("raw_segments")
-                validated_segments = analysis_diagnostics.get("validated_segments")
-                error_text = analysis_diagnostics.get("error")
-
-                if error_text:
-                    completion_message = f"No clips generated: AI analysis failed ({error_text})"
-                elif validated_segments == 0:
-                    rejected_counts = analysis_diagnostics.get("rejected_counts") or {}
-                    human_labels = {
-                        "insufficient_text": "too little text",
-                        "identical_timestamps": "same start/end timestamp",
-                        "invalid_duration": "invalid duration",
-                        "too_short": "segment too short",
-                        "invalid_timestamp_format": "bad timestamp format",
-                    }
-                    reject_bits = []
-                    for key, label in human_labels.items():
-                        count = rejected_counts.get(key, 0)
-                        if count:
-                            reject_bits.append(f"{label}: {count}")
-                    rejection_summary = " ".join(reject_bits) if reject_bits else "no valid segments met timing/quality checks."
-                    completion_message = (
-                        "No clips generated: transcript did not contain strong standalone moments "
-                        f"(hooks, value, emotion, complete thought, 10-45s). {rejection_summary}"
-                    )
-                else:
-                    created_clips = clip_diagnostics.get("created_clips", 0)
-                    attempted_segments = clip_diagnostics.get("attempted_segments", validated_segments or 0)
-                    sample_failures = clip_diagnostics.get("failure_samples") or []
-                    if attempted_segments > 0 and created_clips == 0:
-                        sample_error = sample_failures[0].get("error") if sample_failures else "rendering error"
-                        completion_message = (
-                            f"No clips generated: AI found {validated_segments} clip-worthy segments, "
-                            f"but rendering failed for all {attempted_segments}. Example error: {sample_error}"
-                        )
-                    else:
-                        completion_message = (
-                            f"No clips generated: AI returned {raw_segments or 0} segments, "
-                            f"{validated_segments or 0} passed validation, but none were rendered successfully."
-                        )
-
-            # Mark as completed
-            await self.task_repo.update_task_status(
-                self.db, task_id, "completed", progress=100, progress_message=completion_message
-            )
-
-            logger.info(f"Task {task_id} completed successfully with {len(clip_ids)} clips")
-
-            return {
-                "task_id": task_id,
-                "clips_count": len(clip_ids),
-                "segments": result["segments"],
-                "summary": result.get("summary"),
-                "key_topics": result.get("key_topics")
-            }
 
         except Exception as e:
             logger.error(f"Error processing task {task_id}: {e}")
             await self.task_repo.update_task_status(
-                self.db, task_id, "error", progress_message=str(e)
+                self.db,
+                task_id,
+                "error",
+                progress_message=str(e),
             )
             raise
+
+    async def get_task_draft_clips(self, task_id: str) -> List[Dict[str, Any]]:
+        return await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
+
+    async def update_task_draft_clips(
+        self,
+        task_id: str,
+        updates: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(updates, list) or not updates:
+            raise ValueError("draft_clips must be a non-empty list")
+
+        existing_by_id = await self.draft_clip_repo.get_draft_map_by_task(self.db, task_id)
+        if not existing_by_id:
+            raise ValueError("No draft clips found for task")
+
+        normalized_updates: List[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        for item in updates:
+            if not isinstance(item, dict):
+                raise ValueError("Each draft clip update must be an object")
+
+            draft_id = str(item.get("id") or "").strip()
+            if not draft_id:
+                raise ValueError("Each draft clip update must include id")
+            if draft_id in seen_ids:
+                raise ValueError(f"Duplicate draft clip id in payload: {draft_id}")
+            seen_ids.add(draft_id)
+
+            existing = existing_by_id.get(draft_id)
+            if not existing:
+                raise ValueError(f"Draft clip not found: {draft_id}")
+
+            start_time = str(item.get("start_time", existing["start_time"])).strip()
+            end_time = str(item.get("end_time", existing["end_time"])).strip()
+            _, _, duration_seconds = self._validate_clip_window(start_time, end_time)
+
+            normalized_update: Dict[str, Any] = {
+                "id": draft_id,
+                "start_time": self._format_seconds_to_timestamp(
+                    self._parse_timestamp_to_seconds_strict(start_time)
+                ),
+                "end_time": self._format_seconds_to_timestamp(
+                    self._parse_timestamp_to_seconds_strict(end_time)
+                ),
+                "duration": duration_seconds,
+            }
+
+            if "edited_text" in item:
+                if item.get("edited_text") is None:
+                    normalized_update["edited_text"] = ""
+                else:
+                    normalized_update["edited_text"] = str(item.get("edited_text"))
+
+            if "is_selected" in item:
+                normalized_update["is_selected"] = bool(item.get("is_selected"))
+
+            text_changed = (
+                "edited_text" in normalized_update
+                and self._normalize_text_for_compare(normalized_update["edited_text"])
+                != self._normalize_text_for_compare(existing.get("edited_text"))
+            )
+            timing_changed = (
+                normalized_update["start_time"] != str(existing.get("start_time"))
+                or normalized_update["end_time"] != str(existing.get("end_time"))
+            )
+            if text_changed or timing_changed:
+                normalized_update["edited_word_timings_json"] = None
+
+            normalized_updates.append(normalized_update)
+
+        await self.draft_clip_repo.bulk_update_drafts(self.db, task_id, normalized_updates)
+        return await self.draft_clip_repo.get_drafts_by_task(self.db, task_id)
 
     async def get_user_transcription_settings(self, user_id: str) -> Dict[str, Any]:
         if not await self.task_repo.user_exists(self.db, user_id):
@@ -525,7 +1042,6 @@ class TaskService:
         if not task:
             return None
 
-        # Get clips
         clips = await self.clip_repo.get_clips_by_task(self.db, task_id)
         task["clips"] = clips
         task["clips_count"] = len(clips)
@@ -538,12 +1054,9 @@ class TaskService:
 
     async def delete_task(self, task_id: str) -> None:
         """Delete a task and all its associated clips."""
-        # Delete all clips for this task
         await self.clip_repo.delete_clips_by_task(self.db, task_id)
-
-        # Delete the task
+        await self.draft_clip_repo.delete_drafts_by_task(self.db, task_id)
         await self.task_repo.delete_task(self.db, task_id)
-
         logger.info(f"Deleted task {task_id} and all associated clips")
 
     async def delete_all_user_tasks(self, user_id: str) -> int:

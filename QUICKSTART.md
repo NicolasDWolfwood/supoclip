@@ -233,6 +233,18 @@ Optional:
 
 All services are connected via a Docker network and start automatically with proper health checks.
 
+## Review-Before-Render Workflow
+
+New tasks now default to **review before render enabled**.
+
+Flow:
+1. Task runs download/transcription/AI analysis.
+2. Task enters `awaiting_review` (Needs Review).
+3. In the task page, edit draft clip timing/text and deselect clips.
+4. Click **Finalize & Render** to queue rendering from approved drafts.
+
+If you disable review in the create form, tasks keep the original one-pass behavior (analysis + render in one run).
+
 ## What Happens When You Run `./start.sh`?
 
 1. Checks if `.env` file exists with required API keys

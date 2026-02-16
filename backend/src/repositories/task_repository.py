@@ -30,8 +30,10 @@ class TaskRepository:
         font_family: str = "TikTokSans-Regular",
         font_size: int = 24,
         font_color: str = "#FFFFFF",
+        transitions_enabled: bool = False,
         transcription_provider: str = "local",
         ai_provider: str = "openai",
+        review_before_render_enabled: bool = True,
     ) -> str:
         """Create a new task and return its ID."""
         result = await db.execute(
@@ -43,8 +45,10 @@ class TaskRepository:
                     font_family,
                     font_size,
                     font_color,
+                    transitions_enabled,
                     transcription_provider,
                     ai_provider,
+                    review_before_render_enabled,
                     created_at,
                     updated_at
                 )
@@ -55,8 +59,10 @@ class TaskRepository:
                     :font_family,
                     :font_size,
                     :font_color,
+                    :transitions_enabled,
                     :transcription_provider,
                     :ai_provider,
+                    :review_before_render_enabled,
                     NOW(),
                     NOW()
                 )
@@ -69,8 +75,10 @@ class TaskRepository:
                 "font_family": font_family,
                 "font_size": font_size,
                 "font_color": font_color,
+                "transitions_enabled": transitions_enabled,
                 "transcription_provider": transcription_provider,
                 "ai_provider": ai_provider,
+                "review_before_render_enabled": review_before_render_enabled,
             }
         )
         await db.commit()
@@ -109,8 +117,10 @@ class TaskRepository:
             "font_family": row.font_family,
             "font_size": row.font_size,
             "font_color": row.font_color,
+            "transitions_enabled": bool(getattr(row, "transitions_enabled", False)),
             "transcription_provider": getattr(row, "transcription_provider", "local"),
             "ai_provider": getattr(row, "ai_provider", "openai"),
+            "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
             "created_at": row.created_at,
             "updated_at": row.updated_at
         }
@@ -185,8 +195,10 @@ class TaskRepository:
                 "source_type": row.source_type,
                 "source_url": getattr(row, "source_url", None),
                 "status": row.status,
+                "transitions_enabled": bool(getattr(row, "transitions_enabled", False)),
                 "transcription_provider": getattr(row, "transcription_provider", "local"),
                 "ai_provider": getattr(row, "ai_provider", "openai"),
+                "review_before_render_enabled": bool(getattr(row, "review_before_render_enabled", True)),
                 "clips_count": row.clips_count,
                 "created_at": row.created_at,
                 "updated_at": row.updated_at

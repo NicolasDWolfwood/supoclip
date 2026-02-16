@@ -1,3 +1,5 @@
+const ACTIVE_TASK_STATUSES = new Set(["processing", "queued"]);
+
 export function isHttpUrl(value: string | null | undefined): boolean {
   if (!value) return false;
   try {
@@ -24,7 +26,7 @@ export function formatTaskRuntime(
   const started = new Date(createdAt);
   if (Number.isNaN(started.getTime())) return "n/a";
 
-  const shouldUseNow = status === "processing" || status === "queued" || !updatedAt;
+  const shouldUseNow = ACTIVE_TASK_STATUSES.has(status || "") || !updatedAt;
   const ended = shouldUseNow ? new Date(nowMs) : new Date(updatedAt);
   if (Number.isNaN(ended.getTime())) return "n/a";
 

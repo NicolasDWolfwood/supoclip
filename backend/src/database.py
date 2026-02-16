@@ -100,6 +100,22 @@ async def init_db():
         await conn.execute(
             text(
                 """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS review_before_render_enabled BOOLEAN NOT NULL DEFAULT true
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE tasks
+                ADD COLUMN IF NOT EXISTS transitions_enabled BOOLEAN NOT NULL DEFAULT false
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
                 DO $$
                 BEGIN
                     IF EXISTS (
@@ -484,6 +500,52 @@ async def init_db():
                     CONSTRAINT check_user_ai_key_profiles_profile_name
                         CHECK (profile_name IN ('subscription', 'metered'))
                 )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS task_clip_drafts (
+                    id VARCHAR(36) PRIMARY KEY,
+                    task_id VARCHAR(36) NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    clip_order INTEGER NOT NULL,
+                    start_time VARCHAR(20) NOT NULL,
+                    end_time VARCHAR(20) NOT NULL,
+                    duration FLOAT NOT NULL,
+                    original_text TEXT,
+                    edited_text TEXT,
+                    relevance_score FLOAT NOT NULL,
+                    reasoning TEXT,
+                    is_selected BOOLEAN NOT NULL DEFAULT true,
+                    edited_word_timings_json JSONB,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS idx_task_clip_drafts_task_id
+                    ON task_clip_drafts(task_id)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS idx_task_clip_drafts_clip_order
+                    ON task_clip_drafts(clip_order)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_task_clip_drafts_task_order
+                    ON task_clip_drafts(task_id, clip_order)
                 """
             )
         )

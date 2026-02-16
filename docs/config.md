@@ -97,6 +97,16 @@ Examples:
 - Docker backend command uses `src.main_refactored:app`.
 - Local development can use either `src.main_refactored:app` (recommended) or `src.main:app`.
 
+## Task Review Runtime Behavior
+
+- Task create payload supports `review_before_render_enabled` (boolean, default `true`).
+- When enabled, task processing stops after analysis at status `awaiting_review`.
+- Users can edit draft clips through:
+  - `GET /tasks/{task_id}/draft-clips`
+  - `PUT /tasks/{task_id}/draft-clips`
+  - `POST /tasks/{task_id}/finalize`
+- Finalize queues rendering from approved draft clips.
+
 ## Validation Checklist
 
 When adding/changing a variable:

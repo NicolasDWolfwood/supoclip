@@ -162,6 +162,7 @@ export default function Home() {
   const [fontUploadError, setFontUploadError] = useState<string | null>(null);
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [transitionsEnabled, setTransitionsEnabled] = useState(false);
+  const [reviewBeforeRenderEnabled, setReviewBeforeRenderEnabled] = useState(true);
   const [transcriptionProvider, setTranscriptionProvider] = useState<"local" | "assemblyai">("local");
   const [whisperChunkingEnabled, setWhisperChunkingEnabled] = useState(DEFAULT_WHISPER_CHUNKING_ENABLED);
   const [whisperChunkDurationSeconds, setWhisperChunkDurationSeconds] = useState(DEFAULT_WHISPER_CHUNK_DURATION_SECONDS);
@@ -547,6 +548,7 @@ export default function Home() {
             url: videoUrl,
             title: null
           },
+          review_before_render_enabled: reviewBeforeRenderEnabled,
           font_options: {
             font_family: fontFamily,
             font_size: fontSize,
@@ -809,6 +811,10 @@ export default function Home() {
                         <Badge className="bg-blue-100 text-blue-800">
                           <Loader2 className="w-3 h-3 mr-1 animate-spin" />
                           Processing
+                        </Badge>
+                      ) : latestTask.status === "awaiting_review" ? (
+                        <Badge className="bg-amber-100 text-amber-800">
+                          Needs Review
                         </Badge>
                       ) : (
                         <Badge variant="outline">{latestTask.status}</Badge>
@@ -1267,6 +1273,22 @@ export default function Home() {
                     <p style={previewTextStyle} className="w-full">
                       Preview: {applyTextTransform("Your subtitle will look like this", textTransform)}
                     </p>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-4 rounded-md border border-gray-200 bg-white p-3">
+                    <div>
+                      <p className="text-sm font-medium text-black">Review clips before rendering</p>
+                      <p className="text-xs text-gray-600">
+                        Pause after AI analysis so you can edit timing/text and choose clips before final render.
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={reviewBeforeRenderEnabled}
+                      onChange={(event) => setReviewBeforeRenderEnabled(event.target.checked)}
+                      disabled={isLoading}
+                      className="mt-1 h-4 w-4"
+                    />
                   </div>
                 </div>
               )}

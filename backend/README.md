@@ -78,11 +78,16 @@ Backend is started by `docker-compose.yml` with:
 
 When running locally or via Docker:
 - Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
+- Task runtime statuses include: `queued`, `processing`, `awaiting_review`, `completed`, `error`
 - AI model discovery: `GET /tasks/ai-settings/{provider}/models` (uses saved user key first, then env fallback)
 - z.ai profile keys:
   - `PUT /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
   - `DELETE /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
   - `PUT /tasks/ai-settings/zai/routing-mode` (`auto`, `subscription`, `metered`)
+- Review-before-render endpoints:
+  - `GET /tasks/{task_id}/draft-clips`
+  - `PUT /tasks/{task_id}/draft-clips`
+  - `POST /tasks/{task_id}/finalize`
 
 ## Fonts
 

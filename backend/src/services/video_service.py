@@ -17,6 +17,7 @@ from ..video_utils import (
     get_cached_formatted_transcript,
     create_clips_with_transitions,
     create_clips_from_segments,
+    align_edited_text_to_clip_audio as align_text_to_audio,
 )
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import Config
@@ -365,6 +366,22 @@ class VideoService:
         return {"clips": clips_info, "diagnostics": render_diagnostics}
 
     @staticmethod
+    async def align_edited_subtitle_words(
+        video_path: Path,
+        clip_start: float,
+        clip_end: float,
+        edited_text: str,
+    ) -> List[Dict[str, Any]]:
+        """Align edited subtitle text to clip audio at word granularity."""
+        return await run_in_thread(
+            align_text_to_audio,
+            video_path,
+            clip_start,
+            clip_end,
+            edited_text,
+        )
+
+    @staticmethod
     def determine_source_type(url: str) -> str:
         """Determine if source is YouTube or uploaded file."""
         video_id = get_youtube_video_id(url)
@@ -392,6 +409,267 @@ class VideoService:
         return resolved_path
 
     @staticmethod
+    async def resolve_video_path(
+        url: str,
+        source_type: str,
+        progress_callback: Optional[callable] = None,
+    ) -> Path:
+        """Resolve a source URL to a local video path."""
+        if progress_callback:
+            await progress_callback(
+                10,
+                "Downloading video...",
+                {"stage": "download", "stage_progress": 0, "overall_progress": 10},
+            )
+
+        if source_type == "youtube":
+            video_path = await VideoService.download_video(url, progress_callback=progress_callback)
+            if not video_path:
+                raise Exception("Failed to download video")
+            return video_path
+
+        return VideoService.validate_uploaded_video_path(url)
+
+    @staticmethod
+    async def _analyze_transcript_with_retries(
+        transcript: str,
+        ai_provider: str,
+        ai_api_key: Optional[str],
+        ai_api_key_fallbacks: Optional[List[str]],
+        ai_key_labels: Optional[List[str]],
+        ai_routing_mode: Optional[str],
+        ai_model: Optional[str],
+        progress_callback: Optional[callable] = None,
+    ) -> tuple[Any, List[str]]:
+        key_attempts = [ai_api_key] + list(ai_api_key_fallbacks or [])
+        if not key_attempts:
+            key_attempts = [None]
+
+        labels = list(ai_key_labels or [])
+        while len(labels) < len(key_attempts):
+            labels.append(f"attempt-{len(labels) + 1}")
+
+        relevant_parts = None
+        attempted_labels: List[str] = []
+
+        for attempt_index, key_candidate in enumerate(key_attempts):
+            attempt_label = labels[attempt_index]
+            attempted_labels.append(attempt_label)
+            relevant_parts = await VideoService.analyze_transcript_with_progress(
+                transcript,
+                ai_provider=ai_provider,
+                ai_api_key=key_candidate,
+                ai_model=ai_model,
+                progress_callback=progress_callback,
+            )
+            diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
+            error_text = diagnostics.get("error")
+            can_retry = (
+                ai_provider == "zai"
+                and attempt_index < (len(key_attempts) - 1)
+                and VideoService._is_retryable_zai_error(error_text)
+            )
+            if not can_retry:
+                break
+
+            logger.warning(
+                "z.ai analysis attempt %s failed due to balance/package issue; retrying with fallback key",
+                attempt_label,
+            )
+            if progress_callback:
+                await progress_callback(
+                    50,
+                    "z.ai key exhausted, retrying with fallback key...",
+                    {
+                        "stage": "analysis",
+                        "stage_progress": 0,
+                        "overall_progress": 50,
+                        "ai_provider": ai_provider,
+                        "ai_key_attempt": attempt_label,
+                        "ai_routing_mode": ai_routing_mode,
+                    },
+                )
+
+        if relevant_parts is None:
+            raise RuntimeError("AI analysis failed to produce a result")
+
+        diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
+        diagnostics["ai_key_attempts"] = attempted_labels
+        diagnostics["ai_key_label"] = attempted_labels[-1] if attempted_labels else "attempt-1"
+        if ai_routing_mode:
+            diagnostics["ai_routing_mode"] = ai_routing_mode
+        relevant_parts.diagnostics = diagnostics
+
+        return relevant_parts, attempted_labels
+
+    @staticmethod
+    async def process_video_analysis(
+        url: str,
+        source_type: str,
+        transcription_provider: str = "local",
+        assembly_api_key: Optional[str] = None,
+        ai_provider: str = "openai",
+        ai_api_key: Optional[str] = None,
+        ai_api_key_fallbacks: Optional[List[str]] = None,
+        ai_key_labels: Optional[List[str]] = None,
+        ai_routing_mode: Optional[str] = None,
+        ai_model: Optional[str] = None,
+        transcription_options: Optional[Dict[str, Any]] = None,
+        progress_callback: Optional[callable] = None,
+        cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        """Run download + transcription + AI analysis and return clip draft segments."""
+        async def ensure_not_cancelled() -> None:
+            if cancel_check:
+                await cancel_check()
+
+        await ensure_not_cancelled()
+        video_path = await VideoService.resolve_video_path(
+            url=url,
+            source_type=source_type,
+            progress_callback=progress_callback,
+        )
+        await ensure_not_cancelled()
+
+        if progress_callback:
+            await progress_callback(
+                30,
+                f"Generating transcript ({transcription_provider})...",
+                {
+                    "stage": "transcript",
+                    "stage_progress": 0,
+                    "overall_progress": 30,
+                    "transcription_provider": transcription_provider,
+                },
+            )
+
+        transcript = await VideoService.generate_transcript_with_progress(
+            video_path,
+            progress_callback=progress_callback,
+            transcription_provider=transcription_provider,
+            assembly_api_key=assembly_api_key,
+            whisper_chunking_enabled=(
+                transcription_options.get("whisper_chunking_enabled")
+                if transcription_options
+                else None
+            ),
+            whisper_chunk_duration_seconds=(
+                transcription_options.get("whisper_chunk_duration_seconds")
+                if transcription_options
+                else None
+            ),
+            whisper_chunk_overlap_seconds=(
+                transcription_options.get("whisper_chunk_overlap_seconds")
+                if transcription_options
+                else None
+            ),
+        )
+        await ensure_not_cancelled()
+
+        if progress_callback:
+            await progress_callback(
+                50,
+                f"Analyzing content with AI ({ai_provider})...",
+                {
+                    "stage": "analysis",
+                    "stage_progress": 0,
+                    "overall_progress": 50,
+                    "ai_provider": ai_provider,
+                },
+            )
+
+        relevant_parts, _attempts = await VideoService._analyze_transcript_with_retries(
+            transcript=transcript,
+            ai_provider=ai_provider,
+            ai_api_key=ai_api_key,
+            ai_api_key_fallbacks=ai_api_key_fallbacks,
+            ai_key_labels=ai_key_labels,
+            ai_routing_mode=ai_routing_mode,
+            ai_model=ai_model,
+            progress_callback=progress_callback,
+        )
+        await ensure_not_cancelled()
+
+        segments_json = [
+            {
+                "start_time": segment.start_time,
+                "end_time": segment.end_time,
+                "text": segment.text,
+                "relevance_score": segment.relevance_score,
+                "reasoning": segment.reasoning,
+            }
+            for segment in relevant_parts.most_relevant_segments
+        ]
+
+        if progress_callback:
+            await progress_callback(
+                70,
+                "Analysis complete. Preparing clips...",
+                {"stage": "analysis", "stage_progress": 100, "overall_progress": 70},
+            )
+
+        return {
+            "video_path": str(video_path),
+            "segments": segments_json,
+            "summary": relevant_parts.summary if relevant_parts else None,
+            "key_topics": relevant_parts.key_topics if relevant_parts else None,
+            "analysis_diagnostics": relevant_parts.diagnostics if relevant_parts else None,
+        }
+
+    @staticmethod
+    async def render_video_segments(
+        video_path: Path,
+        segments: List[Dict[str, Any]],
+        font_family: str = "TikTokSans-Regular",
+        font_size: int = 24,
+        font_color: str = "#FFFFFF",
+        subtitle_style: Optional[Dict[str, Any]] = None,
+        transitions_enabled: bool = False,
+        progress_callback: Optional[callable] = None,
+        cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
+    ) -> Dict[str, Any]:
+        """Render clips from prepared segments."""
+        async def ensure_not_cancelled() -> None:
+            if cancel_check:
+                await cancel_check()
+
+        await ensure_not_cancelled()
+
+        if progress_callback:
+            await progress_callback(
+                70,
+                "Creating video clips...",
+                {"stage": "clips", "stage_progress": 0, "overall_progress": 70},
+            )
+
+        clip_result = await VideoService.create_video_clips(
+            video_path,
+            segments,
+            font_family,
+            font_size,
+            font_color,
+            subtitle_style,
+            transitions_enabled,
+            progress_callback=progress_callback,
+        )
+        await ensure_not_cancelled()
+
+        clips_info = clip_result.get("clips", [])
+        clip_generation_diagnostics = clip_result.get("diagnostics", {})
+
+        if progress_callback:
+            await progress_callback(
+                100,
+                "Processing complete!",
+                {"stage": "finalizing", "stage_progress": 100, "overall_progress": 100},
+            )
+
+        return {
+            "clips": clips_info,
+            "clip_generation_diagnostics": clip_generation_diagnostics,
+        }
+
+    @staticmethod
     async def process_video_complete(
         url: str,
         source_type: str,
@@ -415,186 +693,45 @@ class VideoService:
         """
         Complete video processing pipeline.
         Returns dict with segments and clips info.
-
-        progress_callback: Optional function to call with progress updates
-                          Signature: async def callback(progress: int, message: str)
         """
         try:
-            async def ensure_not_cancelled() -> None:
-                if cancel_check:
-                    await cancel_check()
-
-            await ensure_not_cancelled()
-
-            # Step 1: Get video path (download or use existing)
-            if progress_callback:
-                await progress_callback(
-                    10,
-                    "Downloading video...",
-                    {"stage": "download", "stage_progress": 0, "overall_progress": 10}
-                )
-
-            if source_type == "youtube":
-                video_path = await VideoService.download_video(url, progress_callback=progress_callback)
-                if not video_path:
-                    raise Exception("Failed to download video")
-            else:
-                video_path = VideoService.validate_uploaded_video_path(url)
-            await ensure_not_cancelled()
-
-            # Step 2: Generate transcript
-            if progress_callback:
-                await progress_callback(
-                    30,
-                    f"Generating transcript ({transcription_provider})...",
-                    {
-                        "stage": "transcript",
-                        "stage_progress": 0,
-                        "overall_progress": 30,
-                        "transcription_provider": transcription_provider,
-                    }
-                )
-
-            transcript = await VideoService.generate_transcript_with_progress(
-                video_path,
-                progress_callback=progress_callback,
+            analysis_result = await VideoService.process_video_analysis(
+                url=url,
+                source_type=source_type,
                 transcription_provider=transcription_provider,
                 assembly_api_key=assembly_api_key,
-                whisper_chunking_enabled=(
-                    transcription_options.get("whisper_chunking_enabled")
-                    if transcription_options
-                    else None
-                ),
-                whisper_chunk_duration_seconds=(
-                    transcription_options.get("whisper_chunk_duration_seconds")
-                    if transcription_options
-                    else None
-                ),
-                whisper_chunk_overlap_seconds=(
-                    transcription_options.get("whisper_chunk_overlap_seconds")
-                    if transcription_options
-                    else None
-                ),
-            )
-            await ensure_not_cancelled()
-
-            # Step 3: AI analysis
-            if progress_callback:
-                await progress_callback(
-                    50,
-                    f"Analyzing content with AI ({ai_provider})...",
-                    {
-                        "stage": "analysis",
-                        "stage_progress": 0,
-                        "overall_progress": 50,
-                        "ai_provider": ai_provider,
-                    }
-                )
-
-            key_attempts = [ai_api_key] + list(ai_api_key_fallbacks or [])
-            if not key_attempts:
-                key_attempts = [None]
-            labels = list(ai_key_labels or [])
-            while len(labels) < len(key_attempts):
-                labels.append(f"attempt-{len(labels) + 1}")
-
-            relevant_parts = None
-            attempted_labels: List[str] = []
-            for attempt_index, key_candidate in enumerate(key_attempts):
-                attempt_label = labels[attempt_index]
-                attempted_labels.append(attempt_label)
-                relevant_parts = await VideoService.analyze_transcript_with_progress(
-                    transcript,
-                    ai_provider=ai_provider,
-                    ai_api_key=key_candidate,
-                    ai_model=ai_model,
-                    progress_callback=progress_callback,
-                )
-                diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
-                error_text = diagnostics.get("error")
-                can_retry = (
-                    ai_provider == "zai"
-                    and attempt_index < (len(key_attempts) - 1)
-                    and VideoService._is_retryable_zai_error(error_text)
-                )
-                if not can_retry:
-                    break
-                logger.warning(
-                    "z.ai analysis attempt %s failed due to balance/package issue; retrying with fallback key",
-                    attempt_label,
-                )
-                if progress_callback:
-                    await progress_callback(
-                        50,
-                        "z.ai key exhausted, retrying with fallback key...",
-                        {
-                            "stage": "analysis",
-                            "stage_progress": 0,
-                            "overall_progress": 50,
-                            "ai_provider": ai_provider,
-                            "ai_key_attempt": attempt_label,
-                            "ai_routing_mode": ai_routing_mode,
-                        },
-                    )
-
-            if relevant_parts is not None:
-                diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
-                diagnostics["ai_key_attempts"] = attempted_labels
-                diagnostics["ai_key_label"] = attempted_labels[-1] if attempted_labels else "attempt-1"
-                if ai_routing_mode:
-                    diagnostics["ai_routing_mode"] = ai_routing_mode
-                relevant_parts.diagnostics = diagnostics
-            await ensure_not_cancelled()
-
-            # Step 4: Create clips
-            if progress_callback:
-                await progress_callback(
-                    70,
-                    "Creating video clips...",
-                    {"stage": "clips", "stage_progress": 0, "overall_progress": 70}
-                )
-
-            segments_json = [
-                {
-                    "start_time": segment.start_time,
-                    "end_time": segment.end_time,
-                    "text": segment.text,
-                    "relevance_score": segment.relevance_score,
-                    "reasoning": segment.reasoning
-                }
-                for segment in relevant_parts.most_relevant_segments
-            ]
-
-            clip_result = await VideoService.create_video_clips(
-                video_path,
-                segments_json,
-                font_family,
-                font_size,
-                font_color,
-                subtitle_style,
-                transitions_enabled,
+                ai_provider=ai_provider,
+                ai_api_key=ai_api_key,
+                ai_api_key_fallbacks=ai_api_key_fallbacks,
+                ai_key_labels=ai_key_labels,
+                ai_routing_mode=ai_routing_mode,
+                ai_model=ai_model,
+                transcription_options=transcription_options,
                 progress_callback=progress_callback,
+                cancel_check=cancel_check,
             )
-            await ensure_not_cancelled()
-            clips_info = clip_result.get("clips", [])
-            clip_generation_diagnostics = clip_result.get("diagnostics", {})
 
-            if progress_callback:
-                await progress_callback(
-                    100,
-                    "Processing complete!",
-                    {"stage": "finalizing", "stage_progress": 100, "overall_progress": 100}
-                )
+            render_result = await VideoService.render_video_segments(
+                video_path=Path(analysis_result["video_path"]),
+                segments=analysis_result["segments"],
+                font_family=font_family,
+                font_size=font_size,
+                font_color=font_color,
+                subtitle_style=subtitle_style,
+                transitions_enabled=transitions_enabled,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
+            )
 
             return {
-                "segments": segments_json,
-                "clips": clips_info,
-                "summary": relevant_parts.summary if relevant_parts else None,
-                "key_topics": relevant_parts.key_topics if relevant_parts else None,
-                "analysis_diagnostics": relevant_parts.diagnostics if relevant_parts else None,
-                "clip_generation_diagnostics": clip_generation_diagnostics,
+                "segments": analysis_result["segments"],
+                "clips": render_result.get("clips", []),
+                "summary": analysis_result.get("summary"),
+                "key_topics": analysis_result.get("key_topics"),
+                "analysis_diagnostics": analysis_result.get("analysis_diagnostics"),
+                "clip_generation_diagnostics": render_result.get("clip_generation_diagnostics", {}),
+                "video_path": analysis_result.get("video_path"),
             }
-
         except Exception as e:
             logger.error(f"Error in video processing pipeline: {e}")
             raise

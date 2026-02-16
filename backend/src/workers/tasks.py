@@ -64,6 +64,7 @@ async def process_video_task(
     subtitle_style: Optional[Dict[str, Any]] = None,
     ai_routing_mode: Optional[str] = None,
     transcription_options: Optional[Dict[str, Any]] = None,
+    render_from_drafts: bool = False,
 ) -> Dict[str, Any]:
     """
     Background worker task to process a video.
@@ -84,6 +85,7 @@ async def process_video_task(
         subtitle_style: Extra subtitle style controls for rendering
         ai_routing_mode: Optional z.ai key routing mode ("auto", "subscription", "metered")
         transcription_options: Optional local transcription overrides and task timeout
+        render_from_drafts: If true, render using reviewed draft clips
 
     Returns:
         Dict with processing results
@@ -140,6 +142,7 @@ async def process_video_task(
                 progress_callback=update_progress,
                 cancel_check=ensure_not_cancelled,
                 user_id=user_id,
+                render_from_drafts=render_from_drafts,
             )
             try:
                 result = await asyncio.wait_for(result_coro, timeout=task_timeout_seconds)
@@ -148,8 +151,20 @@ async def process_video_task(
                     f"Task exceeded timeout of {task_timeout_seconds} seconds"
                 ) from exc
 
-            logger.info(f"Task {task_id} completed successfully")
-            await progress.complete()
+            final_status = str(result.get("final_status") or "completed")
+            final_message = str(result.get("final_message") or "Complete!")
+            final_progress = int(result.get("final_progress") or 100)
+            if final_status == "completed":
+                await progress.complete(final_message)
+            else:
+                await progress.update(
+                    final_progress,
+                    final_message,
+                    status=final_status,
+                    metadata={"phase": "analysis" if final_status == "awaiting_review" else "processing"},
+                )
+
+            logger.info("Task %s finished worker phase with status=%s", task_id, final_status)
             return result
 
         except TaskTimeoutError as e:
