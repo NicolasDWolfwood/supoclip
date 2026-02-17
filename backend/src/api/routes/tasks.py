@@ -1,7 +1,7 @@
 """
 Task API routes using refactored architecture.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
@@ -980,6 +980,50 @@ async def get_task_source_video(task_id: str, request: Request, db: AsyncSession
         filename=source_video_path.name,
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/{task_id}/waveform")
+async def get_task_waveform(
+    task_id: str,
+    request: Request,
+    bins: int = Query(default=3000, ge=300, le=12000),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return waveform peaks for the task source video used in timeline review."""
+    user_id = request.headers.get("user_id") or request.query_params.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User authentication required")
+
+    task_service = TaskService(db)
+    task = await task_service.task_repo.get_task_by_id(db, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this task")
+
+    source_url = str(task.get("source_url") or "").strip()
+    source_type = str(task.get("source_type") or "").strip()
+    if not source_url or not source_type:
+        raise HTTPException(status_code=400, detail="Task source is missing")
+
+    try:
+        source_video_path = await task_service.video_service.resolve_video_path(
+            url=source_url,
+            source_type=source_type,
+        )
+        waveform = await task_service.video_service.get_waveform_data(
+            source_video_path,
+            bins=bins,
+        )
+        return {
+            "task_id": task_id,
+            **waveform,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error building waveform for task {task_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to build waveform")
 
 
 @router.get("/{task_id}/clips")

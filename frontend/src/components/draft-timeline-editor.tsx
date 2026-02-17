@@ -57,6 +57,11 @@ const TIMELINE_ZOOM_PRESETS: TimelineZoomLevel[] = [1, 2, 4];
 const TIMELINE_MIN_ZOOM = 1;
 const TIMELINE_MAX_ZOOM = 16;
 const TIMELINE_WHEEL_ZOOM_SENSITIVITY = 0.002;
+const TIMELINE_WAVEFORM_REQUEST_BINS = 3000;
+
+interface TimelineWaveformPayload {
+  peaks?: unknown;
+}
 
 function parseTimestampToSeconds(rawTimestamp: string): number {
   const value = (rawTimestamp || "").trim();
@@ -113,6 +118,18 @@ function formatClock(seconds: number): string {
   return `${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
 }
 
+function buildWaveformUrlFromSourceVideoUrl(sourceVideoUrl: string, bins: number): string | null {
+  try {
+    const parsedUrl = new URL(sourceVideoUrl, window.location.origin);
+    if (!parsedUrl.pathname.endsWith("/source-video")) return null;
+    parsedUrl.pathname = parsedUrl.pathname.replace(/\/source-video$/, "/waveform");
+    parsedUrl.searchParams.set("bins", String(Math.max(300, Math.floor(bins))));
+    return parsedUrl.toString();
+  } catch {
+    return null;
+  }
+}
+
 export default function DraftTimelineEditor({
   sourceVideoUrl,
   drafts,
@@ -127,6 +144,7 @@ export default function DraftTimelineEditor({
   onTimelineZoomLevelChange,
 }: DraftTimelineEditorProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
@@ -136,9 +154,13 @@ export default function DraftTimelineEditor({
   const [internalSelectedClipId, setInternalSelectedClipId] = useState<string | null>(null);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
   const [internalZoomLevel, setInternalZoomLevel] = useState<TimelineZoomLevel>(1);
+  const [showWaveform, setShowWaveform] = useState(true);
+  const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
+  const [isWaveformLoading, setIsWaveformLoading] = useState(false);
 
   const preferredSelectedClipId = selectedClipId ?? internalSelectedClipId;
   const resolvedZoomLevel = timelineZoomLevel ?? internalZoomLevel;
+  const hasWaveform = Boolean(waveformPeaks && waveformPeaks.length > 0);
 
   const selectClip = useCallback(
     (clipId: string) => {
@@ -557,6 +579,115 @@ export default function DraftTimelineEditor({
     [handleZoomWithAnchor, resolvedZoomLevel],
   );
 
+  useEffect(() => {
+    if (!sourceVideoUrl) {
+      setWaveformPeaks(null);
+      setIsWaveformLoading(false);
+      return;
+    }
+
+    const waveformUrl = buildWaveformUrlFromSourceVideoUrl(sourceVideoUrl, TIMELINE_WAVEFORM_REQUEST_BINS);
+    if (!waveformUrl) {
+      setWaveformPeaks(null);
+      setIsWaveformLoading(false);
+      return;
+    }
+
+    const abortController = new AbortController();
+    let active = true;
+    setIsWaveformLoading(true);
+
+    void fetch(waveformUrl, { signal: abortController.signal, cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Waveform request failed (${response.status})`);
+        }
+        return (await response.json()) as TimelineWaveformPayload;
+      })
+      .then((payload) => {
+        if (!active) return;
+        const normalizedPeaks = Array.isArray(payload.peaks)
+          ? payload.peaks
+              .map((value) => (typeof value === "number" ? value : Number(value)))
+              .filter((value) => Number.isFinite(value))
+              .map((value) => clamp(value, 0, 1))
+          : [];
+        setWaveformPeaks(normalizedPeaks.length > 0 ? normalizedPeaks : null);
+      })
+      .catch((waveformError) => {
+        if ((waveformError as { name?: string })?.name === "AbortError") return;
+        console.warn("Failed to load timeline waveform:", waveformError);
+        if (!active) return;
+        setWaveformPeaks(null);
+      })
+      .finally(() => {
+        if (!active) return;
+        setIsWaveformLoading(false);
+      });
+
+    return () => {
+      active = false;
+      abortController.abort();
+    };
+  }, [sourceVideoUrl]);
+
+  const drawWaveform = useCallback(() => {
+    const canvas = waveformCanvasRef.current;
+    const track = trackRef.current;
+    if (!canvas || !track) return;
+
+    const cssWidth = Math.max(1, Math.floor(track.clientWidth));
+    const cssHeight = Math.max(1, Math.floor(track.clientHeight));
+    const dpr = window.devicePixelRatio || 1;
+    const pixelWidth = Math.max(1, Math.floor(cssWidth * dpr));
+    const pixelHeight = Math.max(1, Math.floor(cssHeight * dpr));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    canvas.style.width = `${cssWidth}px`;
+    canvas.style.height = `${cssHeight}px`;
+
+    const context = canvas.getContext("2d");
+    if (!context) return;
+
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!showWaveform || !hasWaveform || !waveformPeaks) return;
+
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.strokeStyle = "rgba(148,163,184,0.52)";
+    context.lineWidth = 1;
+    context.beginPath();
+
+    const midline = cssHeight / 2;
+    const amplitudeRange = Math.max(3, cssHeight / 2 - 7);
+    const peakCount = waveformPeaks.length;
+    const denominator = Math.max(1, peakCount - 1);
+    for (let index = 0; index < peakCount; index += 1) {
+      const peak = waveformPeaks[index];
+      const x = (index / denominator) * cssWidth;
+      const amplitude = amplitudeRange * peak;
+      context.moveTo(x, midline - amplitude);
+      context.lineTo(x, midline + amplitude);
+    }
+    context.stroke();
+  }, [hasWaveform, showWaveform, waveformPeaks]);
+
+  useEffect(() => {
+    drawWaveform();
+  }, [drawWaveform, resolvedZoomLevel]);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      drawWaveform();
+    });
+    observer.observe(track);
+    return () => observer.disconnect();
+  }, [drawWaveform]);
+
   return (
     <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_8px_22px_-18px_rgba(15,23,42,0.55)] dark:border-slate-700 dark:bg-slate-900/75 dark:shadow-[0_10px_28px_-22px_rgba(2,6,23,0.95)]">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -603,6 +734,25 @@ export default function DraftTimelineEditor({
           <span className="text-[11px] text-slate-500 dark:text-slate-400">
             {`${(Math.round(resolvedZoomLevel * 10) / 10).toFixed(1)}x`}
           </span>
+          <Button
+            type="button"
+            size="sm"
+            variant={showWaveform ? "default" : "outline"}
+            className={`h-7 px-2 text-xs ${
+              showWaveform
+                ? "shadow-sm"
+                : "border-slate-300 bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+            }`}
+            onClick={() => setShowWaveform((previous) => !previous)}
+            disabled={!sourceVideoUrl}
+          >
+            Waveform {showWaveform ? "On" : "Off"}
+          </Button>
+          {showWaveform && sourceVideoUrl && (
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              {isWaveformLoading ? "Loading..." : hasWaveform ? "Loaded" : "Unavailable"}
+            </span>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -679,6 +829,13 @@ export default function DraftTimelineEditor({
           style={{ width: `${resolvedZoomLevel * 100}%` }}
           onClick={handleTimelineClick}
         >
+          {showWaveform && (
+            <canvas
+              ref={waveformCanvasRef}
+              className="pointer-events-none absolute inset-0 z-0"
+              aria-hidden
+            />
+          )}
           {durationSeconds > 0 && (
             <div
               className="pointer-events-none absolute top-0 z-10 h-full w-[2px] bg-red-500/90 shadow-[0_0_0_2px_rgba(239,68,68,0.12)]"

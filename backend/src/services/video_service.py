@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, Awaitable
 import logging
 import asyncio
+import json
+import math
+import subprocess
+from array import array
 
 from ..utils.async_helpers import run_in_thread
 from ..youtube_utils import (
@@ -24,6 +28,9 @@ from ..config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
+WAVEFORM_MIN_BINS = 300
+WAVEFORM_MAX_BINS = 12000
+WAVEFORM_SAMPLE_RATE_HZ = 2000
 
 
 class VideoService:
@@ -429,6 +436,196 @@ class VideoService:
             return video_path
 
         return VideoService.validate_uploaded_video_path(url)
+
+    @staticmethod
+    def _probe_media_duration_seconds(video_path: Path) -> float:
+        command = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(f"ffprobe failed for {video_path.name}: {stderr or 'unknown error'}")
+        try:
+            duration = float((result.stdout or "").strip())
+        except ValueError as exc:
+            raise RuntimeError(f"Invalid duration from ffprobe for {video_path.name}") from exc
+        if not math.isfinite(duration) or duration <= 0:
+            raise RuntimeError(f"Non-positive duration for {video_path.name}")
+        return duration
+
+    @staticmethod
+    def _waveform_cache_path(video_path: Path, bins: int) -> Path:
+        return video_path.with_suffix(f".waveform_{bins}.json")
+
+    @staticmethod
+    def _load_waveform_cache(video_path: Path, bins: int) -> Optional[Dict[str, Any]]:
+        cache_path = VideoService._waveform_cache_path(video_path, bins)
+        if not cache_path.exists():
+            return None
+
+        try:
+            raw_payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_payload, dict):
+                return None
+
+            file_mtime = video_path.stat().st_mtime
+            cache_video_mtime = raw_payload.get("video_mtime")
+            if not isinstance(cache_video_mtime, (int, float)):
+                return None
+            if abs(float(cache_video_mtime) - float(file_mtime)) > 1e-3:
+                return None
+
+            peaks_raw = raw_payload.get("peaks")
+            if not isinstance(peaks_raw, list):
+                return None
+            peaks = [max(0.0, min(1.0, float(value))) for value in peaks_raw if isinstance(value, (int, float))]
+            if len(peaks) != bins:
+                return None
+
+            duration_seconds = raw_payload.get("duration_seconds")
+            if not isinstance(duration_seconds, (int, float)):
+                return None
+
+            return {
+                "duration_seconds": float(duration_seconds),
+                "bins": bins,
+                "peaks": peaks,
+            }
+        except Exception as cache_error:
+            logger.warning("Failed to load waveform cache %s: %s", cache_path, cache_error)
+            return None
+
+    @staticmethod
+    def _save_waveform_cache(video_path: Path, bins: int, payload: Dict[str, Any]) -> None:
+        cache_path = VideoService._waveform_cache_path(video_path, bins)
+        temporary_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
+        try:
+            cache_payload = {
+                "video_mtime": video_path.stat().st_mtime,
+                "duration_seconds": payload["duration_seconds"],
+                "bins": payload["bins"],
+                "peaks": payload["peaks"],
+            }
+            temporary_path.write_text(json.dumps(cache_payload), encoding="utf-8")
+            temporary_path.replace(cache_path)
+        except Exception as cache_error:
+            logger.warning("Failed to save waveform cache %s: %s", cache_path, cache_error)
+            try:
+                if temporary_path.exists():
+                    temporary_path.unlink()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _compute_waveform_peaks(video_path: Path, bins: int) -> Dict[str, Any]:
+        duration_seconds = VideoService._probe_media_duration_seconds(video_path)
+        total_expected_samples = max(1, int(duration_seconds * WAVEFORM_SAMPLE_RATE_HZ))
+        samples_per_bin = max(1, math.ceil(total_expected_samples / bins))
+        peaks: List[float] = [0.0] * bins
+
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(video_path),
+            "-map",
+            "a:0?",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            str(WAVEFORM_SAMPLE_RATE_HZ),
+            "-f",
+            "s16le",
+            "pipe:1",
+        ]
+
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if process.stdout is None:
+            raise RuntimeError("Failed to read ffmpeg stdout for waveform generation")
+
+        sample_index = 0
+        pending_byte = b""
+
+        try:
+            while True:
+                chunk = process.stdout.read(65536)
+                if not chunk:
+                    break
+
+                raw_chunk = pending_byte + chunk
+                if len(raw_chunk) % 2 != 0:
+                    pending_byte = raw_chunk[-1:]
+                    raw_chunk = raw_chunk[:-1]
+                else:
+                    pending_byte = b""
+
+                if not raw_chunk:
+                    continue
+
+                values = array("h")
+                values.frombytes(raw_chunk)
+                if values.itemsize != 2:
+                    raise RuntimeError("Unexpected sample width while generating waveform")
+
+                for sample in values:
+                    bin_index = min(bins - 1, sample_index // samples_per_bin)
+                    normalized = abs(int(sample)) / 32768.0
+                    if normalized > peaks[bin_index]:
+                        peaks[bin_index] = normalized
+                    sample_index += 1
+        finally:
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+
+        stderr_output = process.stderr.read().decode("utf-8", errors="ignore") if process.stderr else ""
+        return_code = process.wait()
+        if return_code != 0:
+            raise RuntimeError(f"ffmpeg waveform extraction failed: {stderr_output.strip() or 'unknown error'}")
+
+        if sample_index <= 0:
+            # Video has no audio stream (or fully silent stream); return a valid empty waveform.
+            return {
+                "duration_seconds": duration_seconds,
+                "bins": bins,
+                "peaks": [0.0] * bins,
+            }
+
+        measured_duration = sample_index / WAVEFORM_SAMPLE_RATE_HZ
+        duration_seconds = max(duration_seconds, measured_duration)
+        return {
+            "duration_seconds": duration_seconds,
+            "bins": bins,
+            "peaks": peaks,
+        }
+
+    @staticmethod
+    def _get_waveform_data_sync(video_path: Path, bins: int) -> Dict[str, Any]:
+        normalized_bins = max(WAVEFORM_MIN_BINS, min(WAVEFORM_MAX_BINS, int(bins)))
+        cached_payload = VideoService._load_waveform_cache(video_path, normalized_bins)
+        if cached_payload is not None:
+            return cached_payload
+
+        payload = VideoService._compute_waveform_peaks(video_path, normalized_bins)
+        VideoService._save_waveform_cache(video_path, normalized_bins, payload)
+        return payload
+
+    @staticmethod
+    async def get_waveform_data(video_path: Path, bins: int = 3000) -> Dict[str, Any]:
+        """Build (or load cached) waveform peak data for timeline rendering."""
+        return await run_in_thread(VideoService._get_waveform_data_sync, video_path, bins)
 
     @staticmethod
     async def _analyze_transcript_with_retries(
