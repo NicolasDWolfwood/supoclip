@@ -9,6 +9,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { Button } from "@/components/ui/button";
 
@@ -20,7 +21,7 @@ interface TimelineDraftClip {
   is_selected: boolean;
 }
 
-export type TimelineZoomLevel = 1 | 2 | 4;
+export type TimelineZoomLevel = number;
 
 interface DraftTimelineEditorProps {
   sourceVideoUrl: string | null;
@@ -52,7 +53,10 @@ interface DragState {
 const TIMELINE_INCREMENT_SECONDS = 0.5;
 const SNAP_THRESHOLD_SECONDS = 0.5;
 const DEFAULT_NEW_CLIP_SECONDS = 8;
-const TIMELINE_ZOOM_LEVELS: TimelineZoomLevel[] = [1, 2, 4];
+const TIMELINE_ZOOM_PRESETS: TimelineZoomLevel[] = [1, 2, 4];
+const TIMELINE_MIN_ZOOM = 1;
+const TIMELINE_MAX_ZOOM = 16;
+const TIMELINE_WHEEL_ZOOM_SENSITIVITY = 0.002;
 
 function parseTimestampToSeconds(rawTimestamp: string): number {
   const value = (rawTimestamp || "").trim();
@@ -97,6 +101,11 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function clampZoomLevel(value: number): TimelineZoomLevel {
+  if (!Number.isFinite(value)) return 1;
+  return clamp(value, TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM);
+}
+
 function formatClock(seconds: number): string {
   const value = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(value / 60);
@@ -118,8 +127,10 @@ export default function DraftTimelineEditor({
   onTimelineZoomLevelChange,
 }: DraftTimelineEditorProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const timelineScrollerRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
+  const pendingZoomAnchorRef = useRef<{ ratio: number; anchorX: number } | null>(null);
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0);
   const [internalSelectedClipId, setInternalSelectedClipId] = useState<string | null>(null);
@@ -141,12 +152,38 @@ export default function DraftTimelineEditor({
 
   const handleZoomChange = useCallback(
     (nextZoom: TimelineZoomLevel) => {
+      const clampedZoom = clampZoomLevel(nextZoom);
       if (timelineZoomLevel === undefined) {
-        setInternalZoomLevel(nextZoom);
+        setInternalZoomLevel(clampedZoom);
       }
-      onTimelineZoomLevelChange?.(nextZoom);
+      onTimelineZoomLevelChange?.(clampedZoom);
     },
     [onTimelineZoomLevelChange, timelineZoomLevel],
+  );
+
+  const handleZoomWithAnchor = useCallback(
+    (nextZoom: TimelineZoomLevel, anchorClientX?: number) => {
+      const clampedZoom = clampZoomLevel(nextZoom);
+      if (Math.abs(clampedZoom - resolvedZoomLevel) < 1e-3) return;
+
+      const scroller = timelineScrollerRef.current;
+      const track = trackRef.current;
+      if (scroller && track) {
+        const scrollerBounds = scroller.getBoundingClientRect();
+        const anchorX =
+          typeof anchorClientX === "number" && Number.isFinite(anchorClientX)
+            ? clamp(anchorClientX - scrollerBounds.left, 0, scrollerBounds.width)
+            : scrollerBounds.width / 2;
+        const trackWidth = track.getBoundingClientRect().width;
+        if (trackWidth > 0) {
+          const ratio = clamp((scroller.scrollLeft + anchorX) / trackWidth, 0, 1);
+          pendingZoomAnchorRef.current = { ratio, anchorX };
+        }
+      }
+
+      handleZoomChange(clampedZoom);
+    },
+    [handleZoomChange, resolvedZoomLevel],
   );
 
   const draftWindows = useMemo(() => {
@@ -188,6 +225,29 @@ export default function DraftTimelineEditor({
     if (!resolvedSelectedClipId || selectedClipId === resolvedSelectedClipId) return;
     onSelectClip(resolvedSelectedClipId);
   }, [onSelectClip, resolvedSelectedClipId, selectedClipId]);
+
+  useEffect(() => {
+    const pendingAnchor = pendingZoomAnchorRef.current;
+    if (!pendingAnchor) return;
+    const scroller = timelineScrollerRef.current;
+    const track = trackRef.current;
+    if (!scroller || !track) return;
+
+    const rafId = window.requestAnimationFrame(() => {
+      const trackWidth = track.getBoundingClientRect().width;
+      const maxScrollLeft = Math.max(0, trackWidth - scroller.clientWidth);
+      scroller.scrollLeft = clamp(
+        pendingAnchor.ratio * trackWidth - pendingAnchor.anchorX,
+        0,
+        maxScrollLeft,
+      );
+      pendingZoomAnchorRef.current = null;
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [resolvedZoomLevel]);
 
   useEffect(() => {
     if (!videoRef.current) return;
@@ -472,6 +532,31 @@ export default function DraftTimelineEditor({
     [seekVideo, selectClip],
   );
 
+  const handleTimelineWheel = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      const scroller = timelineScrollerRef.current;
+      if (!scroller) return;
+
+      if (event.shiftKey) {
+        event.preventDefault();
+        const zoomDelta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+        if (Math.abs(zoomDelta) < 1e-3) return;
+        const nextZoom = clampZoomLevel(
+          resolvedZoomLevel * Math.exp(-zoomDelta * TIMELINE_WHEEL_ZOOM_SENSITIVITY),
+        );
+        handleZoomWithAnchor(nextZoom, event.clientX);
+        return;
+      }
+
+      event.preventDefault();
+      const panDelta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (Math.abs(panDelta) < 1e-3) return;
+      scroller.scrollLeft += panDelta;
+    },
+    [handleZoomWithAnchor, resolvedZoomLevel],
+  );
+
   return (
     <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-[0_8px_22px_-18px_rgba(15,23,42,0.55)] dark:border-slate-700 dark:bg-slate-900/75 dark:shadow-[0_10px_28px_-22px_rgba(2,6,23,0.95)]">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -499,22 +584,25 @@ export default function DraftTimelineEditor({
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/70">
         <div className="flex items-center gap-2">
           <span className="text-xs font-medium text-slate-700 dark:text-slate-300">Zoom</span>
-          {TIMELINE_ZOOM_LEVELS.map((zoom) => (
+          {TIMELINE_ZOOM_PRESETS.map((zoom) => (
             <Button
               key={zoom}
               type="button"
               size="sm"
-              variant={resolvedZoomLevel === zoom ? "default" : "outline"}
+              variant={Math.abs(resolvedZoomLevel - zoom) < 1e-3 ? "default" : "outline"}
               className={`h-7 px-2 text-xs ${
-                resolvedZoomLevel === zoom
+                Math.abs(resolvedZoomLevel - zoom) < 1e-3
                   ? "shadow-sm"
                   : "border-slate-300 bg-slate-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
               }`}
-              onClick={() => handleZoomChange(zoom)}
+              onClick={() => handleZoomWithAnchor(zoom)}
             >
               {zoom}x
             </Button>
           ))}
+          <span className="text-[11px] text-slate-500 dark:text-slate-400">
+            {`${(Math.round(resolvedZoomLevel * 10) / 10).toFixed(1)}x`}
+          </span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -562,6 +650,10 @@ export default function DraftTimelineEditor({
         </div>
       </div>
 
+      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+        Shift + wheel to zoom, wheel to pan horizontally.
+      </p>
+
       {sourceVideoUrl ? (
         <video
           ref={videoRef}
@@ -576,7 +668,11 @@ export default function DraftTimelineEditor({
         </div>
       )}
 
-      <div className="overflow-x-auto pb-1">
+      <div
+        ref={timelineScrollerRef}
+        className="overflow-x-auto pb-1"
+        onWheel={handleTimelineWheel}
+      >
         <div
           ref={trackRef}
           className="relative h-24 min-w-full rounded-lg border border-slate-200 bg-[linear-gradient(to_right,rgba(148,163,184,0.12)_1px,transparent_1px)] bg-[size:28px_100%] bg-slate-50 dark:border-slate-700 dark:bg-[linear-gradient(to_right,rgba(148,163,184,0.2)_1px,transparent_1px)] dark:bg-[size:28px_100%] dark:bg-slate-900"
