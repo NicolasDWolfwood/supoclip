@@ -104,6 +104,7 @@ export function arePreferencesEqual(a: UserPreferences, b: UserPreferences): boo
     a.fontFamily === b.fontFamily &&
     a.fontSize === b.fontSize &&
     a.fontColor === b.fontColor &&
+    a.highlightColor === b.highlightColor &&
     a.fontWeight === b.fontWeight &&
     a.lineHeight === b.lineHeight &&
     a.letterSpacing === b.letterSpacing &&

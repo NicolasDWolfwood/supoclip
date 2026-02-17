@@ -1721,7 +1721,9 @@ def create_assemblyai_subtitles(
     shadow_offset_x = int(style["shadow_offset_x"])
     shadow_offset_y = int(style["shadow_offset_y"])
     font_weight = int(style["font_weight"])
-    highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
+    highlight_color = str(style.get("highlight_color") or "").strip()
+    if not highlight_color:
+        highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):

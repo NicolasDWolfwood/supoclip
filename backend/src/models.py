@@ -33,6 +33,7 @@ class User(Base):
     anthropic_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     zai_api_key_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     default_font_weight: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("600"))
+    default_highlight_color: Mapped[str] = mapped_column(String(7), nullable=False, server_default=text("'#FDE047'"))
     default_line_height: Mapped[float] = mapped_column(Float, nullable=False, server_default=text("1.4"))
     default_letter_spacing: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
     default_text_transform: Mapped[str] = mapped_column(String(20), nullable=False, server_default=text("'none'"))

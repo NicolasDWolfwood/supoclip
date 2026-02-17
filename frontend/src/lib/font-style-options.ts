@@ -8,6 +8,7 @@ export interface FontStyleOptions {
   fontFamily: string;
   fontSize: number;
   fontColor: string;
+  highlightColor: string;
   fontWeight: number;
   lineHeight: number;
   letterSpacing: number;
@@ -27,6 +28,7 @@ export const DEFAULT_FONT_STYLE_OPTIONS: FontStyleOptions = {
   fontFamily: "TikTokSans-Regular",
   fontSize: 24,
   fontColor: "#FFFFFF",
+  highlightColor: "#FDE047",
   fontWeight: 600,
   lineHeight: 1.4,
   letterSpacing: 0,
@@ -152,6 +154,7 @@ export function normalizeFontStyleOptions(
         : DEFAULT_FONT_STYLE_OPTIONS.fontFamily,
     fontSize: normalizeFontSize(asNumber(raw?.fontSize) ?? DEFAULT_FONT_STYLE_OPTIONS.fontSize),
     fontColor: normalizeHexColor(raw?.fontColor, DEFAULT_FONT_STYLE_OPTIONS.fontColor),
+    highlightColor: normalizeHexColor(raw?.highlightColor, DEFAULT_FONT_STYLE_OPTIONS.highlightColor),
     fontWeight: normalizeFontWeight(raw?.fontWeight),
     lineHeight: normalizeLineHeight(raw?.lineHeight),
     letterSpacing: normalizeLetterSpacing(raw?.letterSpacing),

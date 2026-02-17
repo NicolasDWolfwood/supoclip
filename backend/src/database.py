@@ -347,6 +347,14 @@ async def init_db():
             text(
                 """
                 ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_highlight_color VARCHAR(7) DEFAULT '#FDE047'
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_line_height DOUBLE PRECISION DEFAULT 1.4
                 """
             )

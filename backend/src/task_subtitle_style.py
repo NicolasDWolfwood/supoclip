@@ -8,6 +8,7 @@ from .subtitle_style import normalize_subtitle_style
 
 # Mapping of style keys to user default columns present on the joined task/user query.
 USER_DEFAULT_STYLE_COLUMNS: Dict[str, str] = {
+    "highlight_color": "default_highlight_color",
     "font_weight": "default_font_weight",
     "line_height": "default_line_height",
     "letter_spacing": "default_letter_spacing",

@@ -1023,6 +1023,7 @@ function SettingsPageContent() {
                 fontFamily={preferencesDraft.fontFamily}
                 fontSize={preferencesDraft.fontSize}
                 fontColor={preferencesDraft.fontColor}
+                highlightColor={preferencesDraft.highlightColor}
                 fontWeight={preferencesDraft.fontWeight}
                 lineHeight={preferencesDraft.lineHeight}
                 letterSpacing={preferencesDraft.letterSpacing}
@@ -1047,6 +1048,9 @@ function SettingsPageContent() {
                 }}
                 onFontColorChange={(color) => {
                   setPreferencesDraft((prev) => ({ ...prev, fontColor: color }));
+                }}
+                onHighlightColorChange={(highlightColor) => {
+                  setPreferencesDraft((prev) => ({ ...prev, highlightColor }));
                 }}
                 onFontWeightChange={(weight) => {
                   setPreferencesDraft((prev) => ({ ...prev, fontWeight: normalizeFontWeight(weight) }));

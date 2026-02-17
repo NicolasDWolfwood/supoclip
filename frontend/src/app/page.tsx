@@ -136,6 +136,7 @@ export default function Home() {
   const [fontFamily, setFontFamily] = useState("TikTokSans-Regular");
   const [fontSize, setFontSize] = useState(24);
   const [fontColor, setFontColor] = useState("#FFFFFF");
+  const [highlightColor, setHighlightColor] = useState("#FDE047");
   const [fontWeight, setFontWeight] = useState(600);
   const [lineHeight, setLineHeight] = useState(1.4);
   const [letterSpacing, setLetterSpacing] = useState(0);
@@ -230,6 +231,7 @@ export default function Home() {
             fontFamily?: unknown;
             fontSize?: unknown;
             fontColor?: unknown;
+            highlightColor?: unknown;
             fontWeight?: unknown;
             lineHeight?: unknown;
             letterSpacing?: unknown;
@@ -257,6 +259,7 @@ export default function Home() {
           setFontFamily(normalizedFontStyle.fontFamily);
           setFontSize(normalizedFontStyle.fontSize);
           setFontColor(normalizedFontStyle.fontColor);
+          setHighlightColor(normalizedFontStyle.highlightColor);
           setFontWeight(normalizedFontStyle.fontWeight);
           setLineHeight(normalizedFontStyle.lineHeight);
           setLetterSpacing(normalizedFontStyle.letterSpacing);
@@ -554,6 +557,7 @@ export default function Home() {
             font_family: fontFamily,
             font_size: fontSize,
             font_color: fontColor,
+            highlight_color: highlightColor,
             font_weight: fontWeight,
             line_height: lineHeight,
             letter_spacing: letterSpacing,
@@ -1201,6 +1205,41 @@ export default function Home() {
                           key={color}
                           type="button"
                           onClick={() => setFontColor(color)}
+                          disabled={isLoading}
+                          className="w-6 h-6 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
+                          style={{ backgroundColor: color }}
+                          title={color}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium text-black">Highlight Color</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={highlightColor}
+                        onChange={(e) => setHighlightColor(e.target.value)}
+                        disabled={isLoading}
+                        className="w-12 h-8 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed"
+                      />
+                      <Input
+                        type="text"
+                        value={highlightColor}
+                        onChange={(e) => setHighlightColor(e.target.value)}
+                        disabled={isLoading}
+                        placeholder="#FDE047"
+                        className="flex-1 h-8"
+                        pattern="^#[0-9A-Fa-f]{6}$"
+                      />
+                    </div>
+                    <div className="flex gap-2 mt-2">
+                      {SWATCH_COLORS.map((color) => (
+                        <button
+                          key={`highlight-${color}`}
+                          type="button"
+                          onClick={() => setHighlightColor(color)}
                           disabled={isLoading}
                           className="w-6 h-6 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
                           style={{ backgroundColor: color }}

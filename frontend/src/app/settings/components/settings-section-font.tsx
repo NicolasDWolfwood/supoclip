@@ -12,6 +12,7 @@ interface SettingsSectionFontProps {
   fontFamily: string;
   fontSize: number;
   fontColor: string;
+  highlightColor: string;
   fontWeight: number;
   lineHeight: number;
   letterSpacing: number;
@@ -31,6 +32,7 @@ interface SettingsSectionFontProps {
   onFontFamilyChange: (value: string) => void;
   onFontSizeChange: (size: number) => void;
   onFontColorChange: (color: string) => void;
+  onHighlightColorChange: (color: string) => void;
   onFontWeightChange: (weight: number) => void;
   onLineHeightChange: (lineHeight: number) => void;
   onLetterSpacingChange: (spacing: number) => void;
@@ -73,6 +75,7 @@ export function SettingsSectionFont({
   fontFamily,
   fontSize,
   fontColor,
+  highlightColor,
   fontWeight,
   lineHeight,
   letterSpacing,
@@ -92,6 +95,7 @@ export function SettingsSectionFont({
   onFontFamilyChange,
   onFontSizeChange,
   onFontColorChange,
+  onHighlightColorChange,
   onFontWeightChange,
   onLineHeightChange,
   onLetterSpacingChange,
@@ -291,6 +295,41 @@ export function SettingsSectionFont({
               key={color}
               type="button"
               onClick={() => onFontColorChange(color)}
+              disabled={isSaving || isUploadingFont}
+              className="w-8 h-8 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
+              style={{ backgroundColor: color }}
+              title={color}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-sm font-medium text-black">Highlight Color</Label>
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={highlightColor}
+            onChange={(event) => onHighlightColorChange(event.target.value)}
+            disabled={isSaving || isUploadingFont}
+            className="w-12 h-10 rounded border border-gray-300 cursor-pointer disabled:cursor-not-allowed"
+          />
+          <Input
+            type="text"
+            value={highlightColor}
+            onChange={(event) => onHighlightColorChange(event.target.value)}
+            disabled={isSaving || isUploadingFont}
+            placeholder="#FDE047"
+            className="flex-1 h-10"
+            pattern="^#[0-9A-Fa-f]{6}$"
+          />
+        </div>
+        <div className="flex gap-2 mt-2">
+          {SWATCH_COLORS.map((color) => (
+            <button
+              key={`highlight-${color}`}
+              type="button"
+              onClick={() => onHighlightColorChange(color)}
               disabled={isSaving || isUploadingFont}
               className="w-8 h-8 rounded border-2 border-gray-300 cursor-pointer hover:scale-110 transition-transform disabled:cursor-not-allowed"
               style={{ backgroundColor: color }}

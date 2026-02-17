@@ -44,6 +44,7 @@ export async function GET() {
         default_font_family: true,
         default_font_size: true,
         default_font_color: true,
+        default_highlight_color: true,
         default_font_weight: true,
         default_line_height: true,
         default_letter_spacing: true,
@@ -87,6 +88,9 @@ export async function GET() {
       fontColor: isHexColor(user.default_font_color)
         ? user.default_font_color.toUpperCase()
         : DEFAULT_FONT_STYLE_OPTIONS.fontColor,
+      highlightColor: isHexColor(user.default_highlight_color)
+        ? user.default_highlight_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.highlightColor,
       fontWeight: normalizeFontWeight(user.default_font_weight),
       lineHeight: normalizeLineHeight(user.default_line_height),
       letterSpacing: normalizeLetterSpacing(user.default_letter_spacing),
@@ -145,6 +149,7 @@ export async function PATCH(request: NextRequest) {
       fontFamily,
       fontSize,
       fontColor,
+      highlightColor,
       fontWeight,
       lineHeight,
       letterSpacing,
@@ -178,6 +183,12 @@ export async function PATCH(request: NextRequest) {
     }
     if (fontColor !== undefined && !isHexColor(fontColor)) {
       return NextResponse.json({ error: "Invalid fontColor (must be hex format like #FFFFFF)" }, { status: 400 });
+    }
+    if (highlightColor !== undefined && !isHexColor(highlightColor)) {
+      return NextResponse.json(
+        { error: "Invalid highlightColor (must be hex format like #FDE047)" },
+        { status: 400 },
+      );
     }
     if (fontWeight !== undefined && !isIntegerInRange(fontWeight, 300, 900)) {
       return NextResponse.json({ error: "Invalid fontWeight (must be an integer from 300 to 900)" }, { status: 400 });
@@ -315,6 +326,7 @@ export async function PATCH(request: NextRequest) {
         ...(fontFamily !== undefined && { default_font_family: fontFamily.trim() || DEFAULT_FONT_STYLE_OPTIONS.fontFamily }),
         ...(fontSize !== undefined && { default_font_size: normalizeFontSize(fontSize) }),
         ...(fontColor !== undefined && { default_font_color: fontColor.toUpperCase() }),
+        ...(highlightColor !== undefined && { default_highlight_color: highlightColor.toUpperCase() }),
         ...(fontWeight !== undefined && { default_font_weight: normalizeFontWeight(fontWeight) }),
         ...(lineHeight !== undefined && { default_line_height: normalizeLineHeight(lineHeight) }),
         ...(letterSpacing !== undefined && { default_letter_spacing: normalizeLetterSpacing(letterSpacing) }),
@@ -349,6 +361,7 @@ export async function PATCH(request: NextRequest) {
         default_font_family: true,
         default_font_size: true,
         default_font_color: true,
+        default_highlight_color: true,
         default_font_weight: true,
         default_line_height: true,
         default_letter_spacing: true,
@@ -381,6 +394,9 @@ export async function PATCH(request: NextRequest) {
       fontColor: isHexColor(updatedUser.default_font_color)
         ? updatedUser.default_font_color.toUpperCase()
         : DEFAULT_FONT_STYLE_OPTIONS.fontColor,
+      highlightColor: isHexColor(updatedUser.default_highlight_color)
+        ? updatedUser.default_highlight_color.toUpperCase()
+        : DEFAULT_FONT_STYLE_OPTIONS.highlightColor,
       fontWeight: normalizeFontWeight(updatedUser.default_font_weight),
       lineHeight: normalizeLineHeight(updatedUser.default_line_height),
       letterSpacing: normalizeLetterSpacing(updatedUser.default_letter_spacing),

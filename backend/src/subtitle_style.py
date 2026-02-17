@@ -13,6 +13,7 @@ DEFAULT_SUBTITLE_STYLE: Dict[str, Any] = {
     "font_family": "TikTokSans-Regular",
     "font_size": 24,
     "font_color": "#FFFFFF",
+    "highlight_color": "#FDE047",
     "font_weight": 600,
     "line_height": 1.4,
     "letter_spacing": 0,
@@ -91,6 +92,10 @@ def normalize_subtitle_style(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
     normalized["font_size"] = _normalize_int(source.get("font_size"), DEFAULT_SUBTITLE_STYLE["font_size"], 24, 48, 1)
     normalized["font_color"] = _normalize_hex_color(source.get("font_color"), DEFAULT_SUBTITLE_STYLE["font_color"])
+    normalized["highlight_color"] = _normalize_hex_color(
+        source.get("highlight_color"),
+        DEFAULT_SUBTITLE_STYLE["highlight_color"],
+    )
     normalized["font_weight"] = _normalize_int(
         source.get("font_weight"), DEFAULT_SUBTITLE_STYLE["font_weight"], 300, 900, 100
     )
