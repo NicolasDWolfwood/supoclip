@@ -987,6 +987,8 @@ async def get_task_waveform(
     task_id: str,
     request: Request,
     bins: int = Query(default=3000, ge=300, le=12000),
+    start_seconds: Optional[float] = Query(default=None, ge=0),
+    end_seconds: Optional[float] = Query(default=None, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
     """Return waveform peaks for the task source video used in timeline review."""
@@ -1005,6 +1007,12 @@ async def get_task_waveform(
     source_type = str(task.get("source_type") or "").strip()
     if not source_url or not source_type:
         raise HTTPException(status_code=400, detail="Task source is missing")
+    if (
+        start_seconds is not None
+        and end_seconds is not None
+        and float(end_seconds) <= float(start_seconds)
+    ):
+        raise HTTPException(status_code=400, detail="end_seconds must be greater than start_seconds")
 
     try:
         source_video_path = await task_service.video_service.resolve_video_path(
@@ -1014,6 +1022,8 @@ async def get_task_waveform(
         waveform = await task_service.video_service.get_waveform_data(
             source_video_path,
             bins=bins,
+            start_seconds=start_seconds,
+            end_seconds=end_seconds,
         )
         return {
             "task_id": task_id,

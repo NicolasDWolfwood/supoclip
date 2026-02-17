@@ -57,10 +57,25 @@ const TIMELINE_ZOOM_PRESETS: TimelineZoomLevel[] = [1, 2, 4];
 const TIMELINE_MIN_ZOOM = 1;
 const TIMELINE_MAX_ZOOM = 16;
 const TIMELINE_WHEEL_ZOOM_SENSITIVITY = 0.002;
-const TIMELINE_WAVEFORM_REQUEST_BINS = 3000;
+const TIMELINE_WAVEFORM_MIN_REQUEST_BINS = 400;
+const TIMELINE_WAVEFORM_MAX_REQUEST_BINS = 5000;
+const TIMELINE_WAVEFORM_FETCH_DEBOUNCE_MS = 120;
+const TIMELINE_WAVEFORM_OVERSCAN_MULTIPLIER = 1;
 
 interface TimelineWaveformPayload {
   peaks?: unknown;
+  bins?: unknown;
+  duration_seconds?: unknown;
+  range_start_seconds?: unknown;
+  range_end_seconds?: unknown;
+}
+
+interface TimelineWaveformData {
+  peaks: number[];
+  bins: number;
+  durationSeconds: number;
+  rangeStartSeconds: number;
+  rangeEndSeconds: number;
 }
 
 function parseTimestampToSeconds(rawTimestamp: string): number {
@@ -118,12 +133,27 @@ function formatClock(seconds: number): string {
   return `${minutes.toString().padStart(2, "0")}:${remaining.toString().padStart(2, "0")}`;
 }
 
-function buildWaveformUrlFromSourceVideoUrl(sourceVideoUrl: string, bins: number): string | null {
+function buildWaveformUrlFromSourceVideoUrl(
+  sourceVideoUrl: string,
+  bins: number,
+  startSeconds?: number,
+  endSeconds?: number,
+): string | null {
   try {
     const parsedUrl = new URL(sourceVideoUrl, window.location.origin);
     if (!parsedUrl.pathname.endsWith("/source-video")) return null;
     parsedUrl.pathname = parsedUrl.pathname.replace(/\/source-video$/, "/waveform");
     parsedUrl.searchParams.set("bins", String(Math.max(300, Math.floor(bins))));
+    if (typeof startSeconds === "number" && Number.isFinite(startSeconds)) {
+      parsedUrl.searchParams.set("start_seconds", startSeconds.toFixed(3));
+    } else {
+      parsedUrl.searchParams.delete("start_seconds");
+    }
+    if (typeof endSeconds === "number" && Number.isFinite(endSeconds)) {
+      parsedUrl.searchParams.set("end_seconds", endSeconds.toFixed(3));
+    } else {
+      parsedUrl.searchParams.delete("end_seconds");
+    }
     return parsedUrl.toString();
   } catch {
     return null;
@@ -149,18 +179,19 @@ export default function DraftTimelineEditor({
   const trackRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
   const pendingZoomAnchorRef = useRef<{ ratio: number; anchorX: number } | null>(null);
+  const waveformRequestKeyRef = useRef<string>("");
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [currentTimeSeconds, setCurrentTimeSeconds] = useState(0);
   const [internalSelectedClipId, setInternalSelectedClipId] = useState<string | null>(null);
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
   const [internalZoomLevel, setInternalZoomLevel] = useState<TimelineZoomLevel>(1);
   const [showWaveform, setShowWaveform] = useState(true);
-  const [waveformPeaks, setWaveformPeaks] = useState<number[] | null>(null);
+  const [waveformData, setWaveformData] = useState<TimelineWaveformData | null>(null);
   const [isWaveformLoading, setIsWaveformLoading] = useState(false);
 
   const preferredSelectedClipId = selectedClipId ?? internalSelectedClipId;
   const resolvedZoomLevel = timelineZoomLevel ?? internalZoomLevel;
-  const hasWaveform = Boolean(waveformPeaks && waveformPeaks.length > 0);
+  const hasWaveform = Boolean(waveformData && waveformData.peaks.length > 0);
 
   const selectClip = useCallback(
     (clipId: string) => {
@@ -581,55 +612,204 @@ export default function DraftTimelineEditor({
 
   useEffect(() => {
     if (!sourceVideoUrl) {
-      setWaveformPeaks(null);
+      waveformRequestKeyRef.current = "";
+      setWaveformData(null);
+      setIsWaveformLoading(false);
+    }
+  }, [sourceVideoUrl]);
+
+  useEffect(() => {
+    if (!sourceVideoUrl || !showWaveform) {
       setIsWaveformLoading(false);
       return;
     }
 
-    const waveformUrl = buildWaveformUrlFromSourceVideoUrl(sourceVideoUrl, TIMELINE_WAVEFORM_REQUEST_BINS);
-    if (!waveformUrl) {
-      setWaveformPeaks(null);
-      setIsWaveformLoading(false);
+    const scroller = timelineScrollerRef.current;
+    const track = trackRef.current;
+    if (!scroller || !track) {
       return;
     }
 
-    const abortController = new AbortController();
     let active = true;
-    setIsWaveformLoading(true);
+    let debounceTimerId: number | null = null;
+    let abortController: AbortController | null = null;
+    let requestToken = 0;
 
-    void fetch(waveformUrl, { signal: abortController.signal, cache: "no-store" })
-      .then(async (response) => {
+    const fetchWaveformForViewport = async () => {
+      const viewportWidth = Math.max(1, scroller.clientWidth || track.clientWidth || 1);
+      const trackWidth = Math.max(1, track.clientWidth || viewportWidth);
+      const dpr = window.devicePixelRatio || 1;
+      const requestedBins = clamp(
+        Math.round(viewportWidth * dpr * 1.6),
+        TIMELINE_WAVEFORM_MIN_REQUEST_BINS,
+        TIMELINE_WAVEFORM_MAX_REQUEST_BINS,
+      );
+
+      let startSeconds: number | undefined;
+      let endSeconds: number | undefined;
+      if (durationSeconds > 0) {
+        const visibleStartRatio = clamp(scroller.scrollLeft / trackWidth, 0, 1);
+        const visibleEndRatio = clamp((scroller.scrollLeft + viewportWidth) / trackWidth, 0, 1);
+        const visibleStartSeconds = visibleStartRatio * durationSeconds;
+        const visibleEndSeconds = visibleEndRatio * durationSeconds;
+        const visibleDuration = Math.max(0.1, visibleEndSeconds - visibleStartSeconds);
+        const overscan = visibleDuration * TIMELINE_WAVEFORM_OVERSCAN_MULTIPLIER;
+        startSeconds = Math.max(0, visibleStartSeconds - overscan);
+        endSeconds = Math.min(durationSeconds, visibleEndSeconds + overscan);
+      }
+
+      const waveformUrl = buildWaveformUrlFromSourceVideoUrl(
+        sourceVideoUrl,
+        requestedBins,
+        startSeconds,
+        endSeconds,
+      );
+      if (!waveformUrl) {
+        setIsWaveformLoading(false);
+        return;
+      }
+
+      const requestKey = [
+        sourceVideoUrl,
+        requestedBins,
+        typeof startSeconds === "number" ? startSeconds.toFixed(2) : "full",
+        typeof endSeconds === "number" ? endSeconds.toFixed(2) : "full",
+      ].join("|");
+      if (requestKey === waveformRequestKeyRef.current) {
+        return;
+      }
+      waveformRequestKeyRef.current = requestKey;
+
+      if (abortController) {
+        abortController.abort();
+      }
+      abortController = new AbortController();
+      const activeRequestToken = ++requestToken;
+      setIsWaveformLoading(true);
+
+      try {
+        const response = await fetch(waveformUrl, {
+          signal: abortController.signal,
+          cache: "no-store",
+        });
         if (!response.ok) {
           throw new Error(`Waveform request failed (${response.status})`);
         }
-        return (await response.json()) as TimelineWaveformPayload;
-      })
-      .then((payload) => {
-        if (!active) return;
+
+        const payload = (await response.json()) as TimelineWaveformPayload;
         const normalizedPeaks = Array.isArray(payload.peaks)
           ? payload.peaks
               .map((value) => (typeof value === "number" ? value : Number(value)))
               .filter((value) => Number.isFinite(value))
               .map((value) => clamp(value, 0, 1))
           : [];
-        setWaveformPeaks(normalizedPeaks.length > 0 ? normalizedPeaks : null);
-      })
-      .catch((waveformError) => {
-        if ((waveformError as { name?: string })?.name === "AbortError") return;
+
+        const payloadDuration =
+          typeof payload.duration_seconds === "number" ? payload.duration_seconds : Number(payload.duration_seconds);
+        const resolvedDuration =
+          Number.isFinite(payloadDuration) && payloadDuration > 0
+            ? payloadDuration
+            : durationSeconds > 0
+              ? durationSeconds
+              : 0;
+
+        const payloadRangeStart =
+          typeof payload.range_start_seconds === "number"
+            ? payload.range_start_seconds
+            : Number(payload.range_start_seconds);
+        const payloadRangeEnd =
+          typeof payload.range_end_seconds === "number"
+            ? payload.range_end_seconds
+            : Number(payload.range_end_seconds);
+        const fallbackRangeStart = typeof startSeconds === "number" ? startSeconds : 0;
+        const fallbackRangeEnd =
+          typeof endSeconds === "number"
+            ? endSeconds
+            : resolvedDuration > 0
+              ? resolvedDuration
+              : fallbackRangeStart + 1;
+
+        const rangeStart = clamp(
+          Number.isFinite(payloadRangeStart) ? payloadRangeStart : fallbackRangeStart,
+          0,
+          resolvedDuration > 0 ? resolvedDuration : fallbackRangeEnd,
+        );
+        const minRangeEnd = resolvedDuration > 0 ? Math.min(resolvedDuration, rangeStart + 0.001) : rangeStart + 0.001;
+        const rangeEndCandidate = Number.isFinite(payloadRangeEnd) ? payloadRangeEnd : fallbackRangeEnd;
+        const rangeEnd =
+          resolvedDuration > 0
+            ? clamp(rangeEndCandidate, minRangeEnd, resolvedDuration)
+            : Math.max(minRangeEnd, rangeEndCandidate);
+        const payloadBins = typeof payload.bins === "number" ? payload.bins : Number(payload.bins);
+
+        if (!active || activeRequestToken !== requestToken) {
+          return;
+        }
+
+        if (normalizedPeaks.length === 0) {
+          setWaveformData(null);
+        } else {
+          setWaveformData({
+            peaks: normalizedPeaks,
+            bins: Number.isFinite(payloadBins) ? Math.max(1, Math.floor(payloadBins)) : normalizedPeaks.length,
+            durationSeconds: resolvedDuration > 0 ? resolvedDuration : rangeEnd,
+            rangeStartSeconds: rangeStart,
+            rangeEndSeconds: rangeEnd,
+          });
+        }
+      } catch (waveformError) {
+        if ((waveformError as { name?: string })?.name === "AbortError") {
+          return;
+        }
+        waveformRequestKeyRef.current = "";
         console.warn("Failed to load timeline waveform:", waveformError);
-        if (!active) return;
-        setWaveformPeaks(null);
-      })
-      .finally(() => {
-        if (!active) return;
-        setIsWaveformLoading(false);
-      });
+      } finally {
+        if (active && activeRequestToken === requestToken) {
+          setIsWaveformLoading(false);
+        }
+      }
+    };
+
+    const scheduleWaveformFetch = (immediate = false) => {
+      if (debounceTimerId !== null) {
+        window.clearTimeout(debounceTimerId);
+      }
+      debounceTimerId = window.setTimeout(
+        () => {
+          void fetchWaveformForViewport();
+        },
+        immediate ? 0 : TIMELINE_WAVEFORM_FETCH_DEBOUNCE_MS,
+      );
+    };
+
+    const handleScroll = () => {
+      scheduleWaveformFetch(false);
+    };
+
+    const resizeObserver = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => {
+          scheduleWaveformFetch(false);
+        })
+      : null;
+
+    scroller.addEventListener("scroll", handleScroll, { passive: true });
+    resizeObserver?.observe(scroller);
+    resizeObserver?.observe(track);
+
+    scheduleWaveformFetch(true);
 
     return () => {
       active = false;
-      abortController.abort();
+      if (debounceTimerId !== null) {
+        window.clearTimeout(debounceTimerId);
+      }
+      scroller.removeEventListener("scroll", handleScroll);
+      resizeObserver?.disconnect();
+      if (abortController) {
+        abortController.abort();
+      }
     };
-  }, [sourceVideoUrl]);
+  }, [durationSeconds, resolvedZoomLevel, showWaveform, sourceVideoUrl]);
 
   const drawWaveform = useCallback(() => {
     const canvas = waveformCanvasRef.current;
@@ -653,26 +833,35 @@ export default function DraftTimelineEditor({
 
     context.setTransform(1, 0, 0, 1, 0, 0);
     context.clearRect(0, 0, canvas.width, canvas.height);
-    if (!showWaveform || !hasWaveform || !waveformPeaks) return;
+    if (!showWaveform || !hasWaveform || !waveformData) return;
 
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.strokeStyle = "rgba(148,163,184,0.52)";
     context.lineWidth = 1;
     context.beginPath();
 
+    const timelineDuration = durationSeconds > 0 ? durationSeconds : waveformData.durationSeconds;
+    if (!Number.isFinite(timelineDuration) || timelineDuration <= 0) return;
+
     const midline = cssHeight / 2;
     const amplitudeRange = Math.max(3, cssHeight / 2 - 7);
-    const peakCount = waveformPeaks.length;
+    const peakCount = waveformData.peaks.length;
     const denominator = Math.max(1, peakCount - 1);
+    const rangeStartSeconds = clamp(waveformData.rangeStartSeconds, 0, timelineDuration);
+    const rangeEndSeconds = clamp(waveformData.rangeEndSeconds, rangeStartSeconds + 0.001, timelineDuration);
+    const rangeSpanSeconds = Math.max(0.001, rangeEndSeconds - rangeStartSeconds);
+    const rangeStartX = (rangeStartSeconds / timelineDuration) * cssWidth;
+    const rangeSpanX = (rangeSpanSeconds / timelineDuration) * cssWidth;
+
     for (let index = 0; index < peakCount; index += 1) {
-      const peak = waveformPeaks[index];
-      const x = (index / denominator) * cssWidth;
+      const peak = waveformData.peaks[index];
+      const x = rangeStartX + (index / denominator) * rangeSpanX;
       const amplitude = amplitudeRange * peak;
       context.moveTo(x, midline - amplitude);
       context.lineTo(x, midline + amplitude);
     }
     context.stroke();
-  }, [hasWaveform, showWaveform, waveformPeaks]);
+  }, [durationSeconds, hasWaveform, showWaveform, waveformData]);
 
   useEffect(() => {
     drawWaveform();

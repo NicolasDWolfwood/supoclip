@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 config = Config()
 WAVEFORM_MIN_BINS = 300
 WAVEFORM_MAX_BINS = 12000
+WAVEFORM_BASE_MIN_BINS = 12000
+WAVEFORM_BASE_MAX_BINS = 120000
+WAVEFORM_BASE_BINS_PER_SECOND = 4
 WAVEFORM_SAMPLE_RATE_HZ = 2000
 
 
@@ -462,12 +465,12 @@ class VideoService:
         return duration
 
     @staticmethod
-    def _waveform_cache_path(video_path: Path, bins: int) -> Path:
-        return video_path.with_suffix(f".waveform_{bins}.json")
+    def _waveform_base_cache_path(video_path: Path) -> Path:
+        return video_path.with_suffix(".waveform_base.json")
 
     @staticmethod
-    def _load_waveform_cache(video_path: Path, bins: int) -> Optional[Dict[str, Any]]:
-        cache_path = VideoService._waveform_cache_path(video_path, bins)
+    def _load_waveform_base_cache(video_path: Path) -> Optional[Dict[str, Any]]:
+        cache_path = VideoService._waveform_base_cache_path(video_path)
         if not cache_path.exists():
             return None
 
@@ -483,11 +486,18 @@ class VideoService:
             if abs(float(cache_video_mtime) - float(file_mtime)) > 1e-3:
                 return None
 
+            bins_raw = raw_payload.get("bins")
+            if not isinstance(bins_raw, int):
+                return None
+            bins = int(bins_raw)
+            if bins <= 0:
+                return None
+
             peaks_raw = raw_payload.get("peaks")
             if not isinstance(peaks_raw, list):
                 return None
             peaks = [max(0.0, min(1.0, float(value))) for value in peaks_raw if isinstance(value, (int, float))]
-            if len(peaks) != bins:
+            if len(peaks) != bins or len(peaks) == 0:
                 return None
 
             duration_seconds = raw_payload.get("duration_seconds")
@@ -504,8 +514,8 @@ class VideoService:
             return None
 
     @staticmethod
-    def _save_waveform_cache(video_path: Path, bins: int, payload: Dict[str, Any]) -> None:
-        cache_path = VideoService._waveform_cache_path(video_path, bins)
+    def _save_waveform_base_cache(video_path: Path, payload: Dict[str, Any]) -> None:
+        cache_path = VideoService._waveform_base_cache_path(video_path)
         temporary_path = cache_path.with_suffix(f"{cache_path.suffix}.tmp")
         try:
             cache_payload = {
@@ -523,6 +533,15 @@ class VideoService:
                     temporary_path.unlink()
             except Exception:
                 pass
+
+    @staticmethod
+    def _normalize_requested_bins(bins: int) -> int:
+        return max(WAVEFORM_MIN_BINS, min(WAVEFORM_MAX_BINS, int(bins)))
+
+    @staticmethod
+    def _normalize_base_bins(duration_seconds: float) -> int:
+        estimated = int(max(1.0, duration_seconds) * WAVEFORM_BASE_BINS_PER_SECOND)
+        return max(WAVEFORM_BASE_MIN_BINS, min(WAVEFORM_BASE_MAX_BINS, estimated))
 
     @staticmethod
     def _compute_waveform_peaks(video_path: Path, bins: int) -> Dict[str, Any]:
@@ -612,20 +631,97 @@ class VideoService:
         }
 
     @staticmethod
-    def _get_waveform_data_sync(video_path: Path, bins: int) -> Dict[str, Any]:
-        normalized_bins = max(WAVEFORM_MIN_BINS, min(WAVEFORM_MAX_BINS, int(bins)))
-        cached_payload = VideoService._load_waveform_cache(video_path, normalized_bins)
+    def _resample_peaks_max(peaks: List[float], target_bins: int) -> List[float]:
+        if target_bins <= 0:
+            return []
+        if not peaks:
+            return [0.0] * target_bins
+
+        source_bins = len(peaks)
+        if source_bins == target_bins:
+            return peaks
+
+        resampled: List[float] = []
+        for index in range(target_bins):
+            start_index = int((index * source_bins) / target_bins)
+            end_index = int(((index + 1) * source_bins) / target_bins)
+            if end_index <= start_index:
+                end_index = min(source_bins, start_index + 1)
+            window = peaks[start_index:end_index]
+            resampled.append(max(window) if window else peaks[min(source_bins - 1, start_index)])
+        return resampled
+
+    @staticmethod
+    def _get_waveform_base_sync(video_path: Path) -> Dict[str, Any]:
+        cached_payload = VideoService._load_waveform_base_cache(video_path)
         if cached_payload is not None:
             return cached_payload
 
-        payload = VideoService._compute_waveform_peaks(video_path, normalized_bins)
-        VideoService._save_waveform_cache(video_path, normalized_bins, payload)
+        duration_seconds = VideoService._probe_media_duration_seconds(video_path)
+        base_bins = VideoService._normalize_base_bins(duration_seconds)
+        payload = VideoService._compute_waveform_peaks(video_path, base_bins)
+        VideoService._save_waveform_base_cache(video_path, payload)
         return payload
 
     @staticmethod
-    async def get_waveform_data(video_path: Path, bins: int = 3000) -> Dict[str, Any]:
+    def _slice_waveform_window(
+        base_payload: Dict[str, Any],
+        bins: int,
+        start_seconds: Optional[float],
+        end_seconds: Optional[float],
+    ) -> Dict[str, Any]:
+        duration_seconds = float(base_payload["duration_seconds"])
+        base_peaks = list(base_payload["peaks"])
+        base_bins = max(1, len(base_peaks))
+
+        window_start = 0.0 if start_seconds is None else max(0.0, min(duration_seconds, float(start_seconds)))
+        window_end = duration_seconds if end_seconds is None else max(0.0, min(duration_seconds, float(end_seconds)))
+        if window_end <= window_start:
+            min_end = min(duration_seconds, window_start + max(1.0, duration_seconds / base_bins))
+            window_end = max(min_end, window_start)
+
+        start_ratio = 0.0 if duration_seconds <= 0 else window_start / duration_seconds
+        end_ratio = 1.0 if duration_seconds <= 0 else window_end / duration_seconds
+        start_index = max(0, min(base_bins - 1, int(math.floor(start_ratio * base_bins))))
+        end_index = max(start_index + 1, min(base_bins, int(math.ceil(end_ratio * base_bins))))
+        window_peaks = base_peaks[start_index:end_index] or [0.0]
+
+        requested_bins = VideoService._normalize_requested_bins(bins)
+        normalized_bins = min(requested_bins, max(1, len(window_peaks)))
+        peaks = VideoService._resample_peaks_max(window_peaks, normalized_bins)
+        return {
+            "duration_seconds": duration_seconds,
+            "range_start_seconds": window_start,
+            "range_end_seconds": window_end,
+            "bins": normalized_bins,
+            "peaks": peaks,
+        }
+
+    @staticmethod
+    def _get_waveform_data_sync(
+        video_path: Path,
+        bins: int,
+        start_seconds: Optional[float] = None,
+        end_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        base_payload = VideoService._get_waveform_base_sync(video_path)
+        return VideoService._slice_waveform_window(base_payload, bins, start_seconds, end_seconds)
+
+    @staticmethod
+    async def get_waveform_data(
+        video_path: Path,
+        bins: int = 3000,
+        start_seconds: Optional[float] = None,
+        end_seconds: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Build (or load cached) waveform peak data for timeline rendering."""
-        return await run_in_thread(VideoService._get_waveform_data_sync, video_path, bins)
+        return await run_in_thread(
+            VideoService._get_waveform_data_sync,
+            video_path,
+            bins,
+            start_seconds,
+            end_seconds,
+        )
 
     @staticmethod
     async def _analyze_transcript_with_retries(
