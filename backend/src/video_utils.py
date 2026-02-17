@@ -1433,6 +1433,160 @@ def _shadow_offsets(base_x: int, base_y: int, blur: int) -> List[Tuple[int, int]
     return offsets
 
 
+def _resolve_karaoke_highlight_color(base_color: str) -> str:
+    normalized = str(base_color or "").strip().upper()
+    if normalized in {"#FDE047", "#FACC15", "#FFD700", "#FFE066"}:
+        return "#FFFFFF"
+    return "#FDE047"
+
+
+def _measure_label_text(text: str, font_path: str, font_size: int) -> Tuple[int, int]:
+    if not text:
+        return (0, max(1, int(font_size)))
+    try:
+        measure_clip = TextClip(
+            text=text,
+            font=font_path,
+            font_size=font_size,
+            color="#FFFFFF",
+            stroke_width=0,
+            method="label",
+        )
+        try:
+            if measure_clip.size:
+                return (max(1, int(measure_clip.size[0])), max(1, int(measure_clip.size[1])))
+            return (max(1, int(font_size * 0.6 * len(text))), max(1, int(font_size)))
+        finally:
+            measure_clip.close()
+    except Exception:
+        return (max(1, int(font_size * 0.6 * len(text))), max(1, int(font_size)))
+
+
+def _build_styled_word_layers(
+    *,
+    text: str,
+    font_path: str,
+    font_size: int,
+    fill_color: str,
+    stroke_color: str,
+    stroke_width: int,
+    stroke_blur: float,
+    shadow_color: str,
+    shadow_opacity: float,
+    shadow_blur: int,
+    shadow_offset_x: int,
+    shadow_offset_y: int,
+    font_weight: int,
+    start: float,
+    duration: float,
+    base_x: int,
+    base_y: int,
+    max_x: int,
+    max_y: int,
+    opacity_scale: float = 1.0,
+) -> List[TextClip]:
+    if not text or duration <= 0:
+        return []
+
+    layered_clips: List[TextClip] = []
+    safe_opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
+
+    try:
+        fill_clip = TextClip(
+            text=text,
+            font=font_path,
+            font_size=font_size,
+            color=fill_color,
+            stroke_width=0,
+            method="label",
+        ).with_start(start).with_duration(duration)
+    except Exception:
+        return []
+
+    rendered_outline_width = max(0, stroke_width * 2)
+    soft_stroke_clip: Optional[TextClip] = None
+    stroke_text_clip: Optional[TextClip] = None
+    soft_stroke_opacity = 0.0
+
+    if rendered_outline_width > 0:
+        try:
+            stroke_text_clip = TextClip(
+                text=text,
+                font=font_path,
+                font_size=font_size,
+                color=stroke_color,
+                stroke_color=stroke_color,
+                stroke_width=rendered_outline_width,
+                method="label",
+            ).with_start(start).with_duration(duration)
+            if stroke_blur > 0:
+                soft_outline_expansion = max(1, int(round(stroke_blur * 2)))
+                soft_stroke_clip = TextClip(
+                    text=text,
+                    font=font_path,
+                    font_size=font_size,
+                    color=stroke_color,
+                    stroke_color=stroke_color,
+                    stroke_width=rendered_outline_width + soft_outline_expansion,
+                    method="label",
+                ).with_start(start).with_duration(duration)
+                soft_stroke_opacity = max(0.18, min(0.7, stroke_blur / 2.5))
+        except Exception:
+            stroke_text_clip = None
+            soft_stroke_clip = None
+            soft_stroke_opacity = 0.0
+
+    if shadow_opacity > 0:
+        try:
+            shadow_clip = TextClip(
+                text=text,
+                font=font_path,
+                font_size=font_size,
+                color=shadow_color,
+                stroke_color=shadow_color,
+                stroke_width=0,
+                method="label",
+            ).with_start(start).with_duration(duration)
+            offsets = _shadow_offsets(shadow_offset_x, shadow_offset_y, shadow_blur)
+            per_layer_opacity = max(0.02, min(1.0, shadow_opacity / max(1, len(offsets))))
+            for offset_x, offset_y in offsets:
+                layer_x = max(0, min(base_x + offset_x, max_x))
+                layer_y = max(0, min(base_y + offset_y, max_y))
+                layered_clips.append(
+                    shadow_clip.with_position((layer_x, layer_y)).with_opacity(
+                        per_layer_opacity * safe_opacity_scale
+                    )
+                )
+        except Exception:
+            pass
+
+    if soft_stroke_clip is not None and soft_stroke_opacity > 0:
+        layered_clips.append(
+            soft_stroke_clip.with_position((base_x, base_y)).with_opacity(soft_stroke_opacity * safe_opacity_scale)
+        )
+
+    if stroke_text_clip is not None:
+        layered_clips.append(
+            stroke_text_clip.with_position((base_x, base_y)).with_opacity(max(0.01, safe_opacity_scale))
+        )
+
+    weight_offsets: List[Tuple[int, int]] = []
+    if font_weight >= 600:
+        weight_offsets.append((1, 0))
+    if font_weight >= 800:
+        weight_offsets.extend([(0, 1), (-1, 0)])
+
+    for offset_x, offset_y in weight_offsets:
+        layer_x = max(0, min(base_x + offset_x, max_x))
+        layer_y = max(0, min(base_y + offset_y, max_y))
+        layered_clips.append(
+            fill_clip.with_position((layer_x, layer_y)).with_opacity(0.8 * safe_opacity_scale)
+        )
+
+    layered_clips.append(fill_clip.with_position((base_x, base_y)).with_opacity(max(0.01, safe_opacity_scale)))
+    return layered_clips
+
+
 def create_assemblyai_subtitles(
     video_path: Union[Path, str],
     clip_start: float,
@@ -1509,8 +1663,9 @@ def create_assemblyai_subtitles(
         return []
     relevant_words.sort(key=lambda word: (float(word.get("start", 0.0)), float(word.get("end", 0.0))))
 
-    # Group words into short subtitle segments for readability.
-    subtitle_clips = []
+    # Group words into short subtitle segments for readability, then animate
+    # each word by overlaying a timed highlight on top of a persistent base line.
+    subtitle_clips: List[TextClip] = []
     processor = VideoProcessor(style["font_family"], style["font_size"], style["font_color"])
 
     calculated_font_size = max(24, min(48, int(style["font_size"] * (video_width / 640) * 1.15)))
@@ -1522,7 +1677,6 @@ def create_assemblyai_subtitles(
     else:
         stroke_width = base_stroke_width
     stroke_blur = float(style["stroke_blur"])
-    interline = max(0, int(round((style["line_height"] - 1.0) * final_font_size)))
     letter_spacing = int(style["letter_spacing"])
     text_transform = str(style["text_transform"])
     text_align = str(style["text_align"])
@@ -1532,193 +1686,112 @@ def create_assemblyai_subtitles(
     shadow_offset_x = int(style["shadow_offset_x"])
     shadow_offset_y = int(style["shadow_offset_y"])
     font_weight = int(style["font_weight"])
+    highlight_color = _resolve_karaoke_highlight_color(str(style["font_color"]))
 
     words_per_subtitle = 3
     for i in range(0, len(relevant_words), words_per_subtitle):
         word_group = relevant_words[i:i + words_per_subtitle]
-
         if not word_group:
             continue
 
-        # Calculate segment timing
-        segment_start = word_group[0]["start"]
-        segment_end = word_group[-1]["end"]
+        segment_start = float(word_group[0]["start"])
+        segment_end = float(word_group[-1]["end"])
         segment_duration = segment_end - segment_start
-
-        if segment_duration < 0.1:  # Skip very short segments
+        if segment_duration < 0.1:
             continue
 
-        text = " ".join(word["text"] for word in word_group)
-        text = _apply_text_transform(text, text_transform)
-        text = _apply_letter_spacing(text, letter_spacing)
+        display_words: List[str] = []
+        word_timings: List[Tuple[float, float]] = []
+        for word in word_group:
+            transformed = _apply_text_transform(str(word["text"]), text_transform)
+            transformed = _apply_letter_spacing(transformed, letter_spacing)
+            if not transformed.strip():
+                continue
+            word_start = float(word["start"])
+            word_end = float(word["end"])
+            if word_end <= word_start:
+                continue
+            display_words.append(transformed)
+            word_timings.append((word_start, word_end))
 
-        try:
-            # Reserve a consistent subtitle box to avoid glyph clipping that can
-            # happen with tight "label" bounds on some fonts.
-            subtitle_box_width = max(240, int(video_width * 0.92))
-            subtitle_box_height = max(62, int(final_font_size * 2.8))
-
-            base_text_clip_kwargs = {
-                "text": text,
-                "font": processor.font_path,
-                "font_size": final_font_size,
-                "text_align": text_align,
-                "interline": interline,
-            }
-            fill_text_clip_kwargs = {
-                **base_text_clip_kwargs,
-                "color": style["font_color"],
-                "stroke_width": 0,
-            }
-            # MoviePy stroke is centered on glyph edges; drawing stroke in a lower
-            # layer and fill above it produces an outside-only visual outline.
-            rendered_outline_width = stroke_width * 2 if stroke_width > 0 else 0
-            stroke_text_clip_kwargs: Optional[Dict[str, Any]]
-            soft_stroke_text_clip_kwargs: Optional[Dict[str, Any]]
-            soft_stroke_opacity = 0.0
-            if rendered_outline_width > 0:
-                stroke_text_clip_kwargs = {
-                    **base_text_clip_kwargs,
-                    "color": style["stroke_color"],
-                    "stroke_color": style["stroke_color"],
-                    "stroke_width": rendered_outline_width,
-                }
-                if stroke_blur > 0:
-                    soft_outline_expansion = max(1, int(round(stroke_blur * 2)))
-                    soft_stroke_text_clip_kwargs = {
-                        **base_text_clip_kwargs,
-                        "color": style["stroke_color"],
-                        "stroke_color": style["stroke_color"],
-                        "stroke_width": rendered_outline_width + soft_outline_expansion,
-                    }
-                    soft_stroke_opacity = max(0.18, min(0.7, stroke_blur / 2.5))
-                else:
-                    soft_stroke_text_clip_kwargs = None
-            else:
-                stroke_text_clip_kwargs = None
-                soft_stroke_text_clip_kwargs = None
-
-            render_method = "caption"
-            try:
-                fill_text_clip = TextClip(
-                    **fill_text_clip_kwargs,
-                    method="caption",
-                    size=(subtitle_box_width, subtitle_box_height),
-                )
-                soft_stroke_clip = (
-                    TextClip(
-                        **soft_stroke_text_clip_kwargs,
-                        method="caption",
-                        size=(subtitle_box_width, subtitle_box_height),
-                    )
-                    if soft_stroke_text_clip_kwargs
-                    else None
-                )
-                stroke_text_clip = (
-                    TextClip(
-                        **stroke_text_clip_kwargs,
-                        method="caption",
-                        size=(subtitle_box_width, subtitle_box_height),
-                    )
-                    if stroke_text_clip_kwargs
-                    else None
-                )
-            except Exception:
-                # Fallback when caption rendering is unavailable in the runtime.
-                render_method = "label"
-                fill_text_clip = TextClip(**fill_text_clip_kwargs, method="label")
-                soft_stroke_clip = (
-                    TextClip(**soft_stroke_text_clip_kwargs, method="label")
-                    if soft_stroke_text_clip_kwargs
-                    else None
-                )
-                stroke_text_clip = (
-                    TextClip(**stroke_text_clip_kwargs, method="label")
-                    if stroke_text_clip_kwargs
-                    else None
-                )
-
-            fill_text_clip = fill_text_clip.with_duration(segment_duration).with_start(segment_start)
-            if soft_stroke_clip is not None:
-                soft_stroke_clip = soft_stroke_clip.with_duration(segment_duration).with_start(segment_start)
-            if stroke_text_clip is not None:
-                stroke_text_clip = stroke_text_clip.with_duration(segment_duration).with_start(segment_start)
-
-            text_heights = [subtitle_box_height]
-            if fill_text_clip.size:
-                text_heights.append(fill_text_clip.size[1])
-            if soft_stroke_clip is not None and soft_stroke_clip.size:
-                text_heights.append(soft_stroke_clip.size[1])
-            if stroke_text_clip is not None and stroke_text_clip.size:
-                text_heights.append(stroke_text_clip.size[1])
-            text_height = max(text_heights)
-            base_y = int(video_height * 0.70 - text_height // 2)
-            max_y = max(0, video_height - text_height)
-            base_y = max(0, min(base_y, max_y))
-
-            max_x = max(0, video_width - subtitle_box_width)
-            horizontal_padding = int(video_width * 0.04)
-            if text_align == "left":
-                base_x = max(0, min(horizontal_padding, max_x))
-            elif text_align == "right":
-                base_x = max(0, min(video_width - subtitle_box_width - horizontal_padding, max_x))
-            else:
-                base_x = max(0, min((video_width - subtitle_box_width) // 2, max_x))
-
-            layered_clips: List[TextClip] = []
-
-            if shadow_opacity > 0:
-                try:
-                    shadow_kwargs = {
-                        "text": text,
-                        "font": processor.font_path,
-                        "font_size": final_font_size,
-                        "color": shadow_color,
-                        "stroke_color": shadow_color,
-                        "stroke_width": 0,
-                        "method": render_method,
-                        "text_align": text_align,
-                        "interline": interline,
-                    }
-                    if render_method == "caption":
-                        shadow_kwargs["size"] = (subtitle_box_width, subtitle_box_height)
-                    shadow_clip = TextClip(**shadow_kwargs).with_duration(segment_duration).with_start(segment_start)
-
-                    offsets = _shadow_offsets(shadow_offset_x, shadow_offset_y, shadow_blur)
-                    per_layer_opacity = max(0.02, min(1.0, shadow_opacity / max(1, len(offsets))))
-                    for offset_x, offset_y in offsets:
-                        layer_x = max(0, min(base_x + offset_x, max_x))
-                        layer_y = max(0, min(base_y + offset_y, max_y))
-                        layered_clips.append(
-                            shadow_clip.with_position((layer_x, layer_y)).with_opacity(per_layer_opacity)
-                        )
-                except Exception as shadow_error:
-                    logger.warning(f"Failed to create subtitle shadow for '{text}': {shadow_error}")
-
-            if soft_stroke_clip is not None and soft_stroke_opacity > 0:
-                layered_clips.append(
-                    soft_stroke_clip.with_position((base_x, base_y)).with_opacity(soft_stroke_opacity)
-                )
-
-            if stroke_text_clip is not None:
-                layered_clips.append(stroke_text_clip.with_position((base_x, base_y)))
-
-            weight_offsets: List[Tuple[int, int]] = []
-            if font_weight >= 600:
-                weight_offsets.append((1, 0))
-            if font_weight >= 800:
-                weight_offsets.extend([(0, 1), (-1, 0)])
-            for offset_x, offset_y in weight_offsets:
-                layer_x = max(0, min(base_x + offset_x, max_x))
-                layer_y = max(0, min(base_y + offset_y, max_y))
-                layered_clips.append(fill_text_clip.with_position((layer_x, layer_y)).with_opacity(0.8))
-
-            layered_clips.append(fill_text_clip.with_position((base_x, base_y)))
-            subtitle_clips.extend(layered_clips)
-
-        except Exception as e:
-            logger.warning(f"Failed to create subtitle for '{text}': {e}")
+        if not display_words:
             continue
+
+        space_width, _ = _measure_label_text(" ", processor.font_path, final_font_size)
+        space_width = max(1, space_width)
+        word_sizes = [_measure_label_text(word_text, processor.font_path, final_font_size) for word_text in display_words]
+        word_widths = [size[0] for size in word_sizes]
+        word_heights = [size[1] for size in word_sizes]
+        total_width = sum(word_widths) + (space_width * max(0, len(display_words) - 1))
+        text_height = max([final_font_size] + word_heights)
+
+        horizontal_padding = int(video_width * 0.04)
+        if text_align == "left":
+            line_start_x = horizontal_padding
+        elif text_align == "right":
+            line_start_x = video_width - horizontal_padding - total_width
+        else:
+            line_start_x = (video_width - total_width) // 2
+        max_line_start = max(0, video_width - total_width)
+        line_start_x = max(0, min(int(line_start_x), max_line_start))
+
+        base_y = int(video_height * 0.70 - text_height // 2)
+        max_y = max(0, video_height - text_height)
+        base_y = max(0, min(base_y, max_y))
+
+        current_x = line_start_x
+        for word_text, (word_start, word_end), word_width in zip(display_words, word_timings, word_widths):
+            word_max_x = max(0, video_width - max(1, word_width))
+            base_layers = _build_styled_word_layers(
+                text=word_text,
+                font_path=processor.font_path,
+                font_size=final_font_size,
+                fill_color=str(style["font_color"]),
+                stroke_color=str(style["stroke_color"]),
+                stroke_width=stroke_width,
+                stroke_blur=stroke_blur,
+                shadow_color=shadow_color,
+                shadow_opacity=shadow_opacity,
+                shadow_blur=shadow_blur,
+                shadow_offset_x=shadow_offset_x,
+                shadow_offset_y=shadow_offset_y,
+                font_weight=font_weight,
+                start=segment_start,
+                duration=segment_duration,
+                base_x=current_x,
+                base_y=base_y,
+                max_x=word_max_x,
+                max_y=max_y,
+                opacity_scale=0.52,
+            )
+            subtitle_clips.extend(base_layers)
+
+            highlight_duration = max(0.01, word_end - word_start)
+            highlight_layers = _build_styled_word_layers(
+                text=word_text,
+                font_path=processor.font_path,
+                font_size=final_font_size,
+                fill_color=highlight_color,
+                stroke_color=str(style["stroke_color"]),
+                stroke_width=stroke_width,
+                stroke_blur=stroke_blur,
+                shadow_color=shadow_color,
+                shadow_opacity=shadow_opacity,
+                shadow_blur=shadow_blur,
+                shadow_offset_x=shadow_offset_x,
+                shadow_offset_y=shadow_offset_y,
+                font_weight=font_weight,
+                start=word_start,
+                duration=highlight_duration,
+                base_x=current_x,
+                base_y=base_y,
+                max_x=word_max_x,
+                max_y=max_y,
+                opacity_scale=1.0,
+            )
+            subtitle_clips.extend(highlight_layers)
+
+            current_x += word_width + space_width
 
     logger.info(f"Created {len(subtitle_clips)} subtitle elements from cached transcript data")
     return subtitle_clips
