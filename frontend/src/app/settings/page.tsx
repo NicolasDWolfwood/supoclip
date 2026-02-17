@@ -80,6 +80,10 @@ function SettingsPageContent() {
   const [assemblyApiKey, setAssemblyApiKey] = useState("");
   const [hasSavedAssemblyKey, setHasSavedAssemblyKey] = useState(false);
   const [hasAssemblyEnvFallback, setHasAssemblyEnvFallback] = useState(false);
+  const [assemblyMaxDurationSeconds, setAssemblyMaxDurationSeconds] = useState(10 * 60 * 60);
+  const [assemblyMaxLocalUploadSizeBytes, setAssemblyMaxLocalUploadSizeBytes] = useState(
+    Math.floor(2.2 * 1024 * 1024 * 1024),
+  );
   const [workerTimeoutCapSeconds, setWorkerTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
   const [isSavingAssemblyKey, setIsSavingAssemblyKey] = useState(false);
   const [assemblyKeyStatus, setAssemblyKeyStatus] = useState<string | null>(null);
@@ -824,6 +828,15 @@ function SettingsPageContent() {
         const data = await response.json();
         setHasSavedAssemblyKey(Boolean(data.has_assembly_key));
         setHasAssemblyEnvFallback(Boolean(data.has_env_fallback));
+        if (typeof data.assemblyai_max_duration_seconds === "number" && Number.isFinite(data.assemblyai_max_duration_seconds)) {
+          setAssemblyMaxDurationSeconds(Math.max(1, Math.round(data.assemblyai_max_duration_seconds)));
+        }
+        if (
+          typeof data.assemblyai_max_local_upload_size_bytes === "number" &&
+          Number.isFinite(data.assemblyai_max_local_upload_size_bytes)
+        ) {
+          setAssemblyMaxLocalUploadSizeBytes(Math.max(1, Math.round(data.assemblyai_max_local_upload_size_bytes)));
+        }
         const cap =
           typeof data.worker_timeout_cap_seconds === "number" && Number.isFinite(data.worker_timeout_cap_seconds)
             ? Math.max(300, Math.round(data.worker_timeout_cap_seconds))
@@ -1118,6 +1131,8 @@ function SettingsPageContent() {
                 assemblyApiKey={assemblyApiKey}
                 hasSavedAssemblyKey={hasSavedAssemblyKey}
                 hasAssemblyEnvFallback={hasAssemblyEnvFallback}
+                assemblyMaxDurationSeconds={assemblyMaxDurationSeconds}
+                assemblyMaxLocalUploadSizeBytes={assemblyMaxLocalUploadSizeBytes}
                 assemblyKeyStatus={assemblyKeyStatus}
                 assemblyKeyError={assemblyKeyError}
                 onTranscriptionProviderChange={(provider) => {

@@ -120,7 +120,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `WHISPER_CHUNKING_ENABLED` | `true` | Enable chunked local Whisper transcription for long videos |
 | `WHISPER_CHUNK_DURATION_SECONDS` | `1200` | Chunk duration in seconds for local Whisper (default 20 minutes) |
 | `WHISPER_CHUNK_OVERLAP_SECONDS` | `8` | Overlap in seconds between chunks for boundary continuity |
-| `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API) |
+| `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API; auto-falls back to local if media exceeds AssemblyAI limits) |
 | `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
 | `MEDIAPIPE_FACE_MODEL_PATH` | `./backend/models/blaze_face_short_range.tflite` | Face detector model path for face-aware crop (Docker default resolves to `/app/models/...`) |
 | `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD` | `true` | Auto-download face model when missing |
@@ -149,6 +149,11 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `ZAI_API_KEY` | - | For z.ai GLM models (backend calls z.ai Coding API endpoint) |
 
 Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
+
+AssemblyAI limits enforced by backend:
+- max audio duration: 10 hours
+- max local file upload to AssemblyAI: ~2.2 GiB
+- when exceeded, task transcription automatically switches to local Whisper
 
 ## Supported AI Models
 

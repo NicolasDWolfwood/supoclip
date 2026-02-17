@@ -163,6 +163,9 @@ export default function Home() {
   const [whisperChunkOverlapSeconds, setWhisperChunkOverlapSeconds] = useState(DEFAULT_WHISPER_CHUNK_OVERLAP_SECONDS);
   const [taskTimeoutSeconds, setTaskTimeoutSeconds] = useState(DEFAULT_TASK_TIMEOUT_SECONDS);
   const [taskTimeoutCapSeconds, setTaskTimeoutCapSeconds] = useState(MAX_TASK_TIMEOUT_SECONDS);
+  const [assemblyMaxLocalUploadSizeBytes, setAssemblyMaxLocalUploadSizeBytes] = useState(
+    Math.floor(2.2 * 1024 * 1024 * 1024),
+  );
   const [aiProvider, setAiProvider] = useState<AiProvider>("openai");
   const [aiModel, setAiModel] = useState<string>(DEFAULT_AI_MODELS.openai);
 
@@ -334,6 +337,12 @@ export default function Home() {
         );
         setTaskTimeoutCapSeconds(cap);
         setTaskTimeoutSeconds((prev) => normalizeTaskTimeoutSecondsOnForm(prev, cap));
+        if (
+          typeof data.assemblyai_max_local_upload_size_bytes === "number" &&
+          Number.isFinite(data.assemblyai_max_local_upload_size_bytes)
+        ) {
+          setAssemblyMaxLocalUploadSizeBytes(Math.max(1, Math.round(data.assemblyai_max_local_upload_size_bytes)));
+        }
       } catch (limitError) {
         console.error("Failed to load transcription limits:", limitError);
       }
@@ -539,6 +548,16 @@ export default function Home() {
         normalizedChunkDuration,
       );
       const normalizedTaskTimeoutSeconds = normalizeTaskTimeoutSecondsOnForm(taskTimeoutSeconds, taskTimeoutCapSeconds);
+      let effectiveTranscriptionProvider: "local" | "assemblyai" = transcriptionProvider;
+      if (
+        transcriptionProvider === "assemblyai" &&
+        sourceType === "upload" &&
+        fileRef.current &&
+        fileRef.current.size > assemblyMaxLocalUploadSizeBytes
+      ) {
+        effectiveTranscriptionProvider = "local";
+        setStatusMessage("Uploaded file exceeds AssemblyAI size limit. Switching to local Whisper.");
+      }
 
       const startResponse = await fetch(`${apiUrl}/tasks/`, {
         method: 'POST',
@@ -574,7 +593,7 @@ export default function Home() {
             transitions_enabled: transitionsEnabled,
           },
           transcription_options: {
-            provider: transcriptionProvider,
+            provider: effectiveTranscriptionProvider,
             whisper_chunking_enabled: whisperChunkingEnabled,
             whisper_chunk_duration_seconds: normalizedChunkDuration,
             whisper_chunk_overlap_seconds: normalizedChunkOverlap,

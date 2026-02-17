@@ -19,6 +19,11 @@ from ...workers.progress import ProgressTracker
 from ...config import Config
 from ...subtitle_style import DEFAULT_SUBTITLE_STYLE, normalize_subtitle_style
 from ...task_subtitle_style import build_normalized_subtitle_style_for_task
+from ...transcription_limits import (
+    ASSEMBLYAI_MAX_DURATION_SECONDS,
+    ASSEMBLYAI_MAX_LOCAL_UPLOAD_SIZE_BYTES,
+    ASSEMBLYAI_MAX_REMOTE_FILE_SIZE_BYTES,
+)
 import redis.asyncio as redis
 
 logger = logging.getLogger(__name__)
@@ -312,6 +317,10 @@ async def get_transcription_settings(request: Request, db: AsyncSession = Depend
             "provider_options": sorted(SUPPORTED_TRANSCRIPTION_PROVIDERS),
             "has_assembly_key": bool(settings.get("has_assembly_key")),
             "has_env_fallback": bool((config.assembly_ai_api_key or "").strip()),
+            "assemblyai_max_duration_seconds": ASSEMBLYAI_MAX_DURATION_SECONDS,
+            "assemblyai_max_local_upload_size_bytes": ASSEMBLYAI_MAX_LOCAL_UPLOAD_SIZE_BYTES,
+            "assemblyai_max_remote_file_size_bytes": ASSEMBLYAI_MAX_REMOTE_FILE_SIZE_BYTES,
+            "assemblyai_limit_behavior": "fallback_to_local",
             "worker_timeout_cap_seconds": int(getattr(config, "worker_job_timeout_seconds", 21600) or 21600),
             "min_task_timeout_seconds": MIN_TASK_TIMEOUT_SECONDS,
             "max_task_timeout_seconds": MAX_TASK_TIMEOUT_SECONDS,

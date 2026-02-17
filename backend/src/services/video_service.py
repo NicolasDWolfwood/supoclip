@@ -25,6 +25,10 @@ from ..video_utils import (
 )
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import Config
+from ..transcription_limits import (
+    ASSEMBLYAI_MAX_DURATION_SECONDS,
+    ASSEMBLYAI_MAX_LOCAL_UPLOAD_SIZE_BYTES,
+)
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -465,6 +469,76 @@ class VideoService:
         return duration
 
     @staticmethod
+    def _resolve_transcription_provider_for_media(
+        requested_provider: str,
+        video_path: Path,
+    ) -> Dict[str, Any]:
+        normalized_requested = (requested_provider or "local").strip().lower()
+        if normalized_requested not in {"local", "assemblyai"}:
+            logger.warning(
+                "Unknown transcription provider '%s' for media preflight; defaulting to local",
+                normalized_requested,
+            )
+            normalized_requested = "local"
+
+        if normalized_requested != "assemblyai":
+            return {
+                "requested_provider": normalized_requested,
+                "effective_provider": normalized_requested,
+                "fallback_applied": False,
+            }
+
+        file_size_bytes = int(video_path.stat().st_size)
+        duration_seconds: Optional[float] = None
+        duration_probe_error: Optional[str] = None
+        try:
+            duration_seconds = VideoService._probe_media_duration_seconds(video_path)
+        except Exception as exc:
+            duration_probe_error = str(exc)
+            logger.warning(
+                "Failed to probe media duration for AssemblyAI preflight (%s): %s",
+                video_path.name,
+                exc,
+            )
+
+        size_exceeded = file_size_bytes > ASSEMBLYAI_MAX_LOCAL_UPLOAD_SIZE_BYTES
+        duration_exceeded = (
+            duration_seconds is not None and duration_seconds > ASSEMBLYAI_MAX_DURATION_SECONDS
+        )
+        fallback_applied = bool(size_exceeded or duration_exceeded)
+        effective_provider = "local" if fallback_applied else "assemblyai"
+
+        limit_messages: List[str] = []
+        if size_exceeded:
+            limit_messages.append(
+                "file size exceeds AssemblyAI local upload limit "
+                f"({file_size_bytes}B > {ASSEMBLYAI_MAX_LOCAL_UPLOAD_SIZE_BYTES}B)"
+            )
+        if duration_exceeded:
+            limit_messages.append(
+                "duration exceeds AssemblyAI limit "
+                f"({duration_seconds:.1f}s > {ASSEMBLYAI_MAX_DURATION_SECONDS}s)"
+            )
+
+        reason = "; ".join(limit_messages) if limit_messages else None
+        if fallback_applied:
+            logger.info(
+                "AssemblyAI preflight fallback for %s: %s; using local Whisper",
+                video_path.name,
+                reason,
+            )
+
+        return {
+            "requested_provider": normalized_requested,
+            "effective_provider": effective_provider,
+            "fallback_applied": fallback_applied,
+            "reason": reason,
+            "file_size_bytes": file_size_bytes,
+            "duration_seconds": duration_seconds,
+            "duration_probe_error": duration_probe_error,
+        }
+
+    @staticmethod
     def _waveform_base_cache_path(video_path: Path) -> Path:
         return video_path.with_suffix(".waveform_base.json")
 
@@ -824,22 +898,53 @@ class VideoService:
         )
         await ensure_not_cancelled()
 
-        if progress_callback:
+        provider_resolution = await run_in_thread(
+            VideoService._resolve_transcription_provider_for_media,
+            transcription_provider,
+            video_path,
+        )
+        effective_transcription_provider = str(
+            provider_resolution.get("effective_provider") or "local"
+        )
+        requested_transcription_provider = str(
+            provider_resolution.get("requested_provider") or transcription_provider or "local"
+        )
+
+        if progress_callback and provider_resolution.get("fallback_applied"):
             await progress_callback(
                 30,
-                f"Generating transcript ({transcription_provider})...",
+                "AssemblyAI limits exceeded, switching to local Whisper transcription.",
                 {
                     "stage": "transcript",
                     "stage_progress": 0,
                     "overall_progress": 30,
-                    "transcription_provider": transcription_provider,
+                    "transcription_provider": effective_transcription_provider,
+                    "requested_transcription_provider": requested_transcription_provider,
+                    "provider_fallback": True,
+                    "provider_fallback_reason": provider_resolution.get("reason"),
+                    "file_size_bytes": provider_resolution.get("file_size_bytes"),
+                    "duration_seconds": provider_resolution.get("duration_seconds"),
+                },
+            )
+
+        if progress_callback:
+            await progress_callback(
+                30,
+                f"Generating transcript ({effective_transcription_provider})...",
+                {
+                    "stage": "transcript",
+                    "stage_progress": 0,
+                    "overall_progress": 30,
+                    "transcription_provider": effective_transcription_provider,
+                    "requested_transcription_provider": requested_transcription_provider,
+                    "provider_fallback": bool(provider_resolution.get("fallback_applied")),
                 },
             )
 
         transcript = await VideoService.generate_transcript_with_progress(
             video_path,
             progress_callback=progress_callback,
-            transcription_provider=transcription_provider,
+            transcription_provider=effective_transcription_provider,
             assembly_api_key=assembly_api_key,
             whisper_chunking_enabled=(
                 transcription_options.get("whisper_chunking_enabled")
@@ -907,6 +1012,9 @@ class VideoService:
             "summary": relevant_parts.summary if relevant_parts else None,
             "key_topics": relevant_parts.key_topics if relevant_parts else None,
             "analysis_diagnostics": relevant_parts.diagnostics if relevant_parts else None,
+            "requested_transcription_provider": requested_transcription_provider,
+            "effective_transcription_provider": effective_transcription_provider,
+            "transcription_provider_resolution": provider_resolution,
         }
 
     @staticmethod

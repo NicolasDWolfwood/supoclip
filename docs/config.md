@@ -6,7 +6,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 
 | Variable | Required | Default | Used By | Notes |
 |---|---|---|---|---|
-| `TRANSCRIPTION_PROVIDER` | No | `local` | backend, worker | Transcription backend: `local` or `assemblyai`. |
+| `TRANSCRIPTION_PROVIDER` | No | `local` | backend, worker | Transcription backend: `local` or `assemblyai`. When `assemblyai` is requested but media exceeds AssemblyAI limits (10h duration or local upload >2.2 GiB), backend falls back to `local`. |
 | `ASSEMBLY_AI_API_KEY` | Conditional | - | backend, worker | Required when `TRANSCRIPTION_PROVIDER=assemblyai`. |
 | `MEDIAPIPE_FACE_MODEL_PATH` | No | `backend/models/blaze_face_short_range.tflite` (local), `/app/models/blaze_face_short_range.tflite` (Docker) | backend, worker | File path for MediaPipe Tasks face detector model used for face-aware crop. |
 | `MEDIAPIPE_FACE_MODEL_URL` | No | Google MediaPipe model URL | backend, worker | Download URL used when model file is missing and auto-download is enabled. |

@@ -61,6 +61,7 @@ Backend compatibility behavior:
   - `WHISPER_CHUNK_DURATION_SECONDS`
   - `WHISPER_CHUNK_OVERLAP_SECONDS`
 - transcription provider var: `TRANSCRIPTION_PROVIDER` (`local` default, `assemblyai` optional)
+  - if AssemblyAI limits are exceeded (10h duration or local upload >2.2 GiB), backend falls back to local Whisper
 - worker timeout var: `WORKER_JOB_TIMEOUT_SECONDS` (increase for multi-hour jobs)
 - MediaPipe Tasks face model vars:
   - `MEDIAPIPE_FACE_MODEL_PATH`

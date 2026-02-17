@@ -17,6 +17,8 @@ interface SettingsSectionTranscriptionProps {
   assemblyApiKey: string;
   hasSavedAssemblyKey: boolean;
   hasAssemblyEnvFallback: boolean;
+  assemblyMaxDurationSeconds: number;
+  assemblyMaxLocalUploadSizeBytes: number;
   assemblyKeyStatus: string | null;
   assemblyKeyError: string | null;
   onTranscriptionProviderChange: (provider: TranscriptionProvider) => void;
@@ -41,6 +43,8 @@ export function SettingsSectionTranscription({
   assemblyApiKey,
   hasSavedAssemblyKey,
   hasAssemblyEnvFallback,
+  assemblyMaxDurationSeconds,
+  assemblyMaxLocalUploadSizeBytes,
   assemblyKeyStatus,
   assemblyKeyError,
   onTranscriptionProviderChange,
@@ -93,6 +97,20 @@ export function SettingsSectionTranscription({
       return;
     }
     onWhisperChunkOverlapSecondsChange(parsed);
+  };
+
+  const formatSizeGiB = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return "unknown";
+    }
+    return `${(bytes / (1024 ** 3)).toFixed(2)} GiB`;
+  };
+
+  const formatHours = (seconds: number): string => {
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return "unknown";
+    }
+    return `${(seconds / 3600).toFixed(1)}h`;
   };
 
   return (
@@ -250,6 +268,11 @@ export function SettingsSectionTranscription({
                     : "No key configured"}
               </span>
             </div>
+            <p className="text-xs text-amber-700">
+              AssemblyAI limits: max {formatSizeGiB(assemblyMaxLocalUploadSizeBytes)} for local file upload and{" "}
+              {formatHours(assemblyMaxDurationSeconds)} audio duration. If exceeded, tasks automatically fall back to
+              local Whisper.
+            </p>
             {assemblyKeyStatus && <p className="text-xs text-green-600">{assemblyKeyStatus}</p>}
             {assemblyKeyError && <p className="text-xs text-red-600">{assemblyKeyError}</p>}
           </div>
