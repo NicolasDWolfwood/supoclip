@@ -1043,7 +1043,7 @@ export default function DraftTimelineEditor({
                   tabIndex={disabled ? -1 : 0}
                   aria-pressed={isActive}
                   aria-label={`Clip ${displayIndex + 1}: ${formatClock(clip.startSeconds)} to ${formatClock(clip.endSeconds)}`}
-                  className={`absolute top-7 h-10 rounded-md border text-[10px] text-white outline-none transition ${
+                  className={`absolute top-10 h-8 rounded-md border text-[10px] text-white outline-none transition ${
                     clip.is_selected ? "border-blue-700 bg-blue-600/90" : "border-slate-500 bg-slate-500/90"
                   } ${isActive ? "ring-2 ring-amber-400 ring-offset-1 ring-offset-slate-900" : ""} ${draggingClipId === clip.id ? "cursor-grabbing" : "cursor-grab"}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 1.4)}%` }}
