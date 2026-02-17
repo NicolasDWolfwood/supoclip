@@ -1440,6 +1440,11 @@ def _resolve_karaoke_highlight_color(base_color: str) -> str:
     return "#FDE047"
 
 
+KARAOKE_WORD_HORIZONTAL_PADDING_PX = 12
+KARAOKE_WORD_VERTICAL_PADDING_PX = 6
+KARAOKE_TIMING_SHIFT_SECONDS = 0.55
+
+
 def _measure_label_text(text: str, font_path: str, font_size: int) -> Tuple[int, int]:
     if not text:
         return (0, max(1, int(font_size)))
@@ -1481,26 +1486,56 @@ def _build_styled_word_layers(
     duration: float,
     base_x: int,
     base_y: int,
+    box_width: int,
+    box_height: int,
     max_x: int,
     max_y: int,
     opacity_scale: float = 1.0,
 ) -> List[TextClip]:
-    if not text or duration <= 0:
+    if not text or duration <= 0 or box_width <= 0 or box_height <= 0:
         return []
 
     layered_clips: List[TextClip] = []
     safe_opacity_scale = max(0.0, min(1.0, float(opacity_scale)))
 
-    try:
-        fill_clip = TextClip(
-            text=text,
-            font=font_path,
-            font_size=font_size,
-            color=fill_color,
-            stroke_width=0,
-            method="label",
-        ).with_start(start).with_duration(duration)
-    except Exception:
+    def _make_text_clip(
+        *,
+        color: str,
+        stroke_color_value: Optional[str],
+        stroke_width_value: int,
+    ) -> Optional[TextClip]:
+        try:
+            return TextClip(
+                text=text,
+                font=font_path,
+                font_size=font_size,
+                color=color,
+                stroke_color=stroke_color_value,
+                stroke_width=stroke_width_value,
+                method="caption",
+                size=(box_width, box_height),
+                text_align="center",
+            ).with_start(start).with_duration(duration)
+        except Exception:
+            try:
+                return TextClip(
+                    text=text,
+                    font=font_path,
+                    font_size=font_size,
+                    color=color,
+                    stroke_color=stroke_color_value,
+                    stroke_width=stroke_width_value,
+                    method="label",
+                ).with_start(start).with_duration(duration)
+            except Exception:
+                return None
+
+    fill_clip = _make_text_clip(
+        color=fill_color,
+        stroke_color_value=None,
+        stroke_width_value=0,
+    )
+    if fill_clip is None:
         return []
 
     rendered_outline_width = max(0, stroke_width * 2)
@@ -1509,44 +1544,28 @@ def _build_styled_word_layers(
     soft_stroke_opacity = 0.0
 
     if rendered_outline_width > 0:
-        try:
-            stroke_text_clip = TextClip(
-                text=text,
-                font=font_path,
-                font_size=font_size,
+        stroke_text_clip = _make_text_clip(
+            color=stroke_color,
+            stroke_color_value=stroke_color,
+            stroke_width_value=rendered_outline_width,
+        )
+        if stroke_blur > 0:
+            soft_outline_expansion = max(1, int(round(stroke_blur * 2)))
+            soft_stroke_clip = _make_text_clip(
                 color=stroke_color,
-                stroke_color=stroke_color,
-                stroke_width=rendered_outline_width,
-                method="label",
-            ).with_start(start).with_duration(duration)
-            if stroke_blur > 0:
-                soft_outline_expansion = max(1, int(round(stroke_blur * 2)))
-                soft_stroke_clip = TextClip(
-                    text=text,
-                    font=font_path,
-                    font_size=font_size,
-                    color=stroke_color,
-                    stroke_color=stroke_color,
-                    stroke_width=rendered_outline_width + soft_outline_expansion,
-                    method="label",
-                ).with_start(start).with_duration(duration)
+                stroke_color_value=stroke_color,
+                stroke_width_value=rendered_outline_width + soft_outline_expansion,
+            )
+            if soft_stroke_clip is not None:
                 soft_stroke_opacity = max(0.18, min(0.7, stroke_blur / 2.5))
-        except Exception:
-            stroke_text_clip = None
-            soft_stroke_clip = None
-            soft_stroke_opacity = 0.0
 
     if shadow_opacity > 0:
-        try:
-            shadow_clip = TextClip(
-                text=text,
-                font=font_path,
-                font_size=font_size,
-                color=shadow_color,
-                stroke_color=shadow_color,
-                stroke_width=0,
-                method="label",
-            ).with_start(start).with_duration(duration)
+        shadow_clip = _make_text_clip(
+            color=shadow_color,
+            stroke_color_value=shadow_color,
+            stroke_width_value=0,
+        )
+        if shadow_clip is not None:
             offsets = _shadow_offsets(shadow_offset_x, shadow_offset_y, shadow_blur)
             per_layer_opacity = max(0.02, min(1.0, shadow_opacity / max(1, len(offsets))))
             for offset_x, offset_y in offsets:
@@ -1557,8 +1576,6 @@ def _build_styled_word_layers(
                         per_layer_opacity * safe_opacity_scale
                     )
                 )
-        except Exception:
-            pass
 
     if soft_stroke_clip is not None and soft_stroke_opacity > 0:
         layered_clips.append(
@@ -1663,6 +1680,24 @@ def create_assemblyai_subtitles(
         return []
     relevant_words.sort(key=lambda word: (float(word.get("start", 0.0)), float(word.get("end", 0.0))))
 
+    if KARAOKE_TIMING_SHIFT_SECONDS > 0:
+        shifted_words: List[Dict[str, Any]] = []
+        for word in relevant_words:
+            shifted_start = max(0.0, min(clip_duration_seconds, float(word["start"]) + KARAOKE_TIMING_SHIFT_SECONDS))
+            shifted_end = max(0.0, min(clip_duration_seconds, float(word["end"]) + KARAOKE_TIMING_SHIFT_SECONDS))
+            if shifted_end <= shifted_start:
+                continue
+            shifted_words.append(
+                {
+                    "text": word["text"],
+                    "start": shifted_start,
+                    "end": shifted_end,
+                    "confidence": float(word.get("confidence", 1.0) or 1.0),
+                }
+            )
+        if shifted_words:
+            relevant_words = shifted_words
+
     # Group words into short subtitle segments for readability, then animate
     # each word by overlaying a timed highlight on top of a persistent base line.
     subtitle_clips: List[TextClip] = []
@@ -1724,6 +1759,7 @@ def create_assemblyai_subtitles(
         word_heights = [size[1] for size in word_sizes]
         total_width = sum(word_widths) + (space_width * max(0, len(display_words) - 1))
         text_height = max([final_font_size] + word_heights)
+        line_box_height = text_height + (KARAOKE_WORD_VERTICAL_PADDING_PX * 2)
 
         horizontal_padding = int(video_width * 0.04)
         if text_align == "left":
@@ -1735,13 +1771,18 @@ def create_assemblyai_subtitles(
         max_line_start = max(0, video_width - total_width)
         line_start_x = max(0, min(int(line_start_x), max_line_start))
 
-        base_y = int(video_height * 0.70 - text_height // 2)
-        max_y = max(0, video_height - text_height)
+        base_y = int(video_height * 0.70 - line_box_height // 2)
+        max_y = max(0, video_height - line_box_height)
         base_y = max(0, min(base_y, max_y))
 
         current_x = line_start_x
-        for word_text, (word_start, word_end), word_width in zip(display_words, word_timings, word_widths):
-            word_max_x = max(0, video_width - max(1, word_width))
+        for word_index, (word_text, (word_start, word_end), word_width) in enumerate(
+            zip(display_words, word_timings, word_widths)
+        ):
+            word_box_width = max(1, word_width + (KARAOKE_WORD_HORIZONTAL_PADDING_PX * 2))
+            word_box_x = current_x - KARAOKE_WORD_HORIZONTAL_PADDING_PX
+            word_box_max_x = max(0, video_width - word_box_width)
+            word_box_x = max(0, min(word_box_x, word_box_max_x))
             base_layers = _build_styled_word_layers(
                 text=word_text,
                 font_path=processor.font_path,
@@ -1758,15 +1799,22 @@ def create_assemblyai_subtitles(
                 font_weight=font_weight,
                 start=segment_start,
                 duration=segment_duration,
-                base_x=current_x,
+                base_x=word_box_x,
                 base_y=base_y,
-                max_x=word_max_x,
+                box_width=word_box_width,
+                box_height=line_box_height,
+                max_x=word_box_max_x,
                 max_y=max_y,
                 opacity_scale=0.52,
             )
             subtitle_clips.extend(base_layers)
 
-            highlight_duration = max(0.01, word_end - word_start)
+            if word_index < len(word_timings) - 1:
+                next_word_start = float(word_timings[word_index + 1][0])
+                highlight_end = max(word_end, next_word_start)
+            else:
+                highlight_end = max(word_end, segment_end)
+            highlight_duration = max(0.01, highlight_end - word_start)
             highlight_layers = _build_styled_word_layers(
                 text=word_text,
                 font_path=processor.font_path,
@@ -1783,9 +1831,11 @@ def create_assemblyai_subtitles(
                 font_weight=font_weight,
                 start=word_start,
                 duration=highlight_duration,
-                base_x=current_x,
+                base_x=word_box_x,
                 base_y=base_y,
-                max_x=word_max_x,
+                box_width=word_box_width,
+                box_height=line_box_height,
+                max_x=word_box_max_x,
                 max_y=max_y,
                 opacity_scale=1.0,
             )
