@@ -22,7 +22,7 @@ import { useSession } from "@/lib/auth-client";
 import { ArrowLeft, Download, Clock, Timer, Star, AlertCircle, Trash2, Edit2, X, Check } from "lucide-react";
 import Link from "next/link";
 import DynamicVideoPlayer from "@/components/dynamic-video-player";
-import DraftTimelineEditor from "@/components/draft-timeline-editor";
+import DraftTimelineEditor, { type TimelineZoomLevel } from "@/components/draft-timeline-editor";
 import { formatSourceTypeLabel, formatTaskRuntime, isHttpUrl } from "@/lib/task-metadata";
 
 interface Clip {
@@ -209,6 +209,11 @@ export default function TaskPage() {
   const [timelineEditorEnabled, setTimelineEditorEnabled] = useState(true);
   const [isUpdatingTaskOptions, setIsUpdatingTaskOptions] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [activeDraftClipId, setActiveDraftClipId] = useState<string | null>(null);
+  const [expandedDraftClipId, setExpandedDraftClipId] = useState<string | null>(null);
+  const [reviewMobileTab, setReviewMobileTab] = useState<"preview" | "clips">("preview");
+  const [timelineZoomLevel, setTimelineZoomLevel] = useState<TimelineZoomLevel>(1);
+  const [reasoningExpandedByClipId, setReasoningExpandedByClipId] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
@@ -222,6 +227,7 @@ export default function TaskPage() {
   const [deletingClipId, setDeletingClipId] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const draftClipRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const progressRef = useRef(progress);
   const progressMessageRef = useRef(progressMessage);
   const sourceTypeRef = useRef<string | undefined>(task?.source_type);
@@ -236,6 +242,63 @@ export default function TaskPage() {
       }
       return a.clip_order - b.clip_order;
     });
+  }, []);
+
+  const registerDraftClipRowRef = useCallback((draftId: string, node: HTMLDivElement | null) => {
+    if (node) {
+      draftClipRowRefs.current[draftId] = node;
+      return;
+    }
+    delete draftClipRowRefs.current[draftId];
+  }, []);
+
+  const focusDraftClip = useCallback(
+    (
+      draftId: string,
+      options?: {
+        expand?: boolean;
+        scroll?: boolean;
+        switchToClipsTab?: boolean;
+      },
+    ) => {
+      setActiveDraftClipId(draftId);
+      if (options?.expand !== false) {
+        setExpandedDraftClipId(draftId);
+      }
+      if (options?.switchToClipsTab) {
+        setReviewMobileTab("clips");
+      }
+      if (options?.scroll === false) {
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        draftClipRowRefs.current[draftId]?.scrollIntoView({
+          block: "nearest",
+          behavior: "smooth",
+        });
+      });
+    },
+    [],
+  );
+
+  const toggleDraftClipExpansion = useCallback((draftId: string) => {
+    setActiveDraftClipId(draftId);
+    setExpandedDraftClipId((prev) => (prev === draftId ? null : draftId));
+  }, []);
+
+  const toggleReasoningVisibility = useCallback((draftId: string) => {
+    setReasoningExpandedByClipId((prev) => ({
+      ...prev,
+      [draftId]: !prev[draftId],
+    }));
+  }, []);
+
+  const getDraftDurationSeconds = useCallback((draft: DraftClip) => {
+    const parsedDuration = parseTimestampToSeconds(draft.end_time) - parseTimestampToSeconds(draft.start_time);
+    if (Number.isFinite(parsedDuration) && parsedDuration > 0) {
+      return parsedDuration;
+    }
+    return Math.max(0, draft.duration || 0);
   }, []);
 
   useEffect(() => {
@@ -258,6 +321,42 @@ export default function TaskPage() {
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(intervalId);
   }, [task?.status]);
+
+  useEffect(() => {
+    if (!timelineEditorEnabled && reviewMobileTab === "preview") {
+      setReviewMobileTab("clips");
+    }
+  }, [reviewMobileTab, timelineEditorEnabled]);
+
+  useEffect(() => {
+    if (draftClips.length === 0) {
+      if (activeDraftClipId !== null) {
+        setActiveDraftClipId(null);
+      }
+      if (expandedDraftClipId !== null) {
+        setExpandedDraftClipId(null);
+      }
+      return;
+    }
+
+    const draftIds = new Set(draftClips.map((draft) => draft.id));
+    let nextActiveDraftId = activeDraftClipId;
+    if (!nextActiveDraftId || !draftIds.has(nextActiveDraftId)) {
+      nextActiveDraftId = draftClips[0].id;
+      setActiveDraftClipId(nextActiveDraftId);
+    }
+    if (expandedDraftClipId && !draftIds.has(expandedDraftClipId)) {
+      setExpandedDraftClipId(nextActiveDraftId);
+    } else if (!expandedDraftClipId && activeDraftClipId === null) {
+      setExpandedDraftClipId(nextActiveDraftId);
+    }
+
+    for (const existingId of Object.keys(draftClipRowRefs.current)) {
+      if (!draftIds.has(existingId)) {
+        delete draftClipRowRefs.current[existingId];
+      }
+    }
+  }, [activeDraftClipId, draftClips, expandedDraftClipId]);
 
   const fetchTaskStatus = useCallback(async (retryCount = 0, maxRetries = 5) => {
     if (!taskId || !userId) return false;
@@ -534,9 +633,13 @@ export default function TaskPage() {
   };
 
   const getScoreColor = (score: number) => {
-    if (score >= 0.8) return "bg-green-100 text-green-800";
-    if (score >= 0.6) return "bg-yellow-100 text-yellow-800";
-    return "bg-red-100 text-red-800";
+    if (score >= 0.8) {
+      return "border border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-200";
+    }
+    if (score >= 0.6) {
+      return "border border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200";
+    }
+    return "border border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-200";
   };
 
   const handleEditTitle = async () => {
@@ -688,8 +791,8 @@ export default function TaskPage() {
     return () => window.clearTimeout(timeoutId);
   }, [draftError, draftsDirty, isFinalizing, isSavingDrafts, saveDraftClips, task?.status]);
 
-  const handleCreateDraftClip = async (startTime: string, endTime: string) => {
-    if (!session?.user?.id || !params.id) return;
+  const handleCreateDraftClip = async (startTime: string, endTime: string): Promise<string | null> => {
+    if (!session?.user?.id || !params.id) return null;
 
     setDraftError(null);
     try {
@@ -712,15 +815,22 @@ export default function TaskPage() {
 
       const payload = (await response.json()) as { draft_clip?: DraftClip };
       if (payload.draft_clip) {
-        setDraftClips((prev) => sortDraftClips([...prev, payload.draft_clip as DraftClip]));
+        const createdDraft = payload.draft_clip as DraftClip;
+        setDraftClips((prev) => sortDraftClips([...prev, createdDraft]));
+        focusDraftClip(createdDraft.id, { expand: true, scroll: true });
+        setReasoningExpandedByClipId((prev) => ({ ...prev, [createdDraft.id]: false }));
+        setDraftsDirty(false);
+        return createdDraft.id;
       } else {
         await fetchTaskStatus();
       }
       setDraftsDirty(false);
+      return null;
     } catch (createError) {
       const message =
         createError instanceof Error ? createError.message : "Failed to create draft clip.";
       setDraftError(message);
+      return null;
     }
   };
 
@@ -741,6 +851,12 @@ export default function TaskPage() {
 
       const payload = (await response.json()) as { draft_clips?: DraftClip[] };
       setDraftClips(sortDraftClips(payload.draft_clips || []));
+      setReasoningExpandedByClipId((prev) => {
+        if (!(draftId in prev)) return prev;
+        const next = { ...prev };
+        delete next[draftId];
+        return next;
+      });
       setDraftsDirty(false);
     } catch (deleteError) {
       const message =
@@ -905,6 +1021,12 @@ export default function TaskPage() {
       ? `${transcriptProgress.chunk_start_seconds.toFixed(1)}s -> ${transcriptProgress.chunk_end_seconds.toFixed(1)}s`
       : null;
   const selectedDraftCount = draftClips.filter((clip) => clip.is_selected).length;
+  const autosaveStatus = isSavingDrafts ? "saving..." : draftsDirty ? "pending changes" : "up to date";
+  const autosaveStatusPillClass = isSavingDrafts
+    ? "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-200"
+    : draftsDirty
+      ? "border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-500/40 dark:bg-orange-500/15 dark:text-orange-200"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/15 dark:text-emerald-200";
 
   if (isPending) {
     return (
@@ -1260,20 +1382,29 @@ export default function TaskPage() {
             ))}
           </div>
         ) : task?.status === "awaiting_review" ? (
-          <div className="space-y-4">
-            <Card>
-              <CardContent className="p-6 space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="space-y-5">
+            <Card className="sticky top-3 z-20 border-slate-200/90 bg-white/95 shadow-[0_8px_24px_-18px_rgba(15,23,42,0.55)] backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:border-slate-700/90 dark:bg-slate-900/95 dark:shadow-[0_10px_26px_-20px_rgba(2,6,23,0.9)] dark:supports-[backdrop-filter]:bg-slate-900/85">
+              <CardContent className="space-y-4 p-4 sm:p-5">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                   <div>
-                    <h2 className="text-xl font-semibold text-black">Review Draft Clips</h2>
-                    <p className="text-sm text-gray-600">
-                      Edit timing/text, add or delete clips, then finalize rendering.
+                    <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Review Draft Clips</h2>
+                    <p className="text-sm text-slate-600 dark:text-slate-300">
+                      Trim timing, refine subtitles, and include only the clips you want rendered.
                     </p>
+                    <div aria-live="polite" className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                        Included {selectedDraftCount}/{draftClips.length}
+                      </span>
+                      <span className={`rounded-full border px-2.5 py-1 font-medium ${autosaveStatusPillClass}`}>
+                        Autosave {autosaveStatus}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                     <Button
                       size="sm"
                       variant="outline"
+                      className="border-slate-300 bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                       onClick={() => void handleRestoreDrafts()}
                       disabled={isSavingDrafts || isFinalizing || draftClips.length === 0}
                     >
@@ -1282,6 +1413,7 @@ export default function TaskPage() {
                     <Button
                       size="sm"
                       variant="outline"
+                      className="border-slate-300 bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                       onClick={() => void saveDraftClips()}
                       disabled={isSavingDrafts || isFinalizing || draftClips.length === 0}
                     >
@@ -1289,6 +1421,7 @@ export default function TaskPage() {
                     </Button>
                     <Button
                       size="sm"
+                      className="shadow-sm"
                       onClick={() => void handleFinalize()}
                       disabled={isSavingDrafts || isFinalizing || draftClips.length === 0 || selectedDraftCount === 0}
                     >
@@ -1296,24 +1429,51 @@ export default function TaskPage() {
                     </Button>
                   </div>
                 </div>
-                <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-                  <label className="flex items-center gap-2 text-sm font-medium text-black">
-                    <input
-                      type="checkbox"
-                      checked={timelineEditorEnabled}
-                      onChange={(event) => void handleToggleTimelineEditor(event.target.checked)}
-                      disabled={isUpdatingTaskOptions || isSavingDrafts || isFinalizing}
-                      className="h-4 w-4"
-                    />
-                    Interactive timeline editor
-                  </label>
-                  <p className="mt-1 text-xs text-gray-600">
-                    Use the source video timeline to drag clip boundaries in 0.5s increments with snapping/no overlap.
-                  </p>
+
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-800/70">
+                    <label className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                      <input
+                        type="checkbox"
+                        checked={timelineEditorEnabled}
+                        onChange={(event) => void handleToggleTimelineEditor(event.target.checked)}
+                        disabled={isUpdatingTaskOptions || isSavingDrafts || isFinalizing}
+                        className="h-4 w-4"
+                      />
+                      Interactive timeline editor
+                    </label>
+                    <p className="mt-1 text-xs text-slate-600 dark:text-slate-300">
+                      Drag clip boundaries with 0.5s snapping and no overlaps.
+                    </p>
+                  </div>
+
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1 dark:border-slate-700 dark:bg-slate-800 lg:hidden">
+                    <button
+                      type="button"
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                        reviewMobileTab === "preview"
+                          ? "bg-slate-100 text-black shadow-sm dark:bg-slate-700 dark:text-slate-100"
+                          : "text-slate-600 hover:text-black dark:text-slate-300 dark:hover:text-slate-100"
+                      }`}
+                      onClick={() => setReviewMobileTab("preview")}
+                      disabled={!timelineEditorEnabled}
+                    >
+                      Preview
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium ${
+                        reviewMobileTab === "clips"
+                          ? "bg-slate-100 text-black shadow-sm dark:bg-slate-700 dark:text-slate-100"
+                          : "text-slate-600 hover:text-black dark:text-slate-300 dark:hover:text-slate-100"
+                      }`}
+                      onClick={() => setReviewMobileTab("clips")}
+                    >
+                      Clips
+                    </button>
+                  </div>
                 </div>
-                <p className="text-xs text-gray-500">
-                  Selected clips: {selectedDraftCount}/{draftClips.length} • Autosave: {draftsDirty ? "pending changes" : "up to date"}
-                </p>
+
                 {draftError && (
                   <Alert>
                     <AlertCircle className="h-4 w-4" />
@@ -1323,110 +1483,192 @@ export default function TaskPage() {
               </CardContent>
             </Card>
 
-            {timelineEditorEnabled && (
-              <DraftTimelineEditor
-                sourceVideoUrl={sourceVideoUrl}
-                drafts={draftClips}
-                disabled={isSavingDrafts || isFinalizing}
-                onDraftTimingChange={updateDraftClipTiming}
-                onAddDraft={(startTime, endTime) => {
-                  void handleCreateDraftClip(startTime, endTime);
-                }}
-              />
-            )}
+            <div className="grid gap-5 lg:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)] lg:items-start">
+              <div className={reviewMobileTab === "clips" ? "hidden lg:block" : ""}>
+                {timelineEditorEnabled ? (
+                  <div className="lg:sticky lg:top-32">
+                    <DraftTimelineEditor
+                      sourceVideoUrl={sourceVideoUrl}
+                      drafts={draftClips}
+                      disabled={isSavingDrafts || isFinalizing}
+                      selectedClipId={activeDraftClipId}
+                      timelineZoomLevel={timelineZoomLevel}
+                      onTimelineZoomLevelChange={setTimelineZoomLevel}
+                      onSelectClip={(draftId) => focusDraftClip(draftId, { expand: true, scroll: true })}
+                      onDraftTimingChange={updateDraftClipTiming}
+                      onAddDraft={handleCreateDraftClip}
+                    />
+                  </div>
+                ) : (
+                  <Card className="border-slate-200 bg-slate-50/40 dark:border-slate-700 dark:bg-slate-900/70">
+                    <CardContent className="p-6 text-center text-sm text-slate-600 dark:text-slate-300">
+                      Timeline preview is disabled. Enable &quot;Interactive timeline editor&quot; to use drag-and-trim controls.
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
 
-            {draftClips.length === 0 ? (
-              <Card>
-                <CardContent className="p-6 text-center text-sm text-gray-600">
-                  No draft clips are available for review.
-                  {timelineEditorEnabled ? " Use the timeline to add one at the playhead." : ""}
-                </CardContent>
-              </Card>
-            ) : (
-              draftClips.map((draft, displayIndex) => (
-                <Card key={draft.id}>
-                  <CardContent className="p-6 space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={draft.is_selected}
-                          onChange={(event) =>
-                            updateDraftClip(draft.id, { is_selected: event.target.checked })
-                          }
-                          disabled={isSavingDrafts || isFinalizing}
-                          className="h-4 w-4"
-                        />
-                        <h3 className="font-semibold text-black">Clip {displayIndex + 1}</h3>
-                        <Badge className={getScoreColor(draft.relevance_score)}>
-                          <Star className="w-3 h-3 mr-1" />
-                          {(draft.relevance_score * 100).toFixed(0)}%
-                        </Badge>
-                        {draft.created_by_user && (
-                          <Badge variant="outline">Manual</Badge>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs text-gray-500">Current duration: {formatDuration(draft.duration)}</p>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-                          onClick={() => void handleDeleteDraftClip(draft.id)}
-                          disabled={isSavingDrafts || isFinalizing}
+              <div className={reviewMobileTab === "preview" ? "hidden lg:block" : ""}>
+                {draftClips.length === 0 ? (
+                  <Card className="border-slate-200 bg-slate-50/40 dark:border-slate-700 dark:bg-slate-900/70">
+                    <CardContent className="p-6 text-center text-sm text-slate-600 dark:text-slate-300">
+                      No draft clips are available for review.
+                      {timelineEditorEnabled ? " Use the timeline to add one at the playhead." : ""}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <div className="space-y-3 lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto lg:pr-1">
+                    {draftClips.map((draft, displayIndex) => {
+                      const isActive = activeDraftClipId === draft.id;
+                      const isExpanded = expandedDraftClipId === draft.id;
+                      const isReasoningVisible = Boolean(reasoningExpandedByClipId[draft.id]);
+                      return (
+                        <div
+                          key={draft.id}
+                          ref={(node) => registerDraftClipRowRef(draft.id, node)}
+                          className={`relative overflow-hidden rounded-xl border bg-white transition-all ${
+                            isActive
+                              ? "border-blue-300 bg-blue-50/40 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.6)] dark:border-blue-500/70 dark:bg-blue-950/30 dark:shadow-[0_12px_24px_-18px_rgba(30,64,175,0.9)]"
+                              : "border-slate-200 hover:border-slate-300 hover:shadow-sm dark:border-slate-700 dark:bg-slate-900/70 dark:hover:border-slate-500"
+                          }`}
+                          aria-selected={isActive}
                         >
-                          <Trash2 className="w-3 h-3 mr-1" />
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
+                          <div
+                            className={`absolute inset-y-0 left-0 w-1 transition-colors ${
+                              isActive ? "bg-blue-500" : "bg-transparent"
+                            }`}
+                            aria-hidden
+                          />
+                          <div className="flex items-center gap-3 px-4 py-3.5">
+                            <input
+                              type="checkbox"
+                              checked={draft.is_selected}
+                              onChange={(event) => {
+                                focusDraftClip(draft.id, { expand: false, scroll: false });
+                                updateDraftClip(draft.id, { is_selected: event.target.checked });
+                              }}
+                              disabled={isSavingDrafts || isFinalizing}
+                              className="h-4 w-4"
+                            />
+                            <button
+                              type="button"
+                              className="min-w-0 flex-1 text-left"
+                              onClick={() => toggleDraftClipExpansion(draft.id)}
+                              aria-expanded={isExpanded}
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="font-semibold text-slate-900 dark:text-slate-100">Clip {displayIndex + 1}</h3>
+                                <Badge className={getScoreColor(draft.relevance_score)}>
+                                  <Star className="mr-1 h-3 w-3" />
+                                  {(draft.relevance_score * 100).toFixed(0)}%
+                                </Badge>
+                                {draft.created_by_user && <Badge variant="outline">Manual</Badge>}
+                              </div>
+                              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 font-medium text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                                  {draft.start_time}
+                                  {" -> "}
+                                  {draft.end_time}
+                                </span>
+                                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                  Duration {formatDuration(getDraftDurationSeconds(draft))}
+                                </span>
+                              </div>
+                            </button>
 
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-600">Start (MM:SS or HH:MM:SS, .5 allowed)</label>
-                        <Input
-                          value={draft.start_time}
-                          onChange={(event) =>
-                            updateDraftClip(draft.id, { start_time: event.target.value })
-                          }
-                          disabled={isSavingDrafts || isFinalizing}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-medium text-gray-600">End (MM:SS or HH:MM:SS, .5 allowed)</label>
-                        <Input
-                          value={draft.end_time}
-                          onChange={(event) =>
-                            updateDraftClip(draft.id, { end_time: event.target.value })
-                          }
-                          disabled={isSavingDrafts || isFinalizing}
-                        />
-                      </div>
-                    </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 border-slate-300 bg-slate-50 px-2 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                              onClick={() => toggleDraftClipExpansion(draft.id)}
+                              disabled={isSavingDrafts || isFinalizing}
+                            >
+                              {isExpanded ? "Hide" : "Edit"}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-8 border-red-200 px-2 text-xs text-red-600 hover:bg-red-50 hover:text-red-700"
+                              onClick={() => void handleDeleteDraftClip(draft.id)}
+                              disabled={isSavingDrafts || isFinalizing}
+                            >
+                              <Trash2 className="mr-1 h-3 w-3" />
+                              Delete
+                            </Button>
+                          </div>
 
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-gray-600">Edited Subtitle Text</label>
-                      <textarea
-                        value={draft.edited_text ?? ""}
-                        onChange={(event) =>
-                          updateDraftClip(draft.id, { edited_text: event.target.value })
-                        }
-                        disabled={isSavingDrafts || isFinalizing}
-                        className="w-full min-h-[88px] rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]"
-                      />
-                    </div>
+                          {isExpanded && (
+                            <div className="space-y-3 border-t border-slate-200 bg-slate-50/60 px-4 py-3.5 dark:border-slate-700 dark:bg-slate-900/70">
+                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                                    Start (MM:SS or HH:MM:SS, .5 allowed)
+                                  </label>
+                                  <Input
+                                    value={draft.start_time}
+                                    onFocus={() => focusDraftClip(draft.id, { expand: true, scroll: false })}
+                                    onChange={(event) =>
+                                      updateDraftClip(draft.id, { start_time: event.target.value })
+                                    }
+                                    disabled={isSavingDrafts || isFinalizing}
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                                    End (MM:SS or HH:MM:SS, .5 allowed)
+                                  </label>
+                                  <Input
+                                    value={draft.end_time}
+                                    onFocus={() => focusDraftClip(draft.id, { expand: true, scroll: false })}
+                                    onChange={(event) =>
+                                      updateDraftClip(draft.id, { end_time: event.target.value })
+                                    }
+                                    disabled={isSavingDrafts || isFinalizing}
+                                  />
+                                </div>
+                              </div>
 
-                    {draft.reasoning && (
-                      <div className="text-xs text-gray-600">
-                        <span className="font-medium text-black">AI reasoning: </span>
-                        {draft.reasoning}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))
-            )}
+                              <div className="space-y-1">
+                                <label className="text-xs font-medium text-slate-700 dark:text-slate-300">Edited Subtitle Text</label>
+                                <textarea
+                                  value={draft.edited_text ?? ""}
+                                  onFocus={() => focusDraftClip(draft.id, { expand: true, scroll: false })}
+                                  onChange={(event) =>
+                                    updateDraftClip(draft.id, { edited_text: event.target.value })
+                                  }
+                                  disabled={isSavingDrafts || isFinalizing}
+                                  className="w-full min-h-[96px] rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                                />
+                              </div>
+
+                              {draft.reasoning && (
+                                <div className="space-y-2">
+                                  <button
+                                    type="button"
+                                    className="text-xs font-medium text-slate-600 underline-offset-2 hover:text-black hover:underline dark:text-slate-300 dark:hover:text-slate-100"
+                                    onClick={() => toggleReasoningVisibility(draft.id)}
+                                  >
+                                    {isReasoningVisible ? "Hide AI reasoning" : "Show AI reasoning"}
+                                  </button>
+                                  {isReasoningVisible && (
+                                    <div className="rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                                      <span className="font-medium text-slate-900 dark:text-slate-100">AI reasoning: </span>
+                                      {draft.reasoning}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         ) : task?.status === "error" ? (
           <Card>
