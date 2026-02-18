@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -136,7 +138,60 @@ export function SettingsSectionAi({
   onSaveZaiProfileKey,
   onDeleteZaiProfileKey,
 }: SettingsSectionAiProps) {
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false);
+  const [shouldFilterModelOptions, setShouldFilterModelOptions] = useState(false);
+  const modelMenuRef = useRef<HTMLDivElement | null>(null);
   const selectedProfileMeta = ollamaProfiles.find((profile) => profile.profile_name === selectedOllamaProfile);
+  const normalizedModelQuery = aiModel.trim().toLowerCase();
+
+  const visibleAiModelOptions = useMemo(() => {
+    if (!isModelMenuOpen) {
+      return [];
+    }
+    if (!shouldFilterModelOptions || normalizedModelQuery.length === 0) {
+      return aiModelOptions;
+    }
+    return aiModelOptions.filter((model) => model.toLowerCase().includes(normalizedModelQuery));
+  }, [aiModelOptions, isModelMenuOpen, normalizedModelQuery, shouldFilterModelOptions]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!modelMenuRef.current) {
+        return;
+      }
+      if (!modelMenuRef.current.contains(event.target as Node)) {
+        setIsModelMenuOpen(false);
+        setShouldFilterModelOptions(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, []);
+
+  const openModelMenu = () => {
+    setIsModelMenuOpen(true);
+    setShouldFilterModelOptions(false);
+  };
+
+  const toggleModelMenu = () => {
+    setIsModelMenuOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setShouldFilterModelOptions(false);
+      } else {
+        setShouldFilterModelOptions(false);
+      }
+      return next;
+    });
+  };
+
+  const closeModelMenu = () => {
+    setIsModelMenuOpen(false);
+    setShouldFilterModelOptions(false);
+  };
 
   return (
     <div className="space-y-4">
@@ -522,19 +577,79 @@ export function SettingsSectionAi({
               </span>
             )}
           </div>
-          <Input
-            id="ai-provider-model"
-            list={`ai-model-options-${aiProvider}`}
-            value={aiModel}
-            onChange={(event) => onAiModelChange(event.target.value ?? "")}
-            placeholder={`Default: ${DEFAULT_AI_MODELS[aiProvider]}`}
-            disabled={isSaving}
-          />
-          <datalist id={`ai-model-options-${aiProvider}`}>
-            {aiModelOptions.map((model) => (
-              <option key={model} value={model} />
-            ))}
-          </datalist>
+          <div
+            ref={modelMenuRef}
+            className="relative"
+            onBlurCapture={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                closeModelMenu();
+              }
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                id="ai-provider-model"
+                value={aiModel}
+                onFocus={() => {
+                  if (!isSaving) {
+                    openModelMenu();
+                  }
+                }}
+                onChange={(event) => {
+                  onAiModelChange(event.target.value ?? "");
+                  if (!isSaving) {
+                    setIsModelMenuOpen(true);
+                    setShouldFilterModelOptions(true);
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowDown" && !isModelMenuOpen) {
+                    event.preventDefault();
+                    openModelMenu();
+                  }
+                  if (event.key === "Escape" || event.key === "Tab") {
+                    closeModelMenu();
+                  }
+                }}
+                placeholder={`Default: ${DEFAULT_AI_MODELS[aiProvider]}`}
+                disabled={isSaving}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                aria-label="Show model options"
+                disabled={isSaving}
+                onClick={toggleModelMenu}
+              >
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            </div>
+            {isModelMenuOpen && (
+              <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-gray-200 bg-white shadow-lg">
+                {visibleAiModelOptions.length > 0 ? (
+                  visibleAiModelOptions.map((model) => (
+                    <button
+                      key={model}
+                      type="button"
+                      className="block w-full px-3 py-2 text-left text-sm text-black hover:bg-gray-50"
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                      }}
+                      onClick={() => {
+                        onAiModelChange(model);
+                        closeModelMenu();
+                      }}
+                    >
+                      {model}
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-3 py-2 text-sm text-gray-500">No matching models.</p>
+                )}
+              </div>
+            )}
+          </div>
           <p className="text-xs text-gray-500">
             Clear the field to revert to the default model: {DEFAULT_AI_MODELS[aiProvider]}.
           </p>
