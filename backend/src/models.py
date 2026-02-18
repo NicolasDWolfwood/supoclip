@@ -79,6 +79,7 @@ class User(Base):
         nullable=False,
         server_default=text("'openai'"),
     )
+    default_ollama_base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     default_ai_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     default_zai_key_routing_mode: Mapped[str] = mapped_column(
         String(20),

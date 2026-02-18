@@ -11,6 +11,7 @@ Run MrglSnips with Docker in just one command!
      - [Google AI API Key](https://makersuite.google.com/app/apikey)
      - [Anthropic API Key](https://console.anthropic.com/)
      - [z.ai API Key](https://docs.z.ai/api-reference/introduction)
+     - or [Ollama](https://ollama.com/) running with a reachable server URL
 3. **For local frontend development (non-Docker):**
    - Node.js 20.19+
    - npm 10+
@@ -44,6 +45,7 @@ OPENAI_API_KEY=your_openai_key_here
 # or: GOOGLE_API_KEY=...
 # or: ANTHROPIC_API_KEY=...
 # or: ZAI_API_KEY=...
+# or local/self-hosted: OLLAMA_BASE_URL=http://host.docker.internal:11434
 
 # Configure which AI model to use
 LLM=openai:gpt-5-mini
@@ -115,7 +117,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 
 | Variable | Description | Where to Get |
 |----------|-------------|--------------|
-| One of `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY` | Provider key for transcript analysis | Provider docs |
+| One of `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`, or `OLLAMA_BASE_URL` | Provider configuration for transcript analysis | Provider docs / Ollama local server |
 | `LLM` | AI model identifier | e.g., `openai:gpt-5-mini` |
 
 ### Optional Variables
@@ -158,6 +160,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `GOOGLE_API_KEY` | - | For Google Gemini models |
 | `ANTHROPIC_API_KEY` | - | For Claude models |
 | `ZAI_API_KEY` | - | For z.ai GLM models (backend calls z.ai Coding API endpoint) |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` (Docker) / `http://localhost:11434` (local) | Ollama server base URL used when provider is `ollama` |
 
 Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
 
@@ -168,7 +171,7 @@ AssemblyAI limits enforced by backend:
 
 ## Supported AI Models
 
-Tip: in the Settings page, after selecting a provider and saving its API key, the model field can auto-load the provider's current model list.
+Tip: in the Settings page, after selecting a provider and saving its API key (or Ollama server URL), the model field can auto-load the provider's current model list.
 
 ### OpenAI (Recommended)
 ```bash
@@ -195,6 +198,13 @@ LLM=zai:glm-5
 ```
 Runtime note: z.ai requests use `https://api.z.ai/api/coding/paas/v4`.
 In Settings, z.ai supports two user key profiles (`subscription`, `metered`) and routing mode (`auto`, `subscription`, `metered`).
+
+### Ollama
+```bash
+LLM=ollama:llama3.2
+```
+Runtime note: Ollama uses `OLLAMA_BASE_URL` (for Docker: typically `http://host.docker.internal:11434`).
+In Settings, set an Ollama server URL per user and refresh models directly from that server.
 
 ## Troubleshooting
 

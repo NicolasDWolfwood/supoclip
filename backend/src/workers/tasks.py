@@ -80,7 +80,7 @@ async def process_video_task(
         font_color: Font color for subtitles
         transitions_enabled: Whether transition effects should be applied
         transcription_provider: "local" or "assemblyai"
-        ai_provider: "openai", "google", "anthropic", or "zai"
+        ai_provider: "openai", "google", "anthropic", "zai", or "ollama"
         ai_model: Optional model override for the selected AI provider
         subtitle_style: Extra subtitle style controls for rendering
         ai_routing_mode: Optional z.ai key routing mode ("auto", "subscription", "metered")

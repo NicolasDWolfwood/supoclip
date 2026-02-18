@@ -21,6 +21,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `GOOGLE_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `google:*`. |
 | `ANTHROPIC_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `anthropic:*`. |
 | `ZAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `zai:*`; requests use z.ai Coding API endpoint (`/api/coding/paas/v4`). |
+| `OLLAMA_BASE_URL` | No | `http://localhost:11434` (local) / `http://host.docker.internal:11434` (Docker compose env) | backend, worker | Base URL for Ollama when `LLM` uses `ollama:*` or AI provider is set to `ollama` in Settings. |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
 | `WHISPER_CHUNKING_ENABLED` | No | `true` | backend, worker | Enable chunked local Whisper transcription for long videos. |
@@ -84,6 +85,7 @@ Examples:
 - `anthropic:claude-4-sonnet`
 - `google:gemini-2.5-pro`
 - `zai:glm-5`
+- `ollama:llama3.2`
 
 ## z.ai Key Routing (UI/DB)
 
@@ -95,6 +97,12 @@ Examples:
   - `subscription`
   - `metered`
 - On z.ai balance/package errors (for example code `1113`), `auto` mode retries with the next profile key.
+
+## Ollama Server Settings (UI/DB)
+
+- AI provider `ollama` uses a per-user saved server URL first (`default_ollama_base_url`).
+- If no user URL is saved, backend falls back to `OLLAMA_BASE_URL`.
+- Model discovery uses Ollama `GET /api/tags` on the resolved server URL.
 
 ## Entrypoint Alignment
 

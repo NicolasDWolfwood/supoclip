@@ -19,7 +19,7 @@ import {
 } from "@/lib/font-style-options";
 
 const SUPPORTED_TRANSCRIPTION_PROVIDERS = new Set(["local", "assemblyai"]);
-const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai"]);
+const SUPPORTED_AI_PROVIDERS = new Set(["openai", "google", "anthropic", "zai", "ollama"]);
 const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;
 const MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0;
@@ -258,7 +258,7 @@ export async function PATCH(request: NextRequest) {
     }
     if (aiProvider !== undefined && (typeof aiProvider !== "string" || !SUPPORTED_AI_PROVIDERS.has(aiProvider))) {
       return NextResponse.json(
-        { error: "Invalid aiProvider (must be openai, google, anthropic, or zai)" },
+        { error: "Invalid aiProvider (must be openai, google, anthropic, zai, or ollama)" },
         { status: 400 },
       );
     }

@@ -94,7 +94,11 @@ function SettingsPageContent() {
     google: "",
     anthropic: "",
     zai: "",
+    ollama: "",
   });
+  const [ollamaServerUrl, setOllamaServerUrl] = useState("http://localhost:11434");
+  const [hasSavedOllamaServer, setHasSavedOllamaServer] = useState(false);
+  const [hasEnvOllamaServer, setHasEnvOllamaServer] = useState(false);
   const [zaiProfileApiKeys, setZaiProfileApiKeys] = useState<Record<"subscription" | "metered", string>>({
     subscription: "",
     metered: "",
@@ -110,12 +114,14 @@ function SettingsPageContent() {
     google: false,
     anthropic: false,
     zai: false,
+    ollama: false,
   });
   const [hasEnvAiFallback, setHasEnvAiFallback] = useState<Record<AiProvider, boolean>>({
     openai: false,
     google: false,
     anthropic: false,
     zai: false,
+    ollama: false,
   });
   const [isSavingAiKey, setIsSavingAiKey] = useState(false);
   const [aiKeyStatus, setAiKeyStatus] = useState<string | null>(null);
@@ -126,12 +132,14 @@ function SettingsPageContent() {
     google: FALLBACK_AI_MODEL_OPTIONS.google,
     anthropic: FALLBACK_AI_MODEL_OPTIONS.anthropic,
     zai: FALLBACK_AI_MODEL_OPTIONS.zai,
+    ollama: FALLBACK_AI_MODEL_OPTIONS.ollama,
   });
   const [hasLoadedAiModels, setHasLoadedAiModels] = useState<Record<AiProvider, boolean>>({
     openai: false,
     google: false,
     anthropic: false,
     zai: false,
+    ollama: false,
   });
   const [isLoadingAiModels, setIsLoadingAiModels] = useState(false);
   const [aiModelStatus, setAiModelStatus] = useState<string | null>(null);
@@ -157,6 +165,8 @@ function SettingsPageContent() {
         hasSavedZaiProfileKeys.subscription ||
         hasSavedZaiProfileKeys.metered ||
         hasEnvAiFallback.zai
+      : preferencesDraft.aiProvider === "ollama"
+        ? Boolean(ollamaServerUrl.trim())
       : hasSavedAiKeys[preferencesDraft.aiProvider] || hasEnvAiFallback[preferencesDraft.aiProvider];
 
   const sectionNavItems = useMemo(
@@ -223,6 +233,9 @@ function SettingsPageContent() {
         if (provider === "zai") {
           params.set("routing_mode", zaiRoutingMode);
         }
+        if (provider === "ollama" && ollamaServerUrl.trim()) {
+          params.set("server_url", ollamaServerUrl.trim());
+        }
         const modelsUrl = `${apiUrl}/tasks/ai-settings/${provider}/models${params.toString() ? `?${params.toString()}` : ""}`;
         const response = await fetch(modelsUrl, {
           headers: {
@@ -284,7 +297,7 @@ function SettingsPageContent() {
         }
       }
     },
-    [apiUrl, session?.user?.id, zaiRoutingMode],
+    [apiUrl, ollamaServerUrl, session?.user?.id, zaiRoutingMode],
   );
 
   const refreshAiSettings = useCallback(async (): Promise<void> => {
@@ -307,7 +320,9 @@ function SettingsPageContent() {
         google: Boolean(data.has_google_key),
         anthropic: Boolean(data.has_anthropic_key),
         zai: Boolean(data.has_zai_key),
+        ollama: Boolean(data.has_ollama_server),
       });
+      setHasSavedOllamaServer(Boolean(data.has_ollama_server));
       setHasSavedZaiProfileKeys({
         subscription: Boolean(data.has_zai_subscription_key),
         metered: Boolean(data.has_zai_metered_key),
@@ -320,7 +335,12 @@ function SettingsPageContent() {
         google: Boolean(data.has_env_google),
         anthropic: Boolean(data.has_env_anthropic),
         zai: Boolean(data.has_env_zai),
+        ollama: Boolean(data.has_env_ollama),
       });
+      setHasEnvOllamaServer(Boolean(data.has_env_ollama));
+      if (typeof data.ollama_server_url === "string" && data.ollama_server_url.trim().length > 0) {
+        setOllamaServerUrl(data.ollama_server_url.trim());
+      }
     } catch (loadError) {
       console.error("Failed to load AI settings:", loadError);
     }
@@ -515,6 +535,95 @@ function SettingsPageContent() {
     },
     [apiUrl, fetchAiModels, refreshAiSettings, session?.user?.id],
   );
+
+  const saveOllamaServer = useCallback(
+    async (serverUrl: string): Promise<boolean> => {
+      const trimmed = serverUrl.trim();
+      if (!trimmed) {
+        setAiKeyError("Ollama server URL cannot be empty.");
+        return false;
+      }
+
+      setIsSavingAiKey(true);
+      setAiKeyError(null);
+      setAiKeyStatus(null);
+
+      try {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/server`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            user_id: session?.user?.id || "",
+          },
+          body: JSON.stringify({ server_url: trimmed }),
+        });
+
+        const responseData = await response.json().catch(() => ({} as { detail?: string; server_url?: string }));
+        if (!response.ok) {
+          throw new Error(responseData?.detail || "Failed to save Ollama server URL");
+        }
+
+        const normalizedServerUrl =
+          typeof responseData.server_url === "string" && responseData.server_url.trim().length > 0
+            ? responseData.server_url.trim()
+            : trimmed;
+
+        setOllamaServerUrl(normalizedServerUrl);
+        setHasSavedOllamaServer(true);
+        setHasSavedAiKeys((prev) => ({ ...prev, ollama: true }));
+        setAiKeyStatus("Ollama server saved.");
+        void refreshAiSettings();
+        void fetchAiModels("ollama");
+        return true;
+      } catch (saveError) {
+        const message = saveError instanceof Error ? saveError.message : "Failed to save Ollama server URL";
+        setAiKeyError(message);
+        return false;
+      } finally {
+        setIsSavingAiKey(false);
+      }
+    },
+    [apiUrl, fetchAiModels, refreshAiSettings, session?.user?.id],
+  );
+
+  const deleteOllamaServer = useCallback(async (): Promise<void> => {
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/server`, {
+        method: "DELETE",
+        headers: {
+          user_id: session?.user?.id || "",
+        },
+      });
+
+      const responseData = await response.json().catch(() => ({} as { detail?: string }));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to remove Ollama server URL");
+      }
+
+      setHasSavedOllamaServer(false);
+      setHasSavedAiKeys((prev) => ({ ...prev, ollama: false }));
+      setAiKeyStatus("Ollama server removed.");
+      void refreshAiSettings();
+
+      if (!hasEnvOllamaServer) {
+        setAiModelOptions((prev) => ({ ...prev, ollama: FALLBACK_AI_MODEL_OPTIONS.ollama }));
+        setHasLoadedAiModels((prev) => ({ ...prev, ollama: false }));
+        if (preferencesDraft.aiProvider === "ollama") {
+          setAiModelStatus(null);
+          setAiModelError(null);
+        }
+      }
+    } catch (deleteError) {
+      const message = deleteError instanceof Error ? deleteError.message : "Failed to remove Ollama server URL";
+      setAiKeyError(message);
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  }, [apiUrl, hasEnvOllamaServer, preferencesDraft.aiProvider, refreshAiSettings, session?.user?.id]);
 
   const saveZaiProfileKey = useCallback(
     async (profile: "subscription" | "metered", key: string): Promise<boolean> => {
@@ -874,6 +983,8 @@ function SettingsPageContent() {
     const hasProviderKey =
       provider === "zai"
         ? hasSavedAiKeys.zai || hasSavedZaiProfileKeys.subscription || hasSavedZaiProfileKeys.metered || hasEnvAiFallback.zai
+        : provider === "ollama"
+          ? Boolean(ollamaServerUrl.trim())
         : hasSavedAiKeys[provider] || hasEnvAiFallback[provider];
     if (!hasProviderKey) {
       setAiModelOptions((prev) => ({ ...prev, [provider]: FALLBACK_AI_MODEL_OPTIONS[provider] }));
@@ -890,6 +1001,7 @@ function SettingsPageContent() {
     hasSavedAiKeys,
     hasSavedZaiProfileKeys.metered,
     hasSavedZaiProfileKeys.subscription,
+    ollamaServerUrl,
     preferencesDraft.aiProvider,
     session?.user?.id,
     zaiRoutingMode,
@@ -1192,6 +1304,9 @@ function SettingsPageContent() {
                 aiApiKey={aiApiKeys[preferencesDraft.aiProvider]}
                 hasSavedAiKey={hasSavedAiKeys[preferencesDraft.aiProvider]}
                 hasEnvAiFallback={hasEnvAiFallback[preferencesDraft.aiProvider]}
+                ollamaServerUrl={ollamaServerUrl}
+                hasSavedOllamaServer={hasSavedOllamaServer}
+                hasEnvOllamaServer={hasEnvOllamaServer}
                 aiKeyStatus={aiKeyStatus}
                 aiKeyError={aiKeyError}
                 aiModelStatus={aiModelStatus}
@@ -1236,6 +1351,13 @@ function SettingsPageContent() {
                 }}
                 onDeleteAiProviderKey={() => {
                   void deleteAiProviderKey(preferencesDraft.aiProvider);
+                }}
+                onOllamaServerUrlChange={setOllamaServerUrl}
+                onSaveOllamaServer={() => {
+                  void saveOllamaServer(ollamaServerUrl);
+                }}
+                onDeleteOllamaServer={() => {
+                  void deleteOllamaServer();
                 }}
                 onRefreshAiModels={() => {
                   void fetchAiModels(preferencesDraft.aiProvider);

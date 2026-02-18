@@ -712,6 +712,65 @@ class TaskRepository:
         return normalized_mode
 
     @staticmethod
+    async def get_user_ollama_base_url(db: AsyncSession, user_id: str) -> Optional[str]:
+        result = await db.execute(
+            text(
+                """
+                SELECT default_ollama_base_url
+                FROM users
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            raise ValueError(f"User {user_id} not found")
+        value = (getattr(row, "default_ollama_base_url", None) or "").strip()
+        return value or None
+
+    @staticmethod
+    async def set_user_ollama_base_url(db: AsyncSession, user_id: str, base_url: str) -> str:
+        normalized_base_url = (base_url or "").strip()
+        if not normalized_base_url:
+            raise ValueError("Ollama server URL is required")
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET default_ollama_base_url = :base_url,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {
+                "user_id": user_id,
+                "base_url": normalized_base_url,
+            },
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+        return normalized_base_url
+
+    @staticmethod
+    async def clear_user_ollama_base_url(db: AsyncSession, user_id: str) -> None:
+        result = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET default_ollama_base_url = NULL,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+
+    @staticmethod
     async def user_exists(db: AsyncSession, user_id: str) -> bool:
         """Check if a user exists in the database."""
         result = await db.execute(

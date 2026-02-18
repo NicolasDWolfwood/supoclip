@@ -86,12 +86,13 @@ uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - `MEDIAPIPE_FACE_MODEL_URL` - Download URL for face detector model when missing
 - `MEDIAPIPE_FACE_MODEL_SHA256` - Expected SHA-256 for model integrity verification
 - `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD` - Auto-download missing model (`true`/`false`)
-- `LLM` - AI model identifier (e.g., "openai:gpt-5-mini", "anthropic:claude-4-sonnet", "zai:glm-5")
+- `LLM` - AI model identifier (e.g., "openai:gpt-5-mini", "anthropic:claude-4-sonnet", "zai:glm-5", "ollama:llama3.2")
 - `MAX_CLIPS` - Max number of clip segments selected after AI validation/diversity filtering
 - `CLIP_DIVERSITY_ENABLED` - Enable timeline spread filtering after AI scoring
 - `CLIP_DIVERSITY_MIN_GAP_SECONDS` - Preferred minimum gap between selected clip start times
 - `CLIP_DIVERSITY_BUCKETS` - Timeline bucket count used to encourage coverage on long videos
 - `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, or `ZAI_API_KEY` - Depending on LLM choice
+- `OLLAMA_BASE_URL` - Ollama server URL when using `ollama:*` models
 - `DATABASE_URL` - PostgreSQL connection string
 - `TEMP_DIR` - Directory for temporary files (defaults to /tmp)
 - `WHISPER_CACHE_HOST_DIR` - Docker host path for Whisper cache mount (default `./backend/.cache/whisper`)

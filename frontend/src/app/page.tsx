@@ -46,7 +46,7 @@ interface LatestTask {
   updated_at: string;
 }
 
-const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
+const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 type AiProvider = (typeof AI_PROVIDERS)[number];
 
 const DEFAULT_AI_MODELS = {
@@ -54,6 +54,7 @@ const DEFAULT_AI_MODELS = {
   google: "gemini-2.5-pro",
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
+  ollama: "llama3.2",
 } as const satisfies Record<AiProvider, string>;
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 const DEFAULT_WHISPER_CHUNKING_ENABLED = true;

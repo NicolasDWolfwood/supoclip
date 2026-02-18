@@ -7,8 +7,9 @@ import json
 from typing import Any, Iterable
 from urllib import error, parse, request
 
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 HTTP_TIMEOUT_SECONDS = 15
 
 
@@ -39,6 +40,15 @@ def _extract_error_message(payload: Any) -> str | None:
             if isinstance(value, str) and value.strip():
                 return value.strip()
     return None
+
+
+def _normalize_base_url(base_url: str | None) -> str:
+    raw = (base_url or "").strip()
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = f"http://{raw}"
+    return raw.rstrip("/")
 
 
 def _request_json(provider: str, url: str, headers: dict[str, str]) -> dict[str, Any]:
@@ -177,12 +187,36 @@ def _list_zai_models(api_key: str) -> list[str]:
     return preferred or ids
 
 
-def list_models_for_provider(provider: str, api_key: str) -> list[str]:
+def _list_ollama_models(base_url: str | None) -> list[str]:
+    normalized_base_url = _normalize_base_url(base_url) or DEFAULT_OLLAMA_BASE_URL
+    payload = _request_json(
+        provider="ollama",
+        url=f"{normalized_base_url}/api/tags",
+        headers={},
+    )
+    rows = payload.get("models")
+    if not isinstance(rows, list):
+        raise ModelCatalogError("ollama model listing did not include a models array", status_code=502)
+
+    names: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        model_name = row.get("model")
+        if not isinstance(model_name, str) or not model_name.strip():
+            model_name = row.get("name")
+        if isinstance(model_name, str) and model_name.strip():
+            names.append(model_name.strip())
+
+    return _dedupe_and_sort(names)
+
+
+def list_models_for_provider(provider: str, api_key: str, base_url: str | None = None) -> list[str]:
     normalized_provider = (provider or "").strip().lower()
     normalized_key = (api_key or "").strip()
     if normalized_provider not in SUPPORTED_AI_PROVIDERS:
         raise ModelCatalogError(f"Unsupported AI provider: {provider}", status_code=400)
-    if not normalized_key:
+    if normalized_provider != "ollama" and not normalized_key:
         raise ModelCatalogError("api key is required to fetch models", status_code=400)
 
     if normalized_provider == "openai":
@@ -191,8 +225,10 @@ def list_models_for_provider(provider: str, api_key: str) -> list[str]:
         models = _list_google_models(normalized_key)
     elif normalized_provider == "anthropic":
         models = _list_anthropic_models(normalized_key)
-    else:
+    elif normalized_provider == "zai":
         models = _list_zai_models(normalized_key)
+    else:
+        models = _list_ollama_models(base_url)
 
     if not models:
         raise ModelCatalogError(f"No models returned for {normalized_provider}", status_code=502)

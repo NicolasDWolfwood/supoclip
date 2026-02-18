@@ -143,7 +143,7 @@ async def init_db():
                     END IF;
                     ALTER TABLE tasks
                     ADD CONSTRAINT check_tasks_ai_provider
-                    CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
+                    CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai', 'ollama'));
                 END $$;
                 """
             )
@@ -331,6 +331,14 @@ async def init_db():
             text(
                 """
                 ALTER TABLE users
+                ADD COLUMN IF NOT EXISTS default_ollama_base_url VARCHAR(500)
+                """
+            )
+        )
+        await conn.execute(
+            text(
+                """
+                ALTER TABLE users
                 ADD COLUMN IF NOT EXISTS default_ai_model VARCHAR(100)
                 """
             )
@@ -499,7 +507,7 @@ async def init_db():
                     END IF;
                     ALTER TABLE users
                     ADD CONSTRAINT check_users_default_ai_provider
-                    CHECK (default_ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
+                    CHECK (default_ai_provider IN ('openai', 'google', 'anthropic', 'zai', 'ollama'));
                 END $$;
                 """
             )

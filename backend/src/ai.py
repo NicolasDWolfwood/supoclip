@@ -14,14 +14,16 @@ from .config import Config
 
 logger = logging.getLogger(__name__)
 config = Config()
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 DEFAULT_AI_MODELS = {
     "openai": "gpt-5-mini",
     "google": "gemini-2.5-pro",
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
+    "ollama": "llama3.2",
 }
 ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 ANALYSIS_SINGLE_PASS_CHAR_THRESHOLD = 24_000
 ANALYSIS_SINGLE_PASS_LINE_THRESHOLD = 180
 ANALYSIS_CHUNK_MAX_CHARS = 16_000
@@ -124,6 +126,22 @@ def _resolve_ai_model(ai_provider: str, requested_model: Optional[str]) -> str:
     if configured_provider == ai_provider and configured_model:
         return configured_model
     return DEFAULT_AI_MODELS[ai_provider]
+
+
+def _normalize_base_url(value: Optional[str]) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if not raw.startswith(("http://", "https://")):
+        raw = f"http://{raw}"
+    return raw.rstrip("/")
+
+
+def _resolve_ollama_openai_base_url(value: Optional[str]) -> str:
+    resolved_base = _normalize_base_url(value) or _normalize_base_url(config.ollama_base_url) or DEFAULT_OLLAMA_BASE_URL
+    if resolved_base.endswith("/v1"):
+        return resolved_base
+    return f"{resolved_base}/v1"
 
 
 def _parse_timestamp_to_seconds(raw_timestamp: str) -> Optional[float]:
@@ -443,6 +461,7 @@ async def _rerank_segments_globally(
     *,
     ai_provider: Optional[str] = None,
     ai_api_key: Optional[str] = None,
+    ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
     enabled: bool = True,
 ) -> Tuple[List[TranscriptSegment], Dict[str, Any]]:
@@ -471,6 +490,7 @@ async def _rerank_segments_globally(
     rerank_agent, resolved_provider, resolved_model = _build_rerank_agent(
         ai_provider=ai_provider,
         ai_api_key=ai_api_key,
+        ai_base_url=ai_base_url,
         ai_model=ai_model,
     )
     diagnostics["provider"] = resolved_provider
@@ -668,6 +688,7 @@ def _build_ai_agent(
     system_prompt: str,
     ai_provider: Optional[str] = None,
     ai_api_key: Optional[str] = None,
+    ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
 ) -> tuple[Agent, str, str]:
     selected_provider = (ai_provider or _default_ai_provider()).strip().lower()
@@ -694,6 +715,15 @@ def _build_ai_agent(
         if not resolved_key:
             raise ValueError("z.ai provider selected but no API key is configured")
         provider = OpenAIProvider(api_key=resolved_key, base_url=ZAI_OPENAI_BASE_URL)
+        model = OpenAIModel(selected_model, provider=provider)
+    elif selected_provider == "ollama":
+        from pydantic_ai.models.openai import OpenAIModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        provider = OpenAIProvider(
+            api_key=resolved_key or "ollama",
+            base_url=_resolve_ollama_openai_base_url(ai_base_url),
+        )
         model = OpenAIModel(selected_model, provider=provider)
     elif selected_provider == "google":
         from pydantic_ai.models.google import GoogleModel
@@ -728,6 +758,7 @@ def _build_ai_agent(
 def _build_transcript_agent(
     ai_provider: Optional[str] = None,
     ai_api_key: Optional[str] = None,
+    ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
 ) -> tuple[Agent, str, str]:
     return _build_ai_agent(
@@ -735,6 +766,7 @@ def _build_transcript_agent(
         system_prompt=simplified_system_prompt,
         ai_provider=ai_provider,
         ai_api_key=ai_api_key,
+        ai_base_url=ai_base_url,
         ai_model=ai_model,
     )
 
@@ -742,6 +774,7 @@ def _build_transcript_agent(
 def _build_rerank_agent(
     ai_provider: Optional[str] = None,
     ai_api_key: Optional[str] = None,
+    ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
 ) -> tuple[Agent, str, str]:
     return _build_ai_agent(
@@ -749,6 +782,7 @@ def _build_rerank_agent(
         system_prompt=global_rerank_system_prompt,
         ai_provider=ai_provider,
         ai_api_key=ai_api_key,
+        ai_base_url=ai_base_url,
         ai_model=ai_model,
     )
 
@@ -756,12 +790,14 @@ async def get_most_relevant_parts_by_transcript(
     transcript: str,
     ai_provider: Optional[str] = None,
     ai_api_key: Optional[str] = None,
+    ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript for creating clips - simplified version."""
     transcript_agent, resolved_provider, resolved_model = _build_transcript_agent(
         ai_provider=ai_provider,
         ai_api_key=ai_api_key,
+        ai_base_url=ai_base_url,
         ai_model=ai_model,
     )
     logger.info(
@@ -857,6 +893,7 @@ async def get_most_relevant_parts_by_transcript(
             validated_segments,
             ai_provider=ai_provider,
             ai_api_key=ai_api_key,
+            ai_base_url=ai_base_url,
             ai_model=ai_model,
             enabled=chunked_mode,
         )

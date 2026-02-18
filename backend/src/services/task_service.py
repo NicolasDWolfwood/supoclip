@@ -22,15 +22,18 @@ from ..video_utils import load_cached_transcript_data
 
 logger = logging.getLogger(__name__)
 config = Config()
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
+AI_KEY_REQUIRED_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 DEFAULT_AI_MODELS = {
     "openai": "gpt-5-mini",
     "google": "gemini-2.5-pro",
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
+    "ollama": "llama3.2",
 }
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 DRAFT_MIN_DURATION_SECONDS = 3
 DRAFT_MAX_DURATION_SECONDS = 180
 TIMELINE_INCREMENT_SECONDS = 0.5
@@ -124,6 +127,38 @@ class TaskService:
         if normalized not in SUPPORTED_ZAI_ROUTING_MODES:
             return "auto"
         return normalized
+
+    @staticmethod
+    def _normalize_base_url(value: Optional[str]) -> Optional[str]:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        if not raw.startswith(("http://", "https://")):
+            raw = f"http://{raw}"
+        return raw.rstrip("/")
+
+    @classmethod
+    def _normalize_ollama_base_url(cls, value: Optional[str]) -> str:
+        normalized = cls._normalize_base_url(value)
+        if not normalized:
+            raise ValueError("Ollama server URL is required")
+        return normalized
+
+    async def _resolve_effective_ollama_base_url(
+        self,
+        user_id: Optional[str],
+        requested_base_url: Optional[str] = None,
+    ) -> str:
+        requested = self._normalize_base_url(requested_base_url)
+        if requested:
+            return requested
+        if user_id:
+            saved = await self.task_repo.get_user_ollama_base_url(self.db, user_id)
+            normalized_saved = self._normalize_base_url(saved)
+            if normalized_saved:
+                return normalized_saved
+        env_fallback = self._normalize_base_url(config.ollama_base_url)
+        return env_fallback or DEFAULT_OLLAMA_BASE_URL
 
     @staticmethod
     def _normalize_text_for_compare(value: Optional[str]) -> str:
@@ -298,8 +333,8 @@ class TaskService:
     ) -> None:
         normalized_provider = (provider or "").strip().lower()
         normalized_profile = (profile_name or "").strip().lower()
-        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
-            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_provider != "zai":
+            raise ValueError(f"Unsupported AI provider profile routing: {provider}")
         if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
             raise ValueError(f"Unsupported key profile: {profile_name}")
         if not await self.task_repo.user_exists(self.db, user_id):
@@ -321,8 +356,8 @@ class TaskService:
     ) -> None:
         normalized_provider = (provider or "").strip().lower()
         normalized_profile = (profile_name or "").strip().lower()
-        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
-            raise ValueError(f"Unsupported AI provider: {provider}")
+        if normalized_provider != "zai":
+            raise ValueError(f"Unsupported AI provider profile routing: {provider}")
         if normalized_profile not in SUPPORTED_ZAI_KEY_PROFILES:
             raise ValueError(f"Unsupported key profile: {profile_name}")
         if not await self.task_repo.user_exists(self.db, user_id):
@@ -345,6 +380,8 @@ class TaskService:
             raise ValueError(f"Unsupported AI provider: {provider}")
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
+        if normalized_provider not in AI_KEY_REQUIRED_PROVIDERS:
+            return [], None
 
         attempts: List[Dict[str, str]] = []
         seen_keys: set[str] = set()
@@ -488,7 +525,7 @@ class TaskService:
         ai_provider: str,
         ai_routing_mode: Optional[str],
         user_id: Optional[str],
-    ) -> Tuple[Optional[str], str, Optional[str], Optional[str], List[str], List[str]]:
+    ) -> Tuple[Optional[str], str, Optional[str], Optional[str], Optional[str], List[str], List[str]]:
         assembly_api_key: Optional[str] = None
         if transcription_provider == "assemblyai":
             stored_encrypted_key = None
@@ -502,16 +539,20 @@ class TaskService:
         selected_ai_provider = (ai_provider or "openai").strip().lower()
         resolved_zai_routing_mode: Optional[str] = None
         ai_key_attempts: List[Dict[str, str]] = []
-        if selected_ai_provider in SUPPORTED_AI_PROVIDERS and user_id:
-            ai_key_attempts, resolved_zai_routing_mode = await self.get_effective_user_ai_api_key_attempts(
-                user_id=user_id,
-                provider=selected_ai_provider,
-                zai_routing_mode=ai_routing_mode,
-            )
-        elif selected_ai_provider in SUPPORTED_AI_PROVIDERS:
-            fallback_key = self._env_ai_key_for_provider(selected_ai_provider)
-            if fallback_key:
-                ai_key_attempts = [{"label": "env", "key": fallback_key}]
+        ai_base_url: Optional[str] = None
+        if selected_ai_provider in AI_KEY_REQUIRED_PROVIDERS:
+            if user_id:
+                ai_key_attempts, resolved_zai_routing_mode = await self.get_effective_user_ai_api_key_attempts(
+                    user_id=user_id,
+                    provider=selected_ai_provider,
+                    zai_routing_mode=ai_routing_mode,
+                )
+            else:
+                fallback_key = self._env_ai_key_for_provider(selected_ai_provider)
+                if fallback_key:
+                    ai_key_attempts = [{"label": "env", "key": fallback_key}]
+        elif selected_ai_provider == "ollama":
+            ai_base_url = await self._resolve_effective_ollama_base_url(user_id=user_id)
 
         ai_api_key = ai_key_attempts[0]["key"] if ai_key_attempts else None
         ai_api_key_fallbacks = [attempt["key"] for attempt in ai_key_attempts[1:]]
@@ -522,6 +563,7 @@ class TaskService:
             selected_ai_provider,
             resolved_zai_routing_mode,
             ai_api_key,
+            ai_base_url,
             ai_api_key_fallbacks,
             ai_key_labels,
         )
@@ -547,6 +589,7 @@ class TaskService:
             selected_ai_provider,
             resolved_zai_routing_mode,
             ai_api_key,
+            ai_base_url,
             ai_api_key_fallbacks,
             ai_key_labels,
         ) = await self._resolve_processing_credentials(
@@ -563,6 +606,7 @@ class TaskService:
             assembly_api_key=assembly_api_key,
             ai_provider=selected_ai_provider,
             ai_api_key=ai_api_key,
+            ai_base_url=ai_base_url,
             ai_api_key_fallbacks=ai_api_key_fallbacks,
             ai_key_labels=ai_key_labels,
             ai_routing_mode=resolved_zai_routing_mode,
@@ -668,6 +712,7 @@ class TaskService:
             selected_ai_provider,
             resolved_zai_routing_mode,
             ai_api_key,
+            ai_base_url,
             ai_api_key_fallbacks,
             ai_key_labels,
         ) = await self._resolve_processing_credentials(
@@ -688,6 +733,7 @@ class TaskService:
             assembly_api_key=assembly_api_key,
             ai_provider=selected_ai_provider,
             ai_api_key=ai_api_key,
+            ai_base_url=ai_base_url,
             ai_api_key_fallbacks=ai_api_key_fallbacks,
             ai_key_labels=ai_key_labels,
             ai_routing_mode=resolved_zai_routing_mode,
@@ -1182,7 +1228,7 @@ class TaskService:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
         result: Dict[str, Any] = {}
-        for provider in SUPPORTED_AI_PROVIDERS:
+        for provider in AI_KEY_REQUIRED_PROVIDERS:
             encrypted = await self.task_repo.get_user_encrypted_ai_key(self.db, user_id, provider)
             result[f"has_{provider}_key"] = bool(encrypted)
         zai_profiles = await self.task_repo.list_user_ai_key_profiles(self.db, user_id, "zai")
@@ -1194,30 +1240,93 @@ class TaskService:
             or result["has_zai_subscription_key"]
             or result["has_zai_metered_key"]
         )
+        saved_ollama_base_url = await self.task_repo.get_user_ollama_base_url(self.db, user_id)
+        normalized_saved_ollama_base_url = self._normalize_base_url(saved_ollama_base_url)
+        normalized_env_ollama_base_url = self._normalize_base_url(config.ollama_base_url)
+        effective_ollama_base_url = (
+            normalized_saved_ollama_base_url or normalized_env_ollama_base_url or DEFAULT_OLLAMA_BASE_URL
+        )
+        result["has_ollama_server"] = bool(normalized_saved_ollama_base_url)
+        result["has_env_ollama"] = bool(normalized_env_ollama_base_url)
+        result["ollama_server_url"] = effective_ollama_base_url
         return result
 
     async def save_user_ai_key(self, user_id: str, provider: str, api_key: str) -> None:
-        if provider not in SUPPORTED_AI_PROVIDERS:
+        normalized_provider = (provider or "").strip().lower()
+        if normalized_provider not in AI_KEY_REQUIRED_PROVIDERS:
             raise ValueError(f"Unsupported AI provider: {provider}")
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
         encrypted = self.secret_service.encrypt(api_key)
-        await self.task_repo.set_user_encrypted_ai_key(self.db, user_id, provider, encrypted)
+        await self.task_repo.set_user_encrypted_ai_key(self.db, user_id, normalized_provider, encrypted)
 
     async def clear_user_ai_key(self, user_id: str, provider: str) -> None:
-        if provider not in SUPPORTED_AI_PROVIDERS:
+        normalized_provider = (provider or "").strip().lower()
+        if normalized_provider not in AI_KEY_REQUIRED_PROVIDERS:
             raise ValueError(f"Unsupported AI provider: {provider}")
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
-        await self.task_repo.clear_user_encrypted_ai_key(self.db, user_id, provider)
+        await self.task_repo.clear_user_encrypted_ai_key(self.db, user_id, normalized_provider)
+
+    async def save_user_ollama_base_url(self, user_id: str, base_url: str) -> str:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        normalized_base_url = self._normalize_ollama_base_url(base_url)
+        return await self.task_repo.set_user_ollama_base_url(self.db, user_id, normalized_base_url)
+
+    async def clear_user_ollama_base_url(self, user_id: str) -> None:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        await self.task_repo.clear_user_ollama_base_url(self.db, user_id)
+
+    async def get_effective_ollama_base_url(
+        self,
+        user_id: str,
+        requested_base_url: Optional[str] = None,
+    ) -> str:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        return await self._resolve_effective_ollama_base_url(
+            user_id=user_id,
+            requested_base_url=requested_base_url,
+        )
 
     async def list_available_ai_models(
         self,
         user_id: str,
         provider: str,
         zai_routing_mode: Optional[str] = None,
+        ollama_base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         normalized_provider = (provider or "").strip().lower()
+        if normalized_provider not in SUPPORTED_AI_PROVIDERS:
+            raise ValueError(f"Unsupported AI provider: {provider}")
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+
+        resolved_routing_mode: Optional[str] = None
+        resolved_ollama_base_url: Optional[str] = None
+        if normalized_provider == "ollama":
+            resolved_ollama_base_url = await self._resolve_effective_ollama_base_url(
+                user_id=user_id,
+                requested_base_url=ollama_base_url,
+            )
+            models = await asyncio.to_thread(
+                list_models_for_provider,
+                normalized_provider,
+                "",
+                resolved_ollama_base_url,
+            )
+            default_model = DEFAULT_AI_MODELS[normalized_provider]
+            return {
+                "provider": normalized_provider,
+                "models": models,
+                "default_model": default_model,
+                "count": len(models),
+                "zai_routing_mode": None,
+                "ollama_server_url": resolved_ollama_base_url,
+            }
+
         key_attempts, resolved_routing_mode = await self.get_effective_user_ai_api_key_attempts(
             user_id=user_id,
             provider=normalized_provider,

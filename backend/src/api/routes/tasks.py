@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 config = Config()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 SUPPORTED_TRANSCRIPTION_PROVIDERS = {"local", "assemblyai"}
-SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
+AI_KEY_REQUIRED_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 MIN_WHISPER_CHUNK_DURATION_SECONDS = 300
@@ -385,6 +386,7 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
             "has_google_key": bool(settings.get("has_google_key")),
             "has_anthropic_key": bool(settings.get("has_anthropic_key")),
             "has_zai_key": bool(settings.get("has_zai_key")),
+            "has_ollama_server": bool(settings.get("has_ollama_server")),
             "has_zai_subscription_key": bool(settings.get("has_zai_subscription_key")),
             "has_zai_metered_key": bool(settings.get("has_zai_metered_key")),
             "zai_routing_mode": str(settings.get("zai_routing_mode") or "auto"),
@@ -393,6 +395,8 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
             "has_env_google": bool((config.google_api_key or "").strip()),
             "has_env_anthropic": bool((config.anthropic_api_key or "").strip()),
             "has_env_zai": bool((config.zai_api_key or "").strip()),
+            "has_env_ollama": bool(settings.get("has_env_ollama")),
+            "ollama_server_url": str(settings.get("ollama_server_url") or config.ollama_base_url or ""),
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -410,7 +414,7 @@ async def save_ai_provider_key(
     """Save user API key for selected AI provider (encrypted at rest)."""
     user_id = _require_user_id(request)
     provider = (provider or "").strip().lower()
-    if provider not in SUPPORTED_AI_PROVIDERS:
+    if provider not in AI_KEY_REQUIRED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}")
     data = await request.json()
     api_key = str(data.get("api_key") or "").strip()
@@ -437,7 +441,7 @@ async def delete_ai_provider_key(
     """Delete user API key for selected AI provider."""
     user_id = _require_user_id(request)
     provider = (provider or "").strip().lower()
-    if provider not in SUPPORTED_AI_PROVIDERS:
+    if provider not in AI_KEY_REQUIRED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported AI provider: {provider}")
     try:
         task_service = TaskService(db)
@@ -448,6 +452,47 @@ async def delete_ai_provider_key(
     except Exception as e:
         logger.error(f"Error deleting AI provider key: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting key: {str(e)}")
+
+
+@router.put("/ai-settings/ollama/server")
+async def save_ollama_server(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save per-user Ollama server base URL."""
+    user_id = _require_user_id(request)
+    data = await request.json()
+    server_url = str(data.get("server_url") or "").strip()
+    if not server_url:
+        raise HTTPException(status_code=400, detail="server_url is required")
+
+    try:
+        task_service = TaskService(db)
+        normalized_server_url = await task_service.save_user_ollama_base_url(user_id, server_url)
+        return {"message": "ollama server saved", "provider": "ollama", "server_url": normalized_server_url}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving Ollama server URL: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving Ollama server URL: {str(e)}")
+
+
+@router.delete("/ai-settings/ollama/server")
+async def delete_ollama_server(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete per-user Ollama server base URL."""
+    user_id = _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        await task_service.clear_user_ollama_base_url(user_id)
+        return {"message": "ollama server removed", "provider": "ollama"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting Ollama server URL: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting Ollama server URL: {str(e)}")
 
 
 @router.put("/ai-settings/zai/profiles/{profile}/key")
@@ -530,7 +575,7 @@ async def list_ai_provider_models(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """List provider models using a saved user key (or env fallback)."""
+    """List provider models using saved user provider settings (or env/default fallback)."""
     user_id = _require_user_id(request)
     provider = (provider or "").strip().lower()
     if provider not in SUPPORTED_AI_PROVIDERS:
@@ -541,6 +586,11 @@ async def list_ai_provider_models(
         if provider == "zai"
         else None
     )
+    ollama_server_url = (
+        (request.query_params.get("server_url") or "").strip()
+        if provider == "ollama"
+        else None
+    )
 
     try:
         task_service = TaskService(db)
@@ -548,6 +598,7 @@ async def list_ai_provider_models(
             user_id,
             provider,
             zai_routing_mode=zai_routing_mode,
+            ollama_base_url=ollama_server_url,
         )
         return result
     except ModelCatalogError as e:
@@ -647,17 +698,21 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                     status_code=400,
                     detail="AssemblyAI selected but no API key is configured. Save one in Settings.",
                 )
-        ai_key_attempts, resolved_zai_routing_mode = await task_service.get_effective_user_ai_api_key_attempts(
-            user_id=user_id,
-            provider=ai_provider,
-            zai_routing_mode=ai_routing_mode,
-        )
-        if not ai_key_attempts:
-            routing_detail = f" (routing mode: {resolved_zai_routing_mode})" if resolved_zai_routing_mode else ""
-            raise HTTPException(
-                status_code=400,
-                detail=f"{ai_provider} selected but no API key is configured{routing_detail}. Save one in Settings.",
+        resolved_zai_routing_mode: Optional[str] = None
+        if ai_provider in AI_KEY_REQUIRED_PROVIDERS:
+            ai_key_attempts, resolved_zai_routing_mode = await task_service.get_effective_user_ai_api_key_attempts(
+                user_id=user_id,
+                provider=ai_provider,
+                zai_routing_mode=ai_routing_mode,
             )
+            if not ai_key_attempts:
+                routing_detail = f" (routing mode: {resolved_zai_routing_mode})" if resolved_zai_routing_mode else ""
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{ai_provider} selected but no API key is configured{routing_detail}. Save one in Settings.",
+                )
+        elif ai_provider == "ollama":
+            await task_service.get_effective_ollama_base_url(user_id)
 
         task_id = await task_service.create_task_with_source(
             user_id=user_id,

@@ -9,7 +9,7 @@ export const SETTINGS_SECTIONS = ["font", "video", "transcription", "ai"] as con
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 export const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
-export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai"] as const;
+export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
 
 export type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
@@ -55,6 +55,7 @@ export const DEFAULT_AI_MODELS: Record<AiProvider, string> = {
   google: "gemini-2.5-pro",
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
+  ollama: "llama3.2",
 };
 
 export const FALLBACK_AI_MODEL_OPTIONS: Record<AiProvider, string[]> = {
@@ -62,6 +63,7 @@ export const FALLBACK_AI_MODEL_OPTIONS: Record<AiProvider, string[]> = {
   google: ["gemini-2.5-pro", "gemini-2.5-flash"],
   anthropic: ["claude-4-sonnet", "claude-3-5-haiku"],
   zai: ["glm-5"],
+  ollama: ["llama3.2", "qwen2.5:7b", "mistral"],
 };
 
 export const SETTINGS_SECTION_META: Record<SettingsSection, { label: string; description: string }> = {
@@ -79,7 +81,7 @@ export const SETTINGS_SECTION_META: Record<SettingsSection, { label: string; des
   },
   ai: {
     label: "AI",
-    description: "LLM provider, model, and AI API keys.",
+    description: "LLM provider, model, provider API keys, and Ollama server settings.",
   },
 };
 

@@ -16,6 +16,9 @@ interface SettingsSectionAiProps {
   aiApiKey: string;
   hasSavedAiKey: boolean;
   hasEnvAiFallback: boolean;
+  ollamaServerUrl: string;
+  hasSavedOllamaServer: boolean;
+  hasEnvOllamaServer: boolean;
   aiKeyStatus: string | null;
   aiKeyError: string | null;
   aiModelStatus: string | null;
@@ -30,6 +33,9 @@ interface SettingsSectionAiProps {
   onAiApiKeyChange: (value: string) => void;
   onSaveAiProviderKey: () => void;
   onDeleteAiProviderKey: () => void;
+  onOllamaServerUrlChange: (value: string) => void;
+  onSaveOllamaServer: () => void;
+  onDeleteOllamaServer: () => void;
   onRefreshAiModels: () => void;
   onSelectedZaiKeyProfileChange: (profile: "subscription" | "metered") => void;
   onZaiRoutingModeChange: (mode: ZaiRoutingMode) => void;
@@ -50,6 +56,9 @@ export function SettingsSectionAi({
   aiApiKey,
   hasSavedAiKey,
   hasEnvAiFallback,
+  ollamaServerUrl,
+  hasSavedOllamaServer,
+  hasEnvOllamaServer,
   aiKeyStatus,
   aiKeyError,
   aiModelStatus,
@@ -64,6 +73,9 @@ export function SettingsSectionAi({
   onAiApiKeyChange,
   onSaveAiProviderKey,
   onDeleteAiProviderKey,
+  onOllamaServerUrlChange,
+  onSaveOllamaServer,
+  onDeleteOllamaServer,
   onRefreshAiModels,
   onSelectedZaiKeyProfileChange,
   onZaiRoutingModeChange,
@@ -90,7 +102,11 @@ export function SettingsSectionAi({
           <SelectContent>
             {AI_PROVIDERS.map((provider) => (
               <SelectItem key={provider} value={provider}>
-                {provider === "zai" ? "z.ai (GLM)" : provider.charAt(0).toUpperCase() + provider.slice(1)}
+                {provider === "zai"
+                  ? "z.ai (GLM)"
+                  : provider === "ollama"
+                    ? "Ollama"
+                    : provider.charAt(0).toUpperCase() + provider.slice(1)}
               </SelectItem>
             ))}
           </SelectContent>
@@ -181,6 +197,51 @@ export function SettingsSectionAi({
             {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
             {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
           </div>
+        ) : aiProvider === "ollama" ? (
+          <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
+            <label htmlFor="ollama-server-url" className="text-xs font-medium text-black">
+              Ollama Server URL
+            </label>
+            <Input
+              id="ollama-server-url"
+              type="text"
+              value={ollamaServerUrl}
+              onChange={(event) => onOllamaServerUrlChange(event.target.value ?? "")}
+              placeholder="http://localhost:11434"
+              disabled={isSaving || isSavingAiKey}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || !ollamaServerUrl.trim()}
+                onClick={onSaveOllamaServer}
+              >
+                {isSavingAiKey ? "Saving..." : "Save Server"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || !hasSavedOllamaServer}
+                onClick={onDeleteOllamaServer}
+              >
+                Remove Saved Server
+              </Button>
+              <span className="text-xs text-gray-500">
+                {hasSavedOllamaServer
+                  ? "Saved server URL available"
+                  : hasEnvOllamaServer
+                    ? "No saved server; using backend env fallback"
+                    : ollamaServerUrl.trim()
+                      ? "Using default backend Ollama URL"
+                      : "No server configured"}
+              </span>
+            </div>
+            {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
+            {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
+          </div>
         ) : (
           <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
             <label htmlFor="ai-provider-key" className="text-xs font-medium text-black">
@@ -245,7 +306,11 @@ export function SettingsSectionAi({
               {isLoadingAiModels ? "Loading Models..." : "Refresh Models"}
             </Button>
             {!hasAiKeyForSelectedProvider && (
-              <span className="text-xs text-gray-500">Save a key (or configure env fallback) to load models.</span>
+              <span className="text-xs text-gray-500">
+                {aiProvider === "ollama"
+                  ? "Save an Ollama server URL (or configure OLLAMA_BASE_URL) to load models."
+                  : "Save a key (or configure env fallback) to load models."}
+              </span>
             )}
           </div>
           <Input

@@ -25,6 +25,7 @@ if [ ! -f .env ]; then
     echo "  2. Or use the provided .env file"
     echo "  3. Edit .env and add your API keys:"
     echo "     - OPENAI_API_KEY or GOOGLE_API_KEY or ANTHROPIC_API_KEY or ZAI_API_KEY"
+    echo "     - or OLLAMA_BASE_URL (for Ollama provider)"
     echo "     - TRANSCRIPTION_PROVIDER=local (default) or assemblyai"
     echo "     - ASSEMBLY_AI_API_KEY (only if TRANSCRIPTION_PROVIDER=assemblyai)"
     echo "     - Optional local URL/port mappings (see docs/local-host-mappings.md)"
@@ -42,9 +43,9 @@ if [ "$TRANSCRIPTION_PROVIDER" = "assemblyai" ] && [ -z "$ASSEMBLY_AI_API_KEY" ]
     echo ""
 fi
 
-if [ -z "$OPENAI_API_KEY" ] && [ -z "$GOOGLE_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$ZAI_API_KEY" ]; then
-    echo -e "${YELLOW}Warning: No AI provider API key is set in .env${NC}"
-    echo "You need at least one of: OPENAI_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY, or ZAI_API_KEY"
+if [ -z "$OPENAI_API_KEY" ] && [ -z "$GOOGLE_API_KEY" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$ZAI_API_KEY" ] && [ -z "$OLLAMA_BASE_URL" ]; then
+    echo -e "${YELLOW}Warning: No AI provider configuration is set in .env${NC}"
+    echo "You need at least one of: OPENAI_API_KEY, GOOGLE_API_KEY, ANTHROPIC_API_KEY, ZAI_API_KEY, or OLLAMA_BASE_URL"
     echo ""
 fi
 

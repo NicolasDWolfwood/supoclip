@@ -25,7 +25,7 @@ BEGIN
     END IF;
     ALTER TABLE tasks
     ADD CONSTRAINT check_tasks_ai_provider
-    CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
+    CHECK (ai_provider IN ('openai', 'google', 'anthropic', 'zai', 'ollama'));
 END $$;
 
 DO $$

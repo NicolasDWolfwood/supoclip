@@ -58,6 +58,7 @@ Backend compatibility behavior:
   - `CLIP_DIVERSITY_BUCKETS`
   - long transcripts are analyzed in automatic AI chunks, then globally reranked in a second pass before diversity filtering
 - AI provider keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`
+- Ollama server config: `OLLAMA_BASE_URL` (used when provider is `ollama`)
 - z.ai requests use Coding API endpoint: `https://api.z.ai/api/coding/paas/v4`
 - z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
@@ -86,7 +87,12 @@ Backend is started by `docker-compose.yml` with:
 When running locally or via Docker:
 - Swagger UI: `http://${APP_HOST}:${BACKEND_HOST_PORT}/docs` (default `http://localhost:8000/docs`)
 - Task runtime statuses include: `queued`, `processing`, `awaiting_review`, `completed`, `error`
-- AI model discovery: `GET /tasks/ai-settings/{provider}/models` (uses saved user key first, then env fallback)
+- AI model discovery: `GET /tasks/ai-settings/{provider}/models`
+  - key providers use saved user key first, then env fallback
+  - `ollama` uses saved user server URL first, then `OLLAMA_BASE_URL`
+- Ollama server settings:
+  - `PUT /tasks/ai-settings/ollama/server`
+  - `DELETE /tasks/ai-settings/ollama/server`
 - z.ai profile keys:
   - `PUT /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
   - `DELETE /tasks/ai-settings/zai/profiles/{subscription|metered}/key`

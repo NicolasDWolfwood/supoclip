@@ -248,6 +248,7 @@ class VideoService:
         transcript: str,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_base_url: Optional[str] = None,
         ai_model: Optional[str] = None,
     ) -> Any:
         """
@@ -259,6 +260,7 @@ class VideoService:
             transcript,
             ai_provider=ai_provider,
             ai_api_key=ai_api_key,
+            ai_base_url=ai_base_url,
             ai_model=ai_model,
         )
         logger.info(f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found")
@@ -269,6 +271,7 @@ class VideoService:
         transcript: str,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_base_url: Optional[str] = None,
         ai_model: Optional[str] = None,
         progress_callback: Optional[callable] = None,
     ) -> Any:
@@ -309,6 +312,7 @@ class VideoService:
                 transcript,
                 ai_provider=ai_provider,
                 ai_api_key=ai_api_key,
+                ai_base_url=ai_base_url,
                 ai_model=ai_model,
             )
         finally:
@@ -802,6 +806,7 @@ class VideoService:
         transcript: str,
         ai_provider: str,
         ai_api_key: Optional[str],
+        ai_base_url: Optional[str],
         ai_api_key_fallbacks: Optional[List[str]],
         ai_key_labels: Optional[List[str]],
         ai_routing_mode: Optional[str],
@@ -826,6 +831,7 @@ class VideoService:
                 transcript,
                 ai_provider=ai_provider,
                 ai_api_key=key_candidate,
+                ai_base_url=ai_base_url,
                 ai_model=ai_model,
                 progress_callback=progress_callback,
             )
@@ -877,6 +883,7 @@ class VideoService:
         assembly_api_key: Optional[str] = None,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_base_url: Optional[str] = None,
         ai_api_key_fallbacks: Optional[List[str]] = None,
         ai_key_labels: Optional[List[str]] = None,
         ai_routing_mode: Optional[str] = None,
@@ -980,6 +987,7 @@ class VideoService:
             transcript=transcript,
             ai_provider=ai_provider,
             ai_api_key=ai_api_key,
+            ai_base_url=ai_base_url,
             ai_api_key_fallbacks=ai_api_key_fallbacks,
             ai_key_labels=ai_key_labels,
             ai_routing_mode=ai_routing_mode,
@@ -1083,6 +1091,7 @@ class VideoService:
         assembly_api_key: Optional[str] = None,
         ai_provider: str = "openai",
         ai_api_key: Optional[str] = None,
+        ai_base_url: Optional[str] = None,
         ai_api_key_fallbacks: Optional[List[str]] = None,
         ai_key_labels: Optional[List[str]] = None,
         ai_routing_mode: Optional[str] = None,
@@ -1103,6 +1112,7 @@ class VideoService:
                 assembly_api_key=assembly_api_key,
                 ai_provider=ai_provider,
                 ai_api_key=ai_api_key,
+                ai_base_url=ai_base_url,
                 ai_api_key_fallbacks=ai_api_key_fallbacks,
                 ai_key_labels=ai_key_labels,
                 ai_routing_mode=ai_routing_mode,

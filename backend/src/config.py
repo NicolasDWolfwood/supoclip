@@ -22,6 +22,8 @@ class Config:
         self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
         self.google_api_key = os.getenv("GOOGLE_API_KEY")
         self.zai_api_key = os.getenv("ZAI_API_KEY")
+        raw_ollama_base_url = os.getenv("OLLAMA_BASE_URL")
+        self.ollama_base_url = raw_ollama_base_url.strip() if isinstance(raw_ollama_base_url, str) and raw_ollama_base_url.strip() else None
         self.assembly_ai_api_key = os.getenv("ASSEMBLY_AI_API_KEY")
         self.admin_api_key = os.getenv("ADMIN_API_KEY")
         self.secret_encryption_key = os.getenv("SECRET_ENCRYPTION_KEY")

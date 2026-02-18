@@ -62,5 +62,5 @@ BEGIN
     END IF;
     ALTER TABLE users
     ADD CONSTRAINT check_users_default_ai_provider
-    CHECK (default_ai_provider IN ('openai', 'google', 'anthropic', 'zai'));
+    CHECK (default_ai_provider IN ('openai', 'google', 'anthropic', 'zai', 'ollama'));
 END $$;
