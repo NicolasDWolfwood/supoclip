@@ -1453,6 +1453,29 @@ KARAOKE_WORD_VERTICAL_PADDING_PX = 6
 KARAOKE_TIMING_SHIFT_SECONDS = 0.55
 
 
+def _compute_vertical_effect_padding(
+    font_size: int,
+    stroke_width: int,
+    stroke_blur: float,
+    shadow_blur: int,
+    shadow_offset_y: int,
+) -> Tuple[int, int]:
+    """
+    Reserve extra text box space so descenders and effect layers are not clipped.
+
+    Returns (top_padding_px, bottom_padding_px).
+    """
+    # Descenders vary per font; keep a small proportional guard to prevent hard clipping.
+    descender_guard = max(2, int(round(font_size * 0.12)))
+    stroke_guard = max(0, int(round(stroke_width + (stroke_blur * 1.5))))
+    shadow_top_guard = max(0, int(round(shadow_blur - shadow_offset_y)))
+    shadow_bottom_guard = max(0, int(round(shadow_blur + shadow_offset_y)))
+
+    top_padding = max(stroke_guard, shadow_top_guard)
+    bottom_padding = max(descender_guard, stroke_guard, shadow_bottom_guard)
+    return top_padding, bottom_padding
+
+
 def _measure_label_text(text: str, font_path: str, font_size: int) -> Tuple[int, int]:
     if not text:
         return (0, max(1, int(font_size)))
@@ -1769,7 +1792,19 @@ def create_assemblyai_subtitles(
         word_heights = [size[1] for size in word_sizes]
         total_width = sum(word_widths) + (space_width * max(0, len(display_words) - 1))
         text_height = max([final_font_size] + word_heights)
-        line_box_height = text_height + (KARAOKE_WORD_VERTICAL_PADDING_PX * 2)
+        top_effect_padding, bottom_effect_padding = _compute_vertical_effect_padding(
+            final_font_size,
+            stroke_width,
+            stroke_blur,
+            shadow_blur,
+            shadow_offset_y,
+        )
+        line_box_height = (
+            text_height
+            + (KARAOKE_WORD_VERTICAL_PADDING_PX * 2)
+            + top_effect_padding
+            + bottom_effect_padding
+        )
 
         horizontal_padding = int(video_width * 0.04)
         if text_align == "left":
