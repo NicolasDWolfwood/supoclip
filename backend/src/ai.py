@@ -5,6 +5,7 @@ AI-related functions for transcript analysis with enhanced precision.
 from typing import List, Dict, Any, Optional, Tuple
 import asyncio
 import logging
+import re
 
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
@@ -21,6 +22,15 @@ DEFAULT_AI_MODELS = {
     "zai": "glm-5",
 }
 ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
+ANALYSIS_SINGLE_PASS_CHAR_THRESHOLD = 24_000
+ANALYSIS_SINGLE_PASS_LINE_THRESHOLD = 180
+ANALYSIS_CHUNK_MAX_CHARS = 16_000
+ANALYSIS_CHUNK_MIN_LINES = 40
+ANALYSIS_CHUNK_OVERLAP_LINES = 8
+CHUNK_ANALYSIS_SEGMENT_TARGET = 8
+GLOBAL_RERANK_MIN_CANDIDATES = 6
+GLOBAL_RERANK_MAX_CANDIDATES = 40
+TRANSCRIPT_LINE_RE = re.compile(r"^\[(?P<start>[^\]-]+?)\s*-\s*(?P<end>[^\]]+?)\]\s*(?P<text>.*)$")
 
 class TranscriptSegment(BaseModel):
     """Represents a relevant segment of transcript with precise timing."""
@@ -36,6 +46,17 @@ class TranscriptAnalysis(BaseModel):
     summary: str = Field(description="Brief summary of the video content")
     key_topics: List[str] = Field(description="List of main topics discussed")
     diagnostics: Dict[str, Any] = Field(default_factory=dict, description="Internal analysis diagnostics")
+
+
+class RerankedCandidate(BaseModel):
+    candidate_id: int = Field(description="Candidate identifier from the provided list", ge=1)
+    relevance_score: float = Field(description="Updated global relevance score from 0.0 to 1.0", ge=0.0, le=1.0)
+    reasoning: str = Field(description="Short reason for this ranking position")
+
+
+class CandidateRerankResult(BaseModel):
+    ranked_candidates: List[RerankedCandidate]
+
 
 # Simplified system prompt that trusts transcript timing
 simplified_system_prompt = """You are an expert at analyzing video transcripts to find the most engaging segments for short-form content creation.
@@ -70,6 +91,15 @@ TIMESTAMP REQUIREMENTS - EXTREMELY IMPORTANT:
 - Example: start_time: "02:25", end_time: "02:35" (NOT "02:25" and "02:25")
 
 Find 12-20 compelling candidate segments across the FULL timeline. Quality over quantity - choose segments that would genuinely engage viewers and have proper time ranges."""
+
+global_rerank_system_prompt = """You are ranking pre-selected short-form clip candidates.
+
+Rules:
+1. Use ONLY candidate_id values provided by the user.
+2. Return candidates in descending quality order for standalone short-form clips.
+3. Score each returned candidate from 0.0 to 1.0 (higher is better).
+4. Prefer strong hooks, complete thoughts, and social-shareability.
+5. Do not invent IDs, timestamps, or text."""
 
 def _parse_llm(value: str) -> Tuple[Optional[str], Optional[str]]:
     if ":" not in value:
@@ -125,6 +155,376 @@ def _parse_timestamp_to_seconds(raw_timestamp: str) -> Optional[float]:
         return None
 
     return None
+
+
+def _normalize_segment_text(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _extract_transcript_lines(transcript: str) -> List[str]:
+    return [line.strip() for line in str(transcript or "").splitlines() if line.strip()]
+
+
+def _parse_formatted_transcript_line(line: str) -> Tuple[Optional[str], Optional[str]]:
+    match = TRANSCRIPT_LINE_RE.match(str(line or "").strip())
+    if not match:
+        return None, None
+    start = str(match.group("start") or "").strip()
+    end = str(match.group("end") or "").strip()
+    return (start or None), (end or None)
+
+
+def _chunk_time_bounds(chunk_lines: List[str]) -> Tuple[Optional[str], Optional[str]]:
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+
+    for line in chunk_lines:
+        start, _end = _parse_formatted_transcript_line(line)
+        if start:
+            start_time = start
+            break
+
+    for line in reversed(chunk_lines):
+        _start, end = _parse_formatted_transcript_line(line)
+        if end:
+            end_time = end
+            break
+
+    return start_time, end_time
+
+
+def _build_analysis_chunks(transcript: str) -> List[Dict[str, Any]]:
+    lines = _extract_transcript_lines(transcript)
+    if not lines:
+        return [{
+            "index": 1,
+            "total": 1,
+            "text": "",
+            "line_count": 0,
+            "char_count": 0,
+            "start_time": None,
+            "end_time": None,
+            "start_line": 0,
+            "end_line": 0,
+        }]
+
+    should_chunk = (
+        len(transcript) > ANALYSIS_SINGLE_PASS_CHAR_THRESHOLD
+        and len(lines) > ANALYSIS_SINGLE_PASS_LINE_THRESHOLD
+    )
+    if not should_chunk:
+        start_time, end_time = _chunk_time_bounds(lines)
+        return [{
+            "index": 1,
+            "total": 1,
+            "text": "\n".join(lines),
+            "line_count": len(lines),
+            "char_count": len("\n".join(lines)),
+            "start_time": start_time,
+            "end_time": end_time,
+            "start_line": 1,
+            "end_line": len(lines),
+        }]
+
+    ranges: List[Tuple[int, int]] = []
+    total_lines = len(lines)
+    overlap = max(0, ANALYSIS_CHUNK_OVERLAP_LINES)
+    start_index = 0
+    while start_index < total_lines:
+        char_count = 0
+        end_index = start_index
+        while end_index < total_lines:
+            line_len = len(lines[end_index]) + 1
+            projected_chars = char_count + line_len
+            line_count = end_index - start_index
+            if (
+                line_count >= ANALYSIS_CHUNK_MIN_LINES
+                and projected_chars > ANALYSIS_CHUNK_MAX_CHARS
+            ):
+                break
+            char_count = projected_chars
+            end_index += 1
+            if (
+                char_count >= ANALYSIS_CHUNK_MAX_CHARS
+                and (end_index - start_index) >= ANALYSIS_CHUNK_MIN_LINES
+            ):
+                break
+
+        if end_index <= start_index:
+            end_index = min(total_lines, start_index + 1)
+
+        ranges.append((start_index, end_index))
+        if end_index >= total_lines:
+            break
+        next_start = end_index - overlap
+        start_index = next_start if next_start > start_index else end_index
+
+    chunks: List[Dict[str, Any]] = []
+    total_chunks = len(ranges)
+    for idx, (start_idx, end_idx) in enumerate(ranges, start=1):
+        chunk_lines = lines[start_idx:end_idx]
+        chunk_text = "\n".join(chunk_lines)
+        start_time, end_time = _chunk_time_bounds(chunk_lines)
+        chunks.append(
+            {
+                "index": idx,
+                "total": total_chunks,
+                "text": chunk_text,
+                "line_count": len(chunk_lines),
+                "char_count": len(chunk_text),
+                "start_time": start_time,
+                "end_time": end_time,
+                "start_line": start_idx + 1,
+                "end_line": end_idx,
+            }
+        )
+    return chunks
+
+
+def _build_analysis_prompt(
+    transcript: str,
+    *,
+    chunk_metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    if chunk_metadata and int(chunk_metadata.get("total") or 1) > 1:
+        chunk_index = int(chunk_metadata.get("index") or 1)
+        total_chunks = int(chunk_metadata.get("total") or 1)
+        chunk_start = str(chunk_metadata.get("start_time") or "unknown")
+        chunk_end = str(chunk_metadata.get("end_time") or "unknown")
+        return f"""Analyze this transcript excerpt (chunk {chunk_index}/{total_chunks}) and identify the most engaging segments for short-form content.
+
+This is only part of the full transcript. Focus on this excerpt's timeline window.
+Return up to {CHUNK_ANALYSIS_SEGMENT_TARGET} high-quality candidate segments from this excerpt.
+
+Excerpt window: {chunk_start} to {chunk_end}
+
+Transcript excerpt:
+{transcript}"""
+
+    return f"""Analyze this video transcript and identify the most engaging segments for short-form content.
+
+Find segments that would be compelling as standalone clips for social media.
+
+Transcript:
+{transcript}"""
+
+
+def _dedupe_candidate_segments(segments: List[TranscriptSegment]) -> List[TranscriptSegment]:
+    deduped: Dict[Tuple[str, str, str], TranscriptSegment] = {}
+    for segment in segments:
+        key = (
+            str(segment.start_time or "").strip(),
+            str(segment.end_time or "").strip(),
+            _normalize_segment_text(segment.text),
+        )
+        existing = deduped.get(key)
+        if existing is None or float(segment.relevance_score) > float(existing.relevance_score):
+            deduped[key] = segment
+    return list(deduped.values())
+
+
+def _validate_analysis_segments(
+    raw_segments: List[TranscriptSegment],
+) -> Tuple[List[TranscriptSegment], Dict[str, int]]:
+    validated_segments: List[TranscriptSegment] = []
+    rejected_counts = {
+        "insufficient_text": 0,
+        "identical_timestamps": 0,
+        "invalid_duration": 0,
+        "too_short": 0,
+        "invalid_timestamp_format": 0,
+    }
+
+    for segment in raw_segments:
+        if not segment.text.strip() or len(segment.text.split()) < 3:
+            logger.warning(f"Skipping segment with insufficient content: '{segment.text[:50]}...'")
+            rejected_counts["insufficient_text"] += 1
+            continue
+
+        if segment.start_time == segment.end_time:
+            logger.warning(f"Skipping segment with identical start/end times: {segment.start_time}")
+            rejected_counts["identical_timestamps"] += 1
+            continue
+
+        start_seconds = _parse_timestamp_to_seconds(segment.start_time)
+        end_seconds = _parse_timestamp_to_seconds(segment.end_time)
+        if start_seconds is None or end_seconds is None:
+            logger.warning(
+                "Skipping segment with invalid timestamp format: %s-%s",
+                segment.start_time,
+                segment.end_time,
+            )
+            rejected_counts["invalid_timestamp_format"] += 1
+            continue
+        duration = end_seconds - start_seconds
+
+        if duration <= 0:
+            logger.warning(
+                "Skipping segment with invalid duration: %s to %s = %ss",
+                segment.start_time,
+                segment.end_time,
+                duration,
+            )
+            rejected_counts["invalid_duration"] += 1
+            continue
+
+        if duration < 5:
+            logger.warning(f"Skipping segment too short: {duration}s (min 5s required)")
+            rejected_counts["too_short"] += 1
+            continue
+
+        validated_segments.append(segment)
+        logger.info(f"Validated segment: {segment.start_time}-{segment.end_time} ({duration:.1f}s)")
+
+    validated_segments.sort(key=lambda x: x.relevance_score, reverse=True)
+    return validated_segments, rejected_counts
+
+
+def _combine_summaries(analyses: List[TranscriptAnalysis], chunk_count: int) -> str:
+    summaries: List[str] = []
+    for analysis in analyses:
+        summary = str(analysis.summary or "").strip()
+        if not summary:
+            continue
+        if summary in summaries:
+            continue
+        summaries.append(summary)
+
+    if not summaries:
+        if chunk_count > 1:
+            return f"Aggregated analysis from {chunk_count} transcript chunks."
+        return ""
+    if len(summaries) == 1:
+        return summaries[0]
+    return " ".join(summaries[:3])
+
+
+def _combine_key_topics(analyses: List[TranscriptAnalysis]) -> List[str]:
+    deduped_topics: List[str] = []
+    seen: set[str] = set()
+    for analysis in analyses:
+        for raw_topic in analysis.key_topics or []:
+            topic = str(raw_topic or "").strip()
+            if not topic:
+                continue
+            normalized = topic.lower()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped_topics.append(topic)
+    return deduped_topics
+
+
+def _build_rerank_prompt(candidates_text: str, candidate_count: int) -> str:
+    return f"""Globally rank these clip candidates from best to worst.
+
+Return exactly {candidate_count} entries in ranked_candidates, one per candidate_id, with no duplicates.
+Every candidate_id from 1 to {candidate_count} must appear exactly once.
+
+Candidates:
+{candidates_text}"""
+
+
+def _build_rerank_candidates_text(segments: List[TranscriptSegment]) -> str:
+    lines: List[str] = []
+    for idx, segment in enumerate(segments, start=1):
+        text = " ".join(str(segment.text or "").split())
+        if len(text) > 220:
+            text = f"{text[:217]}..."
+        lines.append(
+            f"{idx}. [{segment.start_time} - {segment.end_time}] "
+            f"score={float(segment.relevance_score):.3f} text=\"{text}\""
+        )
+    return "\n".join(lines)
+
+
+async def _rerank_segments_globally(
+    segments: List[TranscriptSegment],
+    *,
+    ai_provider: Optional[str] = None,
+    ai_api_key: Optional[str] = None,
+    ai_model: Optional[str] = None,
+    enabled: bool = True,
+) -> Tuple[List[TranscriptSegment], Dict[str, Any]]:
+    diagnostics: Dict[str, Any] = {
+        "enabled": enabled,
+        "attempted": False,
+        "success": False,
+        "input_candidates": len(segments),
+        "max_candidates": GLOBAL_RERANK_MAX_CANDIDATES,
+        "min_candidates": GLOBAL_RERANK_MIN_CANDIDATES,
+    }
+    if not enabled:
+        diagnostics["reason"] = "disabled"
+        return segments, diagnostics
+
+    if len(segments) < GLOBAL_RERANK_MIN_CANDIDATES:
+        diagnostics["reason"] = "insufficient_candidates"
+        return segments, diagnostics
+
+    candidate_segments = segments[:GLOBAL_RERANK_MAX_CANDIDATES]
+    candidate_count = len(candidate_segments)
+    diagnostics["attempted"] = True
+    diagnostics["candidate_count"] = candidate_count
+    logger.info("Starting global rerank pass for %s candidates", candidate_count)
+
+    rerank_agent, resolved_provider, resolved_model = _build_rerank_agent(
+        ai_provider=ai_provider,
+        ai_api_key=ai_api_key,
+        ai_model=ai_model,
+    )
+    diagnostics["provider"] = resolved_provider
+    diagnostics["model"] = resolved_model
+
+    candidates_text = _build_rerank_candidates_text(candidate_segments)
+    prompt = _build_rerank_prompt(candidates_text, candidate_count)
+
+    try:
+        result = await rerank_agent.run(prompt)
+        rerank = getattr(result, "data", None) or getattr(result, "output", None)
+        if rerank is None:
+            raise RuntimeError("Rerank result did not contain parsed output (expected .data or .output)")
+
+        id_to_segment = {idx: segment for idx, segment in enumerate(candidate_segments, start=1)}
+        ranked_segments: List[TranscriptSegment] = []
+        seen_ids: set[int] = set()
+        for ranked in rerank.ranked_candidates:
+            candidate_id = int(ranked.candidate_id)
+            segment = id_to_segment.get(candidate_id)
+            if segment is None or candidate_id in seen_ids:
+                continue
+            ranked_segments.append(
+                segment.model_copy(
+                    update={
+                        "relevance_score": float(ranked.relevance_score),
+                        "reasoning": str(ranked.reasoning or "").strip() or str(segment.reasoning or ""),
+                    }
+                )
+            )
+            seen_ids.add(candidate_id)
+
+        # Ensure no candidates are dropped even if rerank output is partial.
+        for candidate_id, segment in id_to_segment.items():
+            if candidate_id in seen_ids:
+                continue
+            ranked_segments.append(segment)
+
+        reranked_output = ranked_segments + segments[GLOBAL_RERANK_MAX_CANDIDATES:]
+        diagnostics["success"] = True
+        diagnostics["returned_candidates"] = len(rerank.ranked_candidates)
+        diagnostics["applied_candidates"] = len(ranked_segments)
+        logger.info(
+            "Global rerank pass complete: returned=%s applied=%s",
+            diagnostics["returned_candidates"],
+            diagnostics["applied_candidates"],
+        )
+        return reranked_output, diagnostics
+
+    except Exception as exc:
+        diagnostics["error"] = str(exc)
+        diagnostics["error_type"] = type(exc).__name__
+        logger.warning("Global rerank pass failed: %s", exc)
+        return segments, diagnostics
 
 
 def _select_diverse_segments(
@@ -262,7 +662,10 @@ def _select_diverse_segments(
     }
 
 
-def _build_transcript_agent(
+def _build_ai_agent(
+    *,
+    output_type: Any,
+    system_prompt: str,
     ai_provider: Optional[str] = None,
     ai_api_key: Optional[str] = None,
     ai_model: Optional[str] = None,
@@ -314,11 +717,39 @@ def _build_transcript_agent(
     return (
         Agent(
             model=model,
-            output_type=TranscriptAnalysis,
-            system_prompt=simplified_system_prompt,
+            output_type=output_type,
+            system_prompt=system_prompt,
         ),
         selected_provider,
         selected_model,
+    )
+
+
+def _build_transcript_agent(
+    ai_provider: Optional[str] = None,
+    ai_api_key: Optional[str] = None,
+    ai_model: Optional[str] = None,
+) -> tuple[Agent, str, str]:
+    return _build_ai_agent(
+        output_type=TranscriptAnalysis,
+        system_prompt=simplified_system_prompt,
+        ai_provider=ai_provider,
+        ai_api_key=ai_api_key,
+        ai_model=ai_model,
+    )
+
+
+def _build_rerank_agent(
+    ai_provider: Optional[str] = None,
+    ai_api_key: Optional[str] = None,
+    ai_model: Optional[str] = None,
+) -> tuple[Agent, str, str]:
+    return _build_ai_agent(
+        output_type=CandidateRerankResult,
+        system_prompt=global_rerank_system_prompt,
+        ai_provider=ai_provider,
+        ai_api_key=ai_api_key,
+        ai_model=ai_model,
     )
 
 async def get_most_relevant_parts_by_transcript(
@@ -341,71 +772,96 @@ async def get_most_relevant_parts_by_transcript(
     )
 
     try:
-        result = await transcript_agent.run(
-            f"""Analyze this video transcript and identify the most engaging segments for short-form content.
+        chunks = _build_analysis_chunks(transcript)
+        chunked_mode = len(chunks) > 1
+        if chunked_mode:
+            logger.info(
+                "Chunked AI analysis enabled (%s chunks, max_chars=%s overlap_lines=%s)",
+                len(chunks),
+                ANALYSIS_CHUNK_MAX_CHARS,
+                ANALYSIS_CHUNK_OVERLAP_LINES,
+            )
 
-Find segments that would be compelling as standalone clips for social media.
+        successful_analyses: List[TranscriptAnalysis] = []
+        chunk_failures: List[Dict[str, Any]] = []
+        chunk_results: List[Dict[str, Any]] = []
 
-Transcript:
-{transcript}"""
-        )
-
-        analysis = getattr(result, "data", None) or getattr(result, "output", None)
-        if analysis is None:
-            raise RuntimeError("AI result did not contain parsed output (expected .data or .output)")
-        logger.info(f"AI analysis found {len(analysis.most_relevant_segments)} segments")
-
-        # Simple validation - just ensure segments have content
-        validated_segments = []
-        rejected_counts = {
-            "insufficient_text": 0,
-            "identical_timestamps": 0,
-            "invalid_duration": 0,
-            "too_short": 0,
-            "invalid_timestamp_format": 0,
-        }
-        for segment in analysis.most_relevant_segments:
-            # Validate text content
-            if not segment.text.strip() or len(segment.text.split()) < 3:  # At least 3 words
-                logger.warning(f"Skipping segment with insufficient content: '{segment.text[:50]}...'")
-                rejected_counts["insufficient_text"] += 1
+        for chunk in chunks:
+            chunk_index = int(chunk.get("index") or 1)
+            total_chunks = int(chunk.get("total") or 1)
+            chunk_text = str(chunk.get("text") or "")
+            if not chunk_text.strip():
                 continue
 
-            # Validate timestamps - CRITICAL: start and end must be different
-            if segment.start_time == segment.end_time:
-                logger.warning(f"Skipping segment with identical start/end times: {segment.start_time}")
-                rejected_counts["identical_timestamps"] += 1
-                continue
+            logger.info(
+                "Analyzing transcript chunk %s/%s (%s chars, lines %s-%s)",
+                chunk_index,
+                total_chunks,
+                chunk.get("char_count"),
+                chunk.get("start_line"),
+                chunk.get("end_line"),
+            )
+            prompt = _build_analysis_prompt(chunk_text, chunk_metadata=chunk if chunked_mode else None)
 
-            start_seconds = _parse_timestamp_to_seconds(segment.start_time)
-            end_seconds = _parse_timestamp_to_seconds(segment.end_time)
-            if start_seconds is None or end_seconds is None:
-                logger.warning(
-                    "Skipping segment with invalid timestamp format: %s-%s",
-                    segment.start_time,
-                    segment.end_time,
+            try:
+                result = await transcript_agent.run(prompt)
+                analysis = getattr(result, "data", None) or getattr(result, "output", None)
+                if analysis is None:
+                    raise RuntimeError("AI result did not contain parsed output (expected .data or .output)")
+                successful_analyses.append(analysis)
+                chunk_results.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "chunk_total": total_chunks,
+                        "line_count": int(chunk.get("line_count") or 0),
+                        "char_count": int(chunk.get("char_count") or 0),
+                        "raw_segments": len(analysis.most_relevant_segments),
+                        "start_time": chunk.get("start_time"),
+                        "end_time": chunk.get("end_time"),
+                    }
                 )
-                rejected_counts["invalid_timestamp_format"] += 1
-                continue
-            duration = end_seconds - start_seconds
+                logger.info(
+                    "AI analysis chunk %s/%s found %s segments",
+                    chunk_index,
+                    total_chunks,
+                    len(analysis.most_relevant_segments),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "AI analysis chunk %s/%s failed: %s",
+                    chunk_index,
+                    total_chunks,
+                    exc,
+                )
+                chunk_failures.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "chunk_total": total_chunks,
+                        "start_time": chunk.get("start_time"),
+                        "end_time": chunk.get("end_time"),
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                    }
+                )
 
-            if duration <= 0:
-                logger.warning(f"Skipping segment with invalid duration: {segment.start_time} to {segment.end_time} = {duration}s")
-                rejected_counts["invalid_duration"] += 1
-                continue
+        if not successful_analyses:
+            raise RuntimeError("AI analysis failed for all transcript chunks")
 
-            if duration < 5:  # Minimum 5 seconds
-                logger.warning(f"Skipping segment too short: {duration}s (min 5s required)")
-                rejected_counts["too_short"] += 1
-                continue
+        raw_segments: List[TranscriptSegment] = []
+        for analysis in successful_analyses:
+            raw_segments.extend(analysis.most_relevant_segments)
 
-            validated_segments.append(segment)
-            logger.info(f"Validated segment: {segment.start_time}-{segment.end_time} ({duration:.1f}s)")
-
-        # Sort by relevance
-        validated_segments.sort(key=lambda x: x.relevance_score, reverse=True)
+        deduped_raw_segments = _dedupe_candidate_segments(raw_segments)
+        validated_segments, rejected_counts = _validate_analysis_segments(deduped_raw_segments)
+        reranked_segments, rerank_diagnostics = await _rerank_segments_globally(
+            validated_segments,
+            ai_provider=ai_provider,
+            ai_api_key=ai_api_key,
+            ai_model=ai_model,
+            enabled=chunked_mode,
+        )
         selected_segments, diversity_diagnostics = _select_diverse_segments(
-            validated_segments=validated_segments,
+            validated_segments=reranked_segments,
             max_clips=config.max_clips,
             min_gap_seconds=getattr(config, "clip_diversity_min_gap_seconds", 600),
             bucket_count=getattr(config, "clip_diversity_buckets", 4),
@@ -414,14 +870,27 @@ Transcript:
 
         final_analysis = TranscriptAnalysis(
             most_relevant_segments=selected_segments,
-            summary=analysis.summary,
-            key_topics=analysis.key_topics,
+            summary=_combine_summaries(successful_analyses, len(chunks)),
+            key_topics=_combine_key_topics(successful_analyses),
             diagnostics={
-                "raw_segments": len(analysis.most_relevant_segments),
+                "raw_segments": len(raw_segments),
+                "deduped_raw_segments": len(deduped_raw_segments),
                 "validated_segments": len(validated_segments),
+                "reranked_segments": len(reranked_segments),
                 "selected_segments": len(selected_segments),
                 "rejected_counts": rejected_counts,
+                "rerank": rerank_diagnostics,
                 "diversity": diversity_diagnostics,
+                "analysis_chunks": {
+                    "enabled": chunked_mode,
+                    "requested_chunks": len(chunks),
+                    "successful_chunks": len(successful_analyses),
+                    "failed_chunks": len(chunk_failures),
+                    "max_chars": ANALYSIS_CHUNK_MAX_CHARS,
+                    "overlap_lines": ANALYSIS_CHUNK_OVERLAP_LINES,
+                    "results": chunk_results,
+                    "failures": chunk_failures,
+                },
             },
         )
 

@@ -169,7 +169,7 @@ Services:
 
 1. **Video Input** → YouTube URL (via yt-dlp) or uploaded file
 2. **Transcription** → Local Whisper (default) generates word-level timestamps
-3. **AI Analysis** → Pydantic AI analyzes transcript for viral segments (10-45s clips)
+3. **AI Analysis** → Pydantic AI analyzes transcript for viral segments (10-45s clips); long transcripts are chunked and reranked in a second pass before final ranking
 4. **Clip Generation** → MoviePy creates 9:16 clips with:
    - Smart face-centered cropping (MediaPipe + OpenCV fallbacks)
    - Word-timed subtitles from cached transcript data

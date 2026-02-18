@@ -237,6 +237,47 @@ class TaskService:
 
         return " ".join(matched_words).strip()
 
+    def _hydrate_segment_text_from_transcript_cache(
+        self,
+        video_path: Optional[Path],
+        segments: List[Dict[str, Any]],
+        *,
+        start_time_key: str = "start_time",
+        end_time_key: str = "end_time",
+        text_key: str = "text",
+    ) -> int:
+        if video_path is None or not segments:
+            return 0
+
+        updated_count = 0
+        for segment in segments:
+            start_time = str(segment.get(start_time_key) or "").strip()
+            end_time = str(segment.get(end_time_key) or "").strip()
+            if not start_time or not end_time:
+                continue
+
+            try:
+                start_seconds = self._parse_timestamp_to_seconds_strict(start_time)
+                end_seconds = self._parse_timestamp_to_seconds_strict(end_time)
+            except ValueError:
+                continue
+
+            if end_seconds <= start_seconds:
+                continue
+
+            transcript_window_text = self._extract_text_from_transcript_cache(
+                video_path=video_path,
+                clip_start=start_seconds,
+                clip_end=end_seconds,
+            )
+            if not transcript_window_text:
+                continue
+
+            segment[text_key] = transcript_window_text
+            updated_count += 1
+
+        return updated_count
+
     async def get_user_zai_routing_mode(self, user_id: str) -> str:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
@@ -530,6 +571,7 @@ class TaskService:
             progress_callback=update_progress,
             cancel_check=cancel_check,
         )
+        analysis_video_path = Path(str(analysis_result.get("video_path") or "")) if analysis_result.get("video_path") else None
 
         await self.task_repo.update_task_status(
             self.db,
@@ -555,7 +597,12 @@ class TaskService:
                 )
                 continue
 
-            text_value = str(segment.get("text") or "").strip()
+            transcript_text = self._extract_text_from_transcript_cache(
+                analysis_video_path,
+                start_seconds,
+                end_seconds,
+            ) if analysis_video_path is not None else ""
+            text_value = transcript_text or str(segment.get("text") or "").strip()
             drafts_payload.append(
                 {
                     "clip_order": index,
@@ -650,6 +697,21 @@ class TaskService:
             progress_callback=update_progress,
             cancel_check=cancel_check,
         )
+        result_video_path = Path(str(result.get("video_path") or "")) if result.get("video_path") else None
+        if result_video_path is not None:
+            aligned_count = self._hydrate_segment_text_from_transcript_cache(
+                result_video_path,
+                result.get("clips") or [],
+                start_time_key="start_time",
+                end_time_key="end_time",
+                text_key="text",
+            )
+            if aligned_count:
+                logger.info(
+                    "Aligned clip text from transcript cache for task %s (%s clips)",
+                    task_id,
+                    aligned_count,
+                )
 
         await self.task_repo.update_task_status(
             self.db,

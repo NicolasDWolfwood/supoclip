@@ -873,7 +873,7 @@ def build_formatted_transcript_from_words(words: List[Dict[str, Any]]) -> str:
             or word_text.endswith('?')
         ):
             start_time = format_ms_to_timestamp(current_start)
-            end_time = format_ms_to_timestamp(int(word_end))
+            end_time = format_ms_to_timestamp(int(word_end), round_up=True)
             text = ' '.join(current_segment)
             formatted_lines.append(f"[{start_time} - {end_time}] {text}")
             current_segment = []
@@ -883,7 +883,7 @@ def build_formatted_transcript_from_words(words: List[Dict[str, Any]]) -> str:
     if current_segment and current_start is not None:
         last_word_end = int(words[-1].get('end') or current_start)
         start_time = format_ms_to_timestamp(current_start)
-        end_time = format_ms_to_timestamp(last_word_end)
+        end_time = format_ms_to_timestamp(last_word_end, round_up=True)
         text = ' '.join(current_segment)
         formatted_lines.append(f"[{start_time} - {end_time}] {text}")
 
@@ -917,9 +917,17 @@ def get_cached_formatted_transcript(video_path: Union[Path, str]) -> Optional[st
 
     return None
 
-def format_ms_to_timestamp(ms: int) -> str:
-    """Format milliseconds to MM:SS format."""
-    seconds = ms // 1000
+def format_ms_to_timestamp(ms: int, *, round_up: bool = False) -> str:
+    """Format milliseconds to MM:SS format.
+
+    `round_up=True` is used for transcript end boundaries so clip windows do not
+    truncate spoken words near the boundary.
+    """
+    milliseconds = max(0, int(ms))
+    if round_up:
+        seconds = (milliseconds + 999) // 1000
+    else:
+        seconds = milliseconds // 1000
     minutes = seconds // 60
     seconds = seconds % 60
     return f"{minutes:02d}:{seconds:02d}"

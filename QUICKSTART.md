@@ -53,6 +53,7 @@ LLM=openai:gpt-5-mini
 # CLIP_DIVERSITY_ENABLED=true
 # CLIP_DIVERSITY_MIN_GAP_SECONDS=600
 # CLIP_DIVERSITY_BUCKETS=4
+# Long transcripts are auto-analyzed in AI chunks, then reranked globally in a second pass.
 
 # Optional (default local transcription)
 TRANSCRIPTION_PROVIDER=local
@@ -259,6 +260,8 @@ Flow:
 3. In the task page, edit draft clip timing/text, deselect clips, and optionally add/delete clips.
 4. (Default ON) Use the interactive timeline editor to drag clip ranges on the original source video in 0.5s steps with no overlap.
 5. Click **Finalize & Render** to queue rendering from approved drafts.
+
+Note: draft clip text is auto-filled from transcript words inside each selected time window when transcript cache is available.
 
 If you disable review in the create form, tasks keep the original one-pass behavior (analysis + render in one run).
 

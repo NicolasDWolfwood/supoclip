@@ -115,12 +115,14 @@ Examples:
   - `POST /tasks/{task_id}/draft-clips/restore`
   - `POST /tasks/{task_id}/finalize`
 - Finalize queues rendering from approved draft clips.
+- Draft clip text is derived from transcript word timings inside each draft window (`start_time` -> `end_time`) when cache is available; AI-provided text is used as fallback.
 - User preference `default_timeline_editor_enabled` controls the default timeline editor toggle for new tasks.
 - User preference `default_review_before_render_enabled` controls whether new tasks default to pause at `awaiting_review`.
 
 ## Clip Selection Runtime Behavior
 
 - AI transcript analysis asks for a larger candidate pool, then applies backend validation.
+- For long transcripts, backend automatically analyzes in multiple transcript chunks, then runs a second-pass global rerank before final diversity filtering.
 - Final clip candidates are capped by `MAX_CLIPS`.
 - When `CLIP_DIVERSITY_ENABLED=true`, backend enforces timeline spread using:
   - bucket coverage (`CLIP_DIVERSITY_BUCKETS`)

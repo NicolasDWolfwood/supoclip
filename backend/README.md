@@ -56,6 +56,7 @@ Backend compatibility behavior:
   - `CLIP_DIVERSITY_ENABLED`
   - `CLIP_DIVERSITY_MIN_GAP_SECONDS`
   - `CLIP_DIVERSITY_BUCKETS`
+  - long transcripts are analyzed in automatic AI chunks, then globally reranked in a second pass before diversity filtering
 - AI provider keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`
 - z.ai requests use Coding API endpoint: `https://api.z.ai/api/coding/paas/v4`
 - z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
@@ -99,6 +100,7 @@ When running locally or via Docker:
   - `POST /tasks/{task_id}/draft-clips/restore`
   - `POST /tasks/{task_id}/finalize`
   - `PATCH /tasks/{task_id}` supports per-task `timeline_editor_enabled`
+- Draft clip text defaults to transcript words overlapping each clip's `start_time`/`end_time` window (AI text fallback when cache is unavailable).
 
 ## Fonts
 
