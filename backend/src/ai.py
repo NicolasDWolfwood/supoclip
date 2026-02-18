@@ -463,6 +463,7 @@ async def _rerank_segments_globally(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_request_options: Optional[Dict[str, Any]] = None,
     enabled: bool = True,
 ) -> Tuple[List[TranscriptSegment], Dict[str, Any]]:
     diagnostics: Dict[str, Any] = {
@@ -492,6 +493,7 @@ async def _rerank_segments_globally(
         ai_api_key=ai_api_key,
         ai_base_url=ai_base_url,
         ai_model=ai_model,
+        ai_request_options=ai_request_options,
     )
     diagnostics["provider"] = resolved_provider
     diagnostics["model"] = resolved_model
@@ -690,6 +692,7 @@ def _build_ai_agent(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_request_options: Optional[Dict[str, Any]] = None,
 ) -> tuple[Agent, str, str]:
     selected_provider = (ai_provider or _default_ai_provider()).strip().lower()
     if selected_provider not in SUPPORTED_AI_PROVIDERS:
@@ -719,10 +722,45 @@ def _build_ai_agent(
     elif selected_provider == "ollama":
         from pydantic_ai.models.openai import OpenAIModel
         from pydantic_ai.providers.openai import OpenAIProvider
+        from openai import AsyncOpenAI
 
-        provider = OpenAIProvider(
+        request_options = ai_request_options if isinstance(ai_request_options, dict) else {}
+        auth_headers_raw = request_options.get("ollama_auth_headers")
+        auth_headers: Dict[str, str] = {}
+        if isinstance(auth_headers_raw, dict):
+            for raw_key, raw_value in auth_headers_raw.items():
+                header_key = str(raw_key or "").strip()
+                header_value = str(raw_value or "").strip()
+                if header_key and header_value:
+                    auth_headers[header_key] = header_value
+        timeout_override = request_options.get("ollama_timeout_seconds")
+        max_retries_override = request_options.get("ollama_max_retries")
+
+        timeout_value: float = 15.0
+        if timeout_override is not None:
+            try:
+                timeout_value = float(timeout_override)
+            except (TypeError, ValueError):
+                timeout_value = 15.0
+        timeout_value = max(1.0, min(600.0, timeout_value))
+
+        max_retries_value: int = 2
+        if max_retries_override is not None:
+            try:
+                max_retries_value = int(max_retries_override)
+            except (TypeError, ValueError):
+                max_retries_value = 2
+        max_retries_value = max(0, min(10, max_retries_value))
+
+        openai_client = AsyncOpenAI(
             api_key=resolved_key or "ollama",
             base_url=_resolve_ollama_openai_base_url(ai_base_url),
+            timeout=timeout_value,
+            max_retries=max_retries_value,
+            default_headers=auth_headers or None,
+        )
+        provider = OpenAIProvider(
+            openai_client=openai_client,
         )
         model = OpenAIModel(selected_model, provider=provider)
     elif selected_provider == "google":
@@ -760,6 +798,7 @@ def _build_transcript_agent(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_request_options: Optional[Dict[str, Any]] = None,
 ) -> tuple[Agent, str, str]:
     return _build_ai_agent(
         output_type=TranscriptAnalysis,
@@ -768,6 +807,7 @@ def _build_transcript_agent(
         ai_api_key=ai_api_key,
         ai_base_url=ai_base_url,
         ai_model=ai_model,
+        ai_request_options=ai_request_options,
     )
 
 
@@ -776,6 +816,7 @@ def _build_rerank_agent(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_request_options: Optional[Dict[str, Any]] = None,
 ) -> tuple[Agent, str, str]:
     return _build_ai_agent(
         output_type=CandidateRerankResult,
@@ -784,6 +825,7 @@ def _build_rerank_agent(
         ai_api_key=ai_api_key,
         ai_base_url=ai_base_url,
         ai_model=ai_model,
+        ai_request_options=ai_request_options,
     )
 
 async def get_most_relevant_parts_by_transcript(
@@ -792,6 +834,7 @@ async def get_most_relevant_parts_by_transcript(
     ai_api_key: Optional[str] = None,
     ai_base_url: Optional[str] = None,
     ai_model: Optional[str] = None,
+    ai_request_options: Optional[Dict[str, Any]] = None,
 ) -> TranscriptAnalysis:
     """Get the most relevant parts of a transcript for creating clips - simplified version."""
     transcript_agent, resolved_provider, resolved_model = _build_transcript_agent(
@@ -799,6 +842,7 @@ async def get_most_relevant_parts_by_transcript(
         ai_api_key=ai_api_key,
         ai_base_url=ai_base_url,
         ai_model=ai_model,
+        ai_request_options=ai_request_options,
     )
     logger.info(
         "Starting AI analysis of transcript (%s chars) using provider=%s model=%s",
@@ -895,6 +939,7 @@ async def get_most_relevant_parts_by_transcript(
             ai_api_key=ai_api_key,
             ai_base_url=ai_base_url,
             ai_model=ai_model,
+            ai_request_options=ai_request_options,
             enabled=chunked_mode,
         )
         selected_segments, diversity_diagnostics = _select_diverse_segments(

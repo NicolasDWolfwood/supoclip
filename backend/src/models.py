@@ -80,6 +80,10 @@ class User(Base):
         server_default=text("'openai'"),
     )
     default_ollama_base_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    default_ollama_profile: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    default_ollama_timeout_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    default_ollama_max_retries: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    default_ollama_retry_backoff_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     default_ai_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     default_zai_key_routing_mode: Mapped[str] = mapped_column(
         String(20),

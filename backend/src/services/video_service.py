@@ -250,6 +250,7 @@ class VideoService:
         ai_api_key: Optional[str] = None,
         ai_base_url: Optional[str] = None,
         ai_model: Optional[str] = None,
+        ai_request_options: Optional[Dict[str, Any]] = None,
     ) -> Any:
         """
         Analyze transcript with AI to find relevant segments.
@@ -262,6 +263,7 @@ class VideoService:
             ai_api_key=ai_api_key,
             ai_base_url=ai_base_url,
             ai_model=ai_model,
+            ai_request_options=ai_request_options,
         )
         logger.info(f"AI analysis complete: {len(relevant_parts.most_relevant_segments)} segments found")
         return relevant_parts
@@ -273,6 +275,7 @@ class VideoService:
         ai_api_key: Optional[str] = None,
         ai_base_url: Optional[str] = None,
         ai_model: Optional[str] = None,
+        ai_request_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
     ) -> Any:
         """
@@ -314,6 +317,7 @@ class VideoService:
                 ai_api_key=ai_api_key,
                 ai_base_url=ai_base_url,
                 ai_model=ai_model,
+                ai_request_options=ai_request_options,
             )
         finally:
             stop_heartbeat.set()
@@ -811,6 +815,7 @@ class VideoService:
         ai_key_labels: Optional[List[str]],
         ai_routing_mode: Optional[str],
         ai_model: Optional[str],
+        ai_request_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
     ) -> tuple[Any, List[str]]:
         key_attempts = [ai_api_key] + list(ai_api_key_fallbacks or [])
@@ -823,18 +828,66 @@ class VideoService:
 
         relevant_parts = None
         attempted_labels: List[str] = []
+        ollama_retries_used = 0
+        ollama_max_retries = 0
+        ollama_backoff_ms = 0
+        if ai_provider == "ollama" and isinstance(ai_request_options, dict):
+            try:
+                ollama_max_retries = max(0, int(ai_request_options.get("ollama_max_retries", 0) or 0))
+            except (TypeError, ValueError):
+                ollama_max_retries = 0
+            try:
+                ollama_backoff_ms = max(0, int(ai_request_options.get("ollama_retry_backoff_ms", 0) or 0))
+            except (TypeError, ValueError):
+                ollama_backoff_ms = 0
 
         for attempt_index, key_candidate in enumerate(key_attempts):
             attempt_label = labels[attempt_index]
             attempted_labels.append(attempt_label)
-            relevant_parts = await VideoService.analyze_transcript_with_progress(
-                transcript,
-                ai_provider=ai_provider,
-                ai_api_key=key_candidate,
-                ai_base_url=ai_base_url,
-                ai_model=ai_model,
-                progress_callback=progress_callback,
-            )
+            network_attempt = 0
+            while True:
+                try:
+                    relevant_parts = await VideoService.analyze_transcript_with_progress(
+                        transcript,
+                        ai_provider=ai_provider,
+                        ai_api_key=key_candidate,
+                        ai_base_url=ai_base_url,
+                        ai_model=ai_model,
+                        ai_request_options=ai_request_options,
+                        progress_callback=progress_callback,
+                    )
+                    break
+                except Exception as exc:
+                    can_retry_network = (
+                        ai_provider == "ollama"
+                        and network_attempt < ollama_max_retries
+                    )
+                    if not can_retry_network:
+                        raise
+                    network_attempt += 1
+                    ollama_retries_used += 1
+                    delay_seconds = (ollama_backoff_ms * network_attempt) / 1000.0
+                    logger.warning(
+                        "Ollama analysis network attempt %s failed; retrying in %.2fs: %s",
+                        network_attempt,
+                        delay_seconds,
+                        exc,
+                    )
+                    if progress_callback:
+                        await progress_callback(
+                            50,
+                            f"Ollama request failed, retrying ({network_attempt}/{ollama_max_retries})...",
+                            {
+                                "stage": "analysis",
+                                "stage_progress": 0,
+                                "overall_progress": 50,
+                                "ai_provider": ai_provider,
+                                "retry_attempt": network_attempt,
+                                "retry_max": ollama_max_retries,
+                            },
+                        )
+                    if delay_seconds > 0:
+                        await asyncio.sleep(delay_seconds)
             diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
             error_text = diagnostics.get("error")
             can_retry = (
@@ -869,6 +922,10 @@ class VideoService:
         diagnostics = getattr(relevant_parts, "diagnostics", {}) or {}
         diagnostics["ai_key_attempts"] = attempted_labels
         diagnostics["ai_key_label"] = attempted_labels[-1] if attempted_labels else "attempt-1"
+        if ai_provider == "ollama":
+            diagnostics["ollama_network_retries_used"] = ollama_retries_used
+            diagnostics["ollama_network_max_retries"] = ollama_max_retries
+            diagnostics["ollama_network_backoff_ms"] = ollama_backoff_ms
         if ai_routing_mode:
             diagnostics["ai_routing_mode"] = ai_routing_mode
         relevant_parts.diagnostics = diagnostics
@@ -888,6 +945,7 @@ class VideoService:
         ai_key_labels: Optional[List[str]] = None,
         ai_routing_mode: Optional[str] = None,
         ai_model: Optional[str] = None,
+        ai_request_options: Optional[Dict[str, Any]] = None,
         transcription_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
@@ -992,6 +1050,7 @@ class VideoService:
             ai_key_labels=ai_key_labels,
             ai_routing_mode=ai_routing_mode,
             ai_model=ai_model,
+            ai_request_options=ai_request_options,
             progress_callback=progress_callback,
         )
         await ensure_not_cancelled()
@@ -1096,6 +1155,7 @@ class VideoService:
         ai_key_labels: Optional[List[str]] = None,
         ai_routing_mode: Optional[str] = None,
         ai_model: Optional[str] = None,
+        ai_request_options: Optional[Dict[str, Any]] = None,
         transcription_options: Optional[Dict[str, Any]] = None,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], Awaitable[None]]] = None,
@@ -1117,6 +1177,7 @@ class VideoService:
                 ai_key_labels=ai_key_labels,
                 ai_routing_mode=ai_routing_mode,
                 ai_model=ai_model,
+                ai_request_options=ai_request_options,
                 transcription_options=transcription_options,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,

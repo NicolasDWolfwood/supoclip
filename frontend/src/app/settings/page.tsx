@@ -34,6 +34,7 @@ import {
 import {
   arePreferencesEqual,
   DEFAULT_AI_MODELS,
+  DEFAULT_OLLAMA_REQUEST_CONTROLS,
   DEFAULT_USER_PREFERENCES,
   FALLBACK_AI_MODEL_OPTIONS,
   isAiProvider,
@@ -48,6 +49,8 @@ import {
   SETTINGS_SECTIONS,
   MAX_TASK_TIMEOUT_SECONDS,
   type AiProvider,
+  type OllamaAuthMode,
+  type OllamaProfileSummary,
   type SettingsSection,
   type UserPreferences,
   type ZaiRoutingMode,
@@ -99,6 +102,16 @@ function SettingsPageContent() {
   const [ollamaServerUrl, setOllamaServerUrl] = useState("http://localhost:11434");
   const [hasSavedOllamaServer, setHasSavedOllamaServer] = useState(false);
   const [hasEnvOllamaServer, setHasEnvOllamaServer] = useState(false);
+  const [ollamaProfiles, setOllamaProfiles] = useState<OllamaProfileSummary[]>([]);
+  const [selectedOllamaProfile, setSelectedOllamaProfile] = useState("");
+  const [newOllamaProfileName, setNewOllamaProfileName] = useState("");
+  const [ollamaAuthMode, setOllamaAuthMode] = useState<OllamaAuthMode>("none");
+  const [ollamaAuthHeaderName, setOllamaAuthHeaderName] = useState("");
+  const [ollamaAuthToken, setOllamaAuthToken] = useState("");
+  const [ollamaRequestControls, setOllamaRequestControls] = useState(DEFAULT_OLLAMA_REQUEST_CONTROLS);
+  const [isTestingOllamaConnection, setIsTestingOllamaConnection] = useState(false);
+  const [ollamaConnectionStatus, setOllamaConnectionStatus] = useState<string | null>(null);
+  const [ollamaConnectionError, setOllamaConnectionError] = useState<string | null>(null);
   const [zaiProfileApiKeys, setZaiProfileApiKeys] = useState<Record<"subscription" | "metered", string>>({
     subscription: "",
     metered: "",
@@ -166,12 +179,16 @@ function SettingsPageContent() {
         hasSavedZaiProfileKeys.metered ||
         hasEnvAiFallback.zai
       : preferencesDraft.aiProvider === "ollama"
-        ? Boolean(ollamaServerUrl.trim())
+        ? Boolean(ollamaServerUrl.trim()) || hasEnvOllamaServer || ollamaProfiles.length > 0
       : hasSavedAiKeys[preferencesDraft.aiProvider] || hasEnvAiFallback[preferencesDraft.aiProvider];
 
   const sectionNavItems = useMemo(
     () => SETTINGS_SECTIONS.map((section) => ({ id: section, ...SETTINGS_SECTION_META[section] })),
     [],
+  );
+  const selectedOllamaProfileMeta = useMemo(
+    () => ollamaProfiles.find((profile) => profile.profile_name === selectedOllamaProfile) || null,
+    [ollamaProfiles, selectedOllamaProfile],
   );
 
   const loadFonts = useCallback(async () => {
@@ -233,8 +250,15 @@ function SettingsPageContent() {
         if (provider === "zai") {
           params.set("routing_mode", zaiRoutingMode);
         }
-        if (provider === "ollama" && ollamaServerUrl.trim()) {
-          params.set("server_url", ollamaServerUrl.trim());
+        if (provider === "ollama") {
+          if (selectedOllamaProfile.trim()) {
+            params.set("profile", selectedOllamaProfile.trim());
+          } else if (ollamaServerUrl.trim()) {
+            params.set("server_url", ollamaServerUrl.trim());
+          }
+          params.set("timeout_seconds", String(ollamaRequestControls.timeout_seconds));
+          params.set("max_retries", String(ollamaRequestControls.max_retries));
+          params.set("retry_backoff_ms", String(ollamaRequestControls.retry_backoff_ms));
         }
         const modelsUrl = `${apiUrl}/tasks/ai-settings/${provider}/models${params.toString() ? `?${params.toString()}` : ""}`;
         const response = await fetch(modelsUrl, {
@@ -297,7 +321,7 @@ function SettingsPageContent() {
         }
       }
     },
-    [apiUrl, ollamaServerUrl, session?.user?.id, zaiRoutingMode],
+    [apiUrl, ollamaRequestControls.max_retries, ollamaRequestControls.retry_backoff_ms, ollamaRequestControls.timeout_seconds, ollamaServerUrl, selectedOllamaProfile, session?.user?.id, zaiRoutingMode],
   );
 
   const refreshAiSettings = useCallback(async (): Promise<void> => {
@@ -315,14 +339,43 @@ function SettingsPageContent() {
       }
 
       const data = await response.json();
+      const parsedOllamaProfiles: OllamaProfileSummary[] = Array.isArray(data.ollama_profiles)
+        ? data.ollama_profiles
+            .filter((value: unknown) => typeof value === "object" && value !== null)
+            .map((value: Record<string, unknown>) => ({
+              profile_name: String(value.profile_name || "").trim(),
+              base_url: String(value.base_url || "").trim(),
+              auth_mode:
+                value.auth_mode === "bearer" || value.auth_mode === "custom_header" || value.auth_mode === "none"
+                  ? value.auth_mode
+                  : "none",
+              auth_header_name:
+                typeof value.auth_header_name === "string" && value.auth_header_name.trim().length > 0
+                  ? value.auth_header_name.trim()
+                  : null,
+              enabled: value.enabled !== false,
+              is_default: value.is_default === true,
+              has_auth_secret: value.has_auth_secret === true,
+            }))
+            .filter((value: OllamaProfileSummary) => value.profile_name.length > 0)
+        : [];
+      const defaultProfileFromApi =
+        typeof data.default_ollama_profile === "string" && data.default_ollama_profile.trim().length > 0
+          ? data.default_ollama_profile.trim()
+          : parsedOllamaProfiles.find((profile) => profile.is_default)?.profile_name || "";
+      const requestControlsFromApi =
+        typeof data.ollama_request_controls === "object" && data.ollama_request_controls !== null
+          ? data.ollama_request_controls
+          : {};
       setHasSavedAiKeys({
         openai: Boolean(data.has_openai_key),
         google: Boolean(data.has_google_key),
         anthropic: Boolean(data.has_anthropic_key),
         zai: Boolean(data.has_zai_key),
-        ollama: Boolean(data.has_ollama_server),
+        ollama: Boolean(data.has_ollama_server) || parsedOllamaProfiles.length > 0,
       });
-      setHasSavedOllamaServer(Boolean(data.has_ollama_server));
+      setHasSavedOllamaServer(Boolean(data.has_ollama_server) || parsedOllamaProfiles.length > 0);
+      setOllamaProfiles(parsedOllamaProfiles);
       setHasSavedZaiProfileKeys({
         subscription: Boolean(data.has_zai_subscription_key),
         metered: Boolean(data.has_zai_metered_key),
@@ -338,6 +391,29 @@ function SettingsPageContent() {
         ollama: Boolean(data.has_env_ollama),
       });
       setHasEnvOllamaServer(Boolean(data.has_env_ollama));
+      setOllamaRequestControls({
+        timeout_seconds:
+          typeof requestControlsFromApi.timeout_seconds === "number" && Number.isFinite(requestControlsFromApi.timeout_seconds)
+            ? Math.max(1, Math.min(600, Math.round(requestControlsFromApi.timeout_seconds)))
+            : DEFAULT_OLLAMA_REQUEST_CONTROLS.timeout_seconds,
+        max_retries:
+          typeof requestControlsFromApi.max_retries === "number" && Number.isFinite(requestControlsFromApi.max_retries)
+            ? Math.max(0, Math.min(10, Math.round(requestControlsFromApi.max_retries)))
+            : DEFAULT_OLLAMA_REQUEST_CONTROLS.max_retries,
+        retry_backoff_ms:
+          typeof requestControlsFromApi.retry_backoff_ms === "number" && Number.isFinite(requestControlsFromApi.retry_backoff_ms)
+            ? Math.max(0, Math.min(30000, Math.round(requestControlsFromApi.retry_backoff_ms)))
+            : DEFAULT_OLLAMA_REQUEST_CONTROLS.retry_backoff_ms,
+      });
+      setSelectedOllamaProfile((previous) => {
+        if (previous && parsedOllamaProfiles.some((profile) => profile.profile_name === previous)) {
+          return previous;
+        }
+        if (defaultProfileFromApi && parsedOllamaProfiles.some((profile) => profile.profile_name === defaultProfileFromApi)) {
+          return defaultProfileFromApi;
+        }
+        return parsedOllamaProfiles[0]?.profile_name || "";
+      });
       if (typeof data.ollama_server_url === "string" && data.ollama_server_url.trim().length > 0) {
         setOllamaServerUrl(data.ollama_server_url.trim());
       }
@@ -536,10 +612,15 @@ function SettingsPageContent() {
     [apiUrl, fetchAiModels, refreshAiSettings, session?.user?.id],
   );
 
-  const saveOllamaServer = useCallback(
-    async (serverUrl: string): Promise<boolean> => {
-      const trimmed = serverUrl.trim();
-      if (!trimmed) {
+  const saveOllamaProfile = useCallback(
+    async (profileName: string, options?: { setAsDefault?: boolean; clearAuthToken?: boolean }): Promise<boolean> => {
+      const normalizedProfile = profileName.trim().toLowerCase();
+      const trimmedUrl = ollamaServerUrl.trim();
+      if (!normalizedProfile) {
+        setAiKeyError("Ollama profile name is required.");
+        return false;
+      }
+      if (!trimmedUrl) {
         setAiKeyError("Ollama server URL cannot be empty.");
         return false;
       }
@@ -549,81 +630,228 @@ function SettingsPageContent() {
       setAiKeyStatus(null);
 
       try {
-        const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/server`, {
+        const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/profiles/${encodeURIComponent(normalizedProfile)}`, {
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
             user_id: session?.user?.id || "",
           },
-          body: JSON.stringify({ server_url: trimmed }),
+          body: JSON.stringify({
+            base_url: trimmedUrl,
+            auth_mode: ollamaAuthMode,
+            auth_header_name: ollamaAuthMode === "custom_header" ? ollamaAuthHeaderName.trim() : null,
+            auth_token: ollamaAuthToken.trim() || undefined,
+            clear_auth_token: Boolean(options?.clearAuthToken),
+            enabled: true,
+            set_as_default: Boolean(options?.setAsDefault),
+          }),
         });
 
-        const responseData = await response.json().catch(() => ({} as { detail?: string; server_url?: string }));
+        const responseData = await response
+          .json()
+          .catch(() => ({} as { detail?: string; profile?: { base_url?: string } }));
         if (!response.ok) {
-          throw new Error(responseData?.detail || "Failed to save Ollama server URL");
+          throw new Error(responseData?.detail || "Failed to save Ollama profile");
         }
 
         const normalizedServerUrl =
-          typeof responseData.server_url === "string" && responseData.server_url.trim().length > 0
-            ? responseData.server_url.trim()
-            : trimmed;
-
+          typeof responseData.profile?.base_url === "string" && responseData.profile.base_url.trim().length > 0
+            ? responseData.profile.base_url.trim()
+            : trimmedUrl;
         setOllamaServerUrl(normalizedServerUrl);
-        setHasSavedOllamaServer(true);
-        setHasSavedAiKeys((prev) => ({ ...prev, ollama: true }));
-        setAiKeyStatus("Ollama server saved.");
-        void refreshAiSettings();
-        void fetchAiModels("ollama");
+        setSelectedOllamaProfile(normalizedProfile);
+        setOllamaAuthToken("");
+        setAiKeyStatus(`Ollama profile saved: ${normalizedProfile}.`);
+        await refreshAiSettings();
+        if (preferencesDraft.aiProvider === "ollama") {
+          void fetchAiModels("ollama");
+        }
         return true;
       } catch (saveError) {
-        const message = saveError instanceof Error ? saveError.message : "Failed to save Ollama server URL";
+        const message = saveError instanceof Error ? saveError.message : "Failed to save Ollama profile";
         setAiKeyError(message);
         return false;
       } finally {
         setIsSavingAiKey(false);
       }
     },
-    [apiUrl, fetchAiModels, refreshAiSettings, session?.user?.id],
+    [
+      apiUrl,
+      fetchAiModels,
+      ollamaAuthHeaderName,
+      ollamaAuthMode,
+      ollamaAuthToken,
+      ollamaServerUrl,
+      preferencesDraft.aiProvider,
+      refreshAiSettings,
+      session?.user?.id,
+    ],
   );
 
-  const deleteOllamaServer = useCallback(async (): Promise<void> => {
+  const createOllamaProfile = useCallback(async (): Promise<void> => {
+    const created = await saveOllamaProfile(newOllamaProfileName, { setAsDefault: false });
+    if (created) {
+      setNewOllamaProfileName("");
+    }
+  }, [newOllamaProfileName, saveOllamaProfile]);
+
+  const deleteOllamaProfile = useCallback(async (): Promise<void> => {
+    if (!selectedOllamaProfile) {
+      setAiKeyError("Select an Ollama profile to delete.");
+      return;
+    }
     setIsSavingAiKey(true);
     setAiKeyError(null);
     setAiKeyStatus(null);
-
     try {
-      const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/server`, {
-        method: "DELETE",
-        headers: {
-          user_id: session?.user?.id || "",
+      const response = await fetch(
+        `${apiUrl}/tasks/ai-settings/ollama/profiles/${encodeURIComponent(selectedOllamaProfile)}`,
+        {
+          method: "DELETE",
+          headers: {
+            user_id: session?.user?.id || "",
+          },
         },
-      });
-
+      );
       const responseData = await response.json().catch(() => ({} as { detail?: string }));
       if (!response.ok) {
-        throw new Error(responseData?.detail || "Failed to remove Ollama server URL");
+        throw new Error(responseData?.detail || "Failed to delete Ollama profile");
       }
-
-      setHasSavedOllamaServer(false);
-      setHasSavedAiKeys((prev) => ({ ...prev, ollama: false }));
-      setAiKeyStatus("Ollama server removed.");
-      void refreshAiSettings();
-
-      if (!hasEnvOllamaServer) {
-        setAiModelOptions((prev) => ({ ...prev, ollama: FALLBACK_AI_MODEL_OPTIONS.ollama }));
-        setHasLoadedAiModels((prev) => ({ ...prev, ollama: false }));
-        if (preferencesDraft.aiProvider === "ollama") {
-          setAiModelStatus(null);
-          setAiModelError(null);
-        }
+      setAiKeyStatus(`Ollama profile deleted: ${selectedOllamaProfile}.`);
+      await refreshAiSettings();
+      if (preferencesDraft.aiProvider === "ollama") {
+        void fetchAiModels("ollama");
       }
     } catch (deleteError) {
-      const message = deleteError instanceof Error ? deleteError.message : "Failed to remove Ollama server URL";
+      const message = deleteError instanceof Error ? deleteError.message : "Failed to delete Ollama profile";
       setAiKeyError(message);
     } finally {
       setIsSavingAiKey(false);
     }
-  }, [apiUrl, hasEnvOllamaServer, preferencesDraft.aiProvider, refreshAiSettings, session?.user?.id]);
+  }, [apiUrl, fetchAiModels, preferencesDraft.aiProvider, refreshAiSettings, selectedOllamaProfile, session?.user?.id]);
+
+  const setDefaultOllamaProfile = useCallback(async (): Promise<void> => {
+    if (!selectedOllamaProfile) {
+      setAiKeyError("Select an Ollama profile to set as default.");
+      return;
+    }
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/default-profile`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({ profile: selectedOllamaProfile }),
+      });
+      const responseData = await response.json().catch(() => ({} as { detail?: string }));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to set default Ollama profile");
+      }
+      setAiKeyStatus(`Default Ollama profile set: ${selectedOllamaProfile}.`);
+      await refreshAiSettings();
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : "Failed to set default Ollama profile";
+      setAiKeyError(message);
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  }, [apiUrl, refreshAiSettings, selectedOllamaProfile, session?.user?.id]);
+
+  const saveOllamaRequestControls = useCallback(async (): Promise<void> => {
+    setIsSavingAiKey(true);
+    setAiKeyError(null);
+    setAiKeyStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/request-controls`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({
+          timeout_seconds: ollamaRequestControls.timeout_seconds,
+          max_retries: ollamaRequestControls.max_retries,
+          retry_backoff_ms: ollamaRequestControls.retry_backoff_ms,
+        }),
+      });
+      const responseData = await response.json().catch(() => ({} as { detail?: string }));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to save Ollama request controls");
+      }
+      setAiKeyStatus("Ollama request controls saved.");
+      await refreshAiSettings();
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : "Failed to save Ollama request controls";
+      setAiKeyError(message);
+    } finally {
+      setIsSavingAiKey(false);
+    }
+  }, [apiUrl, ollamaRequestControls.max_retries, ollamaRequestControls.retry_backoff_ms, ollamaRequestControls.timeout_seconds, refreshAiSettings, session?.user?.id]);
+
+  const testOllamaConnection = useCallback(async (): Promise<void> => {
+    setIsTestingOllamaConnection(true);
+    setOllamaConnectionError(null);
+    setOllamaConnectionStatus(null);
+    try {
+      const response = await fetch(`${apiUrl}/tasks/ai-settings/ollama/test-connection`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          user_id: session?.user?.id || "",
+        },
+        body: JSON.stringify({
+          profile: selectedOllamaProfile || undefined,
+          base_url: selectedOllamaProfile ? undefined : ollamaServerUrl.trim() || undefined,
+          auth_mode: ollamaAuthToken.trim() ? ollamaAuthMode : undefined,
+          auth_header_name:
+            ollamaAuthToken.trim() && ollamaAuthMode === "custom_header"
+              ? ollamaAuthHeaderName.trim()
+              : undefined,
+          auth_token: ollamaAuthToken.trim() || undefined,
+          timeout_seconds: ollamaRequestControls.timeout_seconds,
+          max_retries: ollamaRequestControls.max_retries,
+          retry_backoff_ms: ollamaRequestControls.retry_backoff_ms,
+        }),
+      });
+      const responseData = await response
+        .json()
+        .catch(() => ({} as { detail?: string; connected?: boolean; server_url?: string; model_count?: number; version?: string; failure_reason?: string }));
+      if (!response.ok) {
+        throw new Error(responseData?.detail || "Failed to test Ollama connection");
+      }
+      if (responseData.connected) {
+        const versionSuffix =
+          typeof responseData.version === "string" && responseData.version.trim().length > 0
+            ? ` (version ${responseData.version.trim()})`
+            : "";
+        setOllamaConnectionStatus(
+          `Connected to ${String(responseData.server_url || ollamaServerUrl)} with ${Number(responseData.model_count || 0)} models${versionSuffix}.`,
+        );
+      } else {
+        setOllamaConnectionError(String(responseData.failure_reason || "Connection test failed"));
+      }
+    } catch (testError) {
+      const message = testError instanceof Error ? testError.message : "Failed to test Ollama connection";
+      setOllamaConnectionError(message);
+    } finally {
+      setIsTestingOllamaConnection(false);
+    }
+  }, [
+    apiUrl,
+    ollamaAuthHeaderName,
+    ollamaAuthMode,
+    ollamaAuthToken,
+    ollamaRequestControls.max_retries,
+    ollamaRequestControls.retry_backoff_ms,
+    ollamaRequestControls.timeout_seconds,
+    ollamaServerUrl,
+    selectedOllamaProfile,
+    session?.user?.id,
+  ]);
 
   const saveZaiProfileKey = useCallback(
     async (profile: "subscription" | "metered", key: string): Promise<boolean> => {
@@ -975,6 +1203,21 @@ function SettingsPageContent() {
   }, [refreshAiSettings, session?.user?.id]);
 
   useEffect(() => {
+    if (selectedOllamaProfileMeta) {
+      setOllamaServerUrl(selectedOllamaProfileMeta.base_url || ollamaServerUrl);
+      setOllamaAuthMode(selectedOllamaProfileMeta.auth_mode);
+      setOllamaAuthHeaderName(selectedOllamaProfileMeta.auth_header_name || "");
+      setOllamaAuthToken("");
+      return;
+    }
+    if (ollamaProfiles.length === 0) {
+      setOllamaAuthMode("none");
+      setOllamaAuthHeaderName("");
+      setOllamaAuthToken("");
+    }
+  }, [ollamaProfiles.length, ollamaServerUrl, selectedOllamaProfileMeta]);
+
+  useEffect(() => {
     if (!session?.user?.id) {
       return;
     }
@@ -984,7 +1227,7 @@ function SettingsPageContent() {
       provider === "zai"
         ? hasSavedAiKeys.zai || hasSavedZaiProfileKeys.subscription || hasSavedZaiProfileKeys.metered || hasEnvAiFallback.zai
         : provider === "ollama"
-          ? Boolean(ollamaServerUrl.trim())
+          ? Boolean(ollamaServerUrl.trim()) || hasEnvOllamaServer || ollamaProfiles.length > 0
         : hasSavedAiKeys[provider] || hasEnvAiFallback[provider];
     if (!hasProviderKey) {
       setAiModelOptions((prev) => ({ ...prev, [provider]: FALLBACK_AI_MODEL_OPTIONS[provider] }));
@@ -1001,8 +1244,11 @@ function SettingsPageContent() {
     hasSavedAiKeys,
     hasSavedZaiProfileKeys.metered,
     hasSavedZaiProfileKeys.subscription,
+    hasEnvOllamaServer,
+    ollamaProfiles.length,
     ollamaServerUrl,
     preferencesDraft.aiProvider,
+    selectedOllamaProfile,
     session?.user?.id,
     zaiRoutingMode,
   ]);
@@ -1307,6 +1553,18 @@ function SettingsPageContent() {
                 ollamaServerUrl={ollamaServerUrl}
                 hasSavedOllamaServer={hasSavedOllamaServer}
                 hasEnvOllamaServer={hasEnvOllamaServer}
+                ollamaProfiles={ollamaProfiles}
+                selectedOllamaProfile={selectedOllamaProfile}
+                newOllamaProfileName={newOllamaProfileName}
+                ollamaAuthMode={ollamaAuthMode}
+                ollamaAuthHeaderName={ollamaAuthHeaderName}
+                ollamaAuthToken={ollamaAuthToken}
+                ollamaTimeoutSeconds={ollamaRequestControls.timeout_seconds}
+                ollamaMaxRetries={ollamaRequestControls.max_retries}
+                ollamaRetryBackoffMs={ollamaRequestControls.retry_backoff_ms}
+                isTestingOllamaConnection={isTestingOllamaConnection}
+                ollamaConnectionStatus={ollamaConnectionStatus}
+                ollamaConnectionError={ollamaConnectionError}
                 aiKeyStatus={aiKeyStatus}
                 aiKeyError={aiKeyError}
                 aiModelStatus={aiModelStatus}
@@ -1353,11 +1611,48 @@ function SettingsPageContent() {
                   void deleteAiProviderKey(preferencesDraft.aiProvider);
                 }}
                 onOllamaServerUrlChange={setOllamaServerUrl}
-                onSaveOllamaServer={() => {
-                  void saveOllamaServer(ollamaServerUrl);
+                onSelectedOllamaProfileChange={setSelectedOllamaProfile}
+                onNewOllamaProfileNameChange={setNewOllamaProfileName}
+                onCreateOllamaProfile={() => {
+                  void createOllamaProfile();
                 }}
-                onDeleteOllamaServer={() => {
-                  void deleteOllamaServer();
+                onSaveOllamaProfile={() => {
+                  const profileToSave = selectedOllamaProfile || newOllamaProfileName || "default";
+                  void saveOllamaProfile(profileToSave);
+                }}
+                onDeleteOllamaProfile={() => {
+                  void deleteOllamaProfile();
+                }}
+                onSetDefaultOllamaProfile={() => {
+                  void setDefaultOllamaProfile();
+                }}
+                onOllamaAuthModeChange={setOllamaAuthMode}
+                onOllamaAuthHeaderNameChange={setOllamaAuthHeaderName}
+                onOllamaAuthTokenChange={setOllamaAuthToken}
+                onOllamaTimeoutSecondsChange={(value) => {
+                  setOllamaRequestControls((prev) => ({
+                    ...prev,
+                    timeout_seconds: Number.isFinite(value) ? Math.max(1, Math.min(600, Math.round(value))) : prev.timeout_seconds,
+                  }));
+                }}
+                onOllamaMaxRetriesChange={(value) => {
+                  setOllamaRequestControls((prev) => ({
+                    ...prev,
+                    max_retries: Number.isFinite(value) ? Math.max(0, Math.min(10, Math.round(value))) : prev.max_retries,
+                  }));
+                }}
+                onOllamaRetryBackoffMsChange={(value) => {
+                  setOllamaRequestControls((prev) => ({
+                    ...prev,
+                    retry_backoff_ms:
+                      Number.isFinite(value) ? Math.max(0, Math.min(30000, Math.round(value))) : prev.retry_backoff_ms,
+                  }));
+                }}
+                onSaveOllamaRequestControls={() => {
+                  void saveOllamaRequestControls();
+                }}
+                onTestOllamaConnection={() => {
+                  void testOllamaConnection();
                 }}
                 onRefreshAiModels={() => {
                   void fetchAiModels(preferencesDraft.aiProvider);

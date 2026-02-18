@@ -59,6 +59,10 @@ Backend compatibility behavior:
   - long transcripts are analyzed in automatic AI chunks, then globally reranked in a second pass before diversity filtering
 - AI provider keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`
 - Ollama server config: `OLLAMA_BASE_URL` (used when provider is `ollama`)
+- Ollama request-control env fallbacks:
+  - `OLLAMA_TIMEOUT_SECONDS`
+  - `OLLAMA_MAX_RETRIES`
+  - `OLLAMA_RETRY_BACKOFF_MS`
 - z.ai requests use Coding API endpoint: `https://api.z.ai/api/coding/paas/v4`
 - z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
 - preferred Whisper var: `WHISPER_MODEL_SIZE`
@@ -89,10 +93,17 @@ When running locally or via Docker:
 - Task runtime statuses include: `queued`, `processing`, `awaiting_review`, `completed`, `error`
 - AI model discovery: `GET /tasks/ai-settings/{provider}/models`
   - key providers use saved user key first, then env fallback
-  - `ollama` uses saved user server URL first, then `OLLAMA_BASE_URL`
-- Ollama server settings:
+  - `ollama` supports profile-aware model listing with auth + timeout/retry controls
+- Legacy Ollama server settings (still supported):
   - `PUT /tasks/ai-settings/ollama/server`
   - `DELETE /tasks/ai-settings/ollama/server`
+- Advanced Ollama settings:
+  - `GET /tasks/ai-settings/ollama/profiles`
+  - `PUT /tasks/ai-settings/ollama/profiles/{profile}`
+  - `DELETE /tasks/ai-settings/ollama/profiles/{profile}`
+  - `PUT /tasks/ai-settings/ollama/default-profile`
+  - `PUT /tasks/ai-settings/ollama/request-controls`
+  - `POST /tasks/ai-settings/ollama/test-connection`
 - z.ai profile keys:
   - `PUT /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
   - `DELETE /tasks/ai-settings/zai/profiles/{subscription|metered}/key`

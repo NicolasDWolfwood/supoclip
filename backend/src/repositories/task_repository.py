@@ -17,6 +17,7 @@ LLM_PROVIDER_COLUMNS = {
 }
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
+SUPPORTED_OLLAMA_AUTH_MODES = {"none", "bearer", "custom_header"}
 
 
 class TaskRepository:
@@ -710,6 +711,539 @@ class TaskRepository:
             raise ValueError(f"User {user_id} not found")
         await db.commit()
         return normalized_mode
+
+    @staticmethod
+    async def get_user_default_ollama_profile(db: AsyncSession, user_id: str) -> Optional[str]:
+        result = await db.execute(
+            text(
+                """
+                SELECT default_ollama_profile
+                FROM users
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            raise ValueError(f"User {user_id} not found")
+        value = (getattr(row, "default_ollama_profile", None) or "").strip()
+        return value or None
+
+    @staticmethod
+    async def list_user_ollama_profiles(db: AsyncSession, user_id: str) -> List[Dict[str, Any]]:
+        result = await db.execute(
+            text(
+                """
+                SELECT
+                    profile_name,
+                    base_url,
+                    auth_mode,
+                    auth_header_name,
+                    enabled,
+                    is_default,
+                    created_at,
+                    updated_at,
+                    CASE
+                        WHEN auth_secret_encrypted IS NULL THEN false
+                        ELSE length(trim(auth_secret_encrypted)) > 0
+                    END AS has_auth_secret
+                FROM user_ollama_server_profiles
+                WHERE user_id = :user_id
+                ORDER BY is_default DESC, profile_name ASC
+                """
+            ),
+            {"user_id": user_id},
+        )
+        rows = result.fetchall()
+        profiles: List[Dict[str, Any]] = []
+        for row in rows:
+            profiles.append(
+                {
+                    "profile_name": row.profile_name,
+                    "base_url": row.base_url,
+                    "auth_mode": row.auth_mode,
+                    "auth_header_name": getattr(row, "auth_header_name", None),
+                    "enabled": bool(getattr(row, "enabled", True)),
+                    "is_default": bool(getattr(row, "is_default", False)),
+                    "has_auth_secret": bool(getattr(row, "has_auth_secret", False)),
+                    "created_at": getattr(row, "created_at", None),
+                    "updated_at": getattr(row, "updated_at", None),
+                }
+            )
+        return profiles
+
+    @staticmethod
+    async def get_user_ollama_profile(
+        db: AsyncSession,
+        user_id: str,
+        profile_name: str,
+        *,
+        include_secret: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        normalized_profile = (profile_name or "").strip()
+        if not normalized_profile:
+            raise ValueError("profile_name is required")
+        columns = """
+            profile_name,
+            base_url,
+            auth_mode,
+            auth_header_name,
+            enabled,
+            is_default,
+            created_at,
+            updated_at,
+            CASE
+                WHEN auth_secret_encrypted IS NULL THEN false
+                ELSE length(trim(auth_secret_encrypted)) > 0
+            END AS has_auth_secret
+        """
+        if include_secret:
+            columns = f"{columns}, auth_secret_encrypted"
+        result = await db.execute(
+            text(
+                f"""
+                SELECT {columns}
+                FROM user_ollama_server_profiles
+                WHERE user_id = :user_id
+                  AND profile_name = :profile_name
+                """
+            ),
+            {
+                "user_id": user_id,
+                "profile_name": normalized_profile,
+            },
+        )
+        row = result.fetchone()
+        if not row:
+            return None
+        profile: Dict[str, Any] = {
+            "profile_name": row.profile_name,
+            "base_url": row.base_url,
+            "auth_mode": row.auth_mode,
+            "auth_header_name": getattr(row, "auth_header_name", None),
+            "enabled": bool(getattr(row, "enabled", True)),
+            "is_default": bool(getattr(row, "is_default", False)),
+            "has_auth_secret": bool(getattr(row, "has_auth_secret", False)),
+            "created_at": getattr(row, "created_at", None),
+            "updated_at": getattr(row, "updated_at", None),
+        }
+        if include_secret:
+            profile["auth_secret_encrypted"] = getattr(row, "auth_secret_encrypted", None)
+        return profile
+
+    @staticmethod
+    async def set_user_ollama_profile(
+        db: AsyncSession,
+        user_id: str,
+        profile_name: str,
+        base_url: str,
+        auth_mode: str,
+        auth_header_name: Optional[str],
+        auth_secret_encrypted: Optional[str],
+        *,
+        replace_auth_secret: bool = False,
+        enabled: bool = True,
+        set_as_default: bool = False,
+    ) -> Dict[str, Any]:
+        normalized_profile = (profile_name or "").strip()
+        normalized_base_url = (base_url or "").strip()
+        normalized_auth_mode = (auth_mode or "none").strip().lower()
+        normalized_header_name = (auth_header_name or "").strip() or None
+        if not normalized_profile:
+            raise ValueError("profile_name is required")
+        if not normalized_base_url:
+            raise ValueError("base_url is required")
+        if normalized_auth_mode not in SUPPORTED_OLLAMA_AUTH_MODES:
+            raise ValueError(f"Unsupported Ollama auth mode: {auth_mode}")
+
+        await db.execute(
+            text(
+                """
+                INSERT INTO user_ollama_server_profiles (
+                    id,
+                    user_id,
+                    profile_name,
+                    base_url,
+                    auth_mode,
+                    auth_header_name,
+                    auth_secret_encrypted,
+                    enabled,
+                    is_default,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :user_id,
+                    :profile_name,
+                    :base_url,
+                    :auth_mode,
+                    :auth_header_name,
+                    :auth_secret_encrypted,
+                    :enabled,
+                    false,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (user_id, profile_name)
+                DO UPDATE SET
+                    base_url = EXCLUDED.base_url,
+                    auth_mode = EXCLUDED.auth_mode,
+                    auth_header_name = EXCLUDED.auth_header_name,
+                    auth_secret_encrypted = CASE
+                        WHEN :replace_auth_secret THEN :auth_secret_encrypted
+                        ELSE user_ollama_server_profiles.auth_secret_encrypted
+                    END,
+                    enabled = EXCLUDED.enabled,
+                    updated_at = NOW()
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "profile_name": normalized_profile,
+                "base_url": normalized_base_url,
+                "auth_mode": normalized_auth_mode,
+                "auth_header_name": normalized_header_name,
+                "auth_secret_encrypted": auth_secret_encrypted,
+                "replace_auth_secret": bool(replace_auth_secret),
+                "enabled": bool(enabled),
+            },
+        )
+
+        should_set_default = bool(set_as_default and enabled)
+        if not should_set_default:
+            default_presence = await db.execute(
+                text(
+                    """
+                    SELECT 1
+                    FROM user_ollama_server_profiles
+                    WHERE user_id = :user_id
+                      AND is_default = true
+                      AND enabled = true
+                    LIMIT 1
+                    """
+                ),
+                {"user_id": user_id},
+            )
+            if default_presence.fetchone() is None and enabled:
+                should_set_default = True
+
+        if should_set_default:
+            await db.execute(
+                text(
+                    """
+                    UPDATE user_ollama_server_profiles
+                    SET is_default = false,
+                        updated_at = NOW()
+                    WHERE user_id = :user_id
+                    """
+                ),
+                {"user_id": user_id},
+            )
+            await db.execute(
+                text(
+                    """
+                    UPDATE user_ollama_server_profiles
+                    SET is_default = true,
+                        updated_at = NOW()
+                    WHERE user_id = :user_id
+                      AND profile_name = :profile_name
+                    """
+                ),
+                {
+                    "user_id": user_id,
+                    "profile_name": normalized_profile,
+                },
+            )
+            user_update = await db.execute(
+                text(
+                    """
+                    UPDATE users
+                    SET default_ollama_profile = :profile_name,
+                        default_ollama_base_url = :base_url,
+                        "updatedAt" = NOW()
+                    WHERE id = :user_id
+                    """
+                ),
+                {
+                    "user_id": user_id,
+                    "profile_name": normalized_profile,
+                    "base_url": normalized_base_url,
+                },
+            )
+            if (user_update.rowcount or 0) == 0:
+                raise ValueError(f"User {user_id} not found")
+        else:
+            await db.execute(
+                text(
+                    """
+                    UPDATE users
+                    SET default_ollama_base_url = :base_url,
+                        "updatedAt" = NOW()
+                    WHERE id = :user_id
+                      AND default_ollama_profile = :profile_name
+                    """
+                ),
+                {
+                    "user_id": user_id,
+                    "profile_name": normalized_profile,
+                    "base_url": normalized_base_url,
+                },
+            )
+
+        await db.commit()
+        profile = await TaskRepository.get_user_ollama_profile(
+            db,
+            user_id,
+            normalized_profile,
+            include_secret=False,
+        )
+        if not profile:
+            raise ValueError(f"Ollama profile {normalized_profile} not found after save")
+        return profile
+
+    @staticmethod
+    async def delete_user_ollama_profile(
+        db: AsyncSession,
+        user_id: str,
+        profile_name: str,
+    ) -> bool:
+        normalized_profile = (profile_name or "").strip()
+        if not normalized_profile:
+            raise ValueError("profile_name is required")
+
+        deleted = await db.execute(
+            text(
+                """
+                DELETE FROM user_ollama_server_profiles
+                WHERE user_id = :user_id
+                  AND profile_name = :profile_name
+                RETURNING is_default
+                """
+            ),
+            {
+                "user_id": user_id,
+                "profile_name": normalized_profile,
+            },
+        )
+        deleted_row = deleted.fetchone()
+        if not deleted_row:
+            await db.rollback()
+            return False
+
+        deleted_was_default = bool(getattr(deleted_row, "is_default", False))
+        if deleted_was_default:
+            replacement = await db.execute(
+                text(
+                    """
+                    SELECT profile_name, base_url
+                    FROM user_ollama_server_profiles
+                    WHERE user_id = :user_id
+                      AND enabled = true
+                    ORDER BY updated_at DESC, profile_name ASC
+                    LIMIT 1
+                    """
+                ),
+                {"user_id": user_id},
+            )
+            replacement_row = replacement.fetchone()
+            if replacement_row:
+                await db.execute(
+                    text(
+                        """
+                        UPDATE user_ollama_server_profiles
+                        SET is_default = false,
+                            updated_at = NOW()
+                        WHERE user_id = :user_id
+                        """
+                    ),
+                    {"user_id": user_id},
+                )
+                await db.execute(
+                    text(
+                        """
+                        UPDATE user_ollama_server_profiles
+                        SET is_default = true,
+                            updated_at = NOW()
+                        WHERE user_id = :user_id
+                          AND profile_name = :profile_name
+                        """
+                    ),
+                    {
+                        "user_id": user_id,
+                        "profile_name": replacement_row.profile_name,
+                    },
+                )
+                user_update = await db.execute(
+                    text(
+                        """
+                        UPDATE users
+                        SET default_ollama_profile = :profile_name,
+                            default_ollama_base_url = :base_url,
+                            "updatedAt" = NOW()
+                        WHERE id = :user_id
+                        """
+                    ),
+                    {
+                        "user_id": user_id,
+                        "profile_name": replacement_row.profile_name,
+                        "base_url": replacement_row.base_url,
+                    },
+                )
+                if (user_update.rowcount or 0) == 0:
+                    raise ValueError(f"User {user_id} not found")
+            else:
+                user_update = await db.execute(
+                    text(
+                        """
+                        UPDATE users
+                        SET default_ollama_profile = NULL,
+                            default_ollama_base_url = NULL,
+                            "updatedAt" = NOW()
+                        WHERE id = :user_id
+                        """
+                    ),
+                    {"user_id": user_id},
+                )
+                if (user_update.rowcount or 0) == 0:
+                    raise ValueError(f"User {user_id} not found")
+
+        await db.commit()
+        return True
+
+    @staticmethod
+    async def set_user_default_ollama_profile(
+        db: AsyncSession,
+        user_id: str,
+        profile_name: str,
+    ) -> str:
+        normalized_profile = (profile_name or "").strip()
+        if not normalized_profile:
+            raise ValueError("profile_name is required")
+        selected = await db.execute(
+            text(
+                """
+                SELECT profile_name, base_url
+                FROM user_ollama_server_profiles
+                WHERE user_id = :user_id
+                  AND profile_name = :profile_name
+                  AND enabled = true
+                LIMIT 1
+                """
+            ),
+            {
+                "user_id": user_id,
+                "profile_name": normalized_profile,
+            },
+        )
+        selected_row = selected.fetchone()
+        if not selected_row:
+            raise ValueError(f"Ollama profile not found or disabled: {normalized_profile}")
+
+        await db.execute(
+            text(
+                """
+                UPDATE user_ollama_server_profiles
+                SET is_default = false,
+                    updated_at = NOW()
+                WHERE user_id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        await db.execute(
+            text(
+                """
+                UPDATE user_ollama_server_profiles
+                SET is_default = true,
+                    updated_at = NOW()
+                WHERE user_id = :user_id
+                  AND profile_name = :profile_name
+                """
+            ),
+            {
+                "user_id": user_id,
+                "profile_name": normalized_profile,
+            },
+        )
+        user_update = await db.execute(
+            text(
+                """
+                UPDATE users
+                SET default_ollama_profile = :profile_name,
+                    default_ollama_base_url = :base_url,
+                    "updatedAt" = NOW()
+                WHERE id = :user_id
+                """
+            ),
+            {
+                "user_id": user_id,
+                "profile_name": normalized_profile,
+                "base_url": selected_row.base_url,
+            },
+        )
+        if (user_update.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+        return normalized_profile
+
+    @staticmethod
+    async def get_user_ollama_request_controls(db: AsyncSession, user_id: str) -> Dict[str, Optional[int]]:
+        result = await db.execute(
+            text(
+                """
+                SELECT
+                    default_ollama_timeout_seconds,
+                    default_ollama_max_retries,
+                    default_ollama_retry_backoff_ms
+                FROM users
+                WHERE id = :user_id
+                """
+            ),
+            {"user_id": user_id},
+        )
+        row = result.fetchone()
+        if not row:
+            raise ValueError(f"User {user_id} not found")
+        return {
+            "timeout_seconds": getattr(row, "default_ollama_timeout_seconds", None),
+            "max_retries": getattr(row, "default_ollama_max_retries", None),
+            "retry_backoff_ms": getattr(row, "default_ollama_retry_backoff_ms", None),
+        }
+
+    @staticmethod
+    async def set_user_ollama_request_controls(
+        db: AsyncSession,
+        user_id: str,
+        *,
+        timeout_seconds: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, Optional[int]]:
+        set_clauses: List[str] = []
+        params: Dict[str, Any] = {"user_id": user_id}
+        if timeout_seconds is not None:
+            set_clauses.append("default_ollama_timeout_seconds = :timeout_seconds")
+            params["timeout_seconds"] = int(timeout_seconds)
+        if max_retries is not None:
+            set_clauses.append("default_ollama_max_retries = :max_retries")
+            params["max_retries"] = int(max_retries)
+        if retry_backoff_ms is not None:
+            set_clauses.append("default_ollama_retry_backoff_ms = :retry_backoff_ms")
+            params["retry_backoff_ms"] = int(retry_backoff_ms)
+
+        if not set_clauses:
+            raise ValueError("At least one Ollama request control must be provided")
+
+        set_clauses.append('"updatedAt" = NOW()')
+        query = f"UPDATE users SET {', '.join(set_clauses)} WHERE id = :user_id"
+        result = await db.execute(text(query), params)
+        if (result.rowcount or 0) == 0:
+            raise ValueError(f"User {user_id} not found")
+        await db.commit()
+        return await TaskRepository.get_user_ollama_request_controls(db, user_id)
 
     @staticmethod
     async def get_user_ollama_base_url(db: AsyncSession, user_id: str) -> Optional[str]:

@@ -22,6 +22,9 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `ANTHROPIC_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `anthropic:*`. |
 | `ZAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `zai:*`; requests use z.ai Coding API endpoint (`/api/coding/paas/v4`). |
 | `OLLAMA_BASE_URL` | No | `http://localhost:11434` (local) / `http://host.docker.internal:11434` (Docker compose env) | backend, worker | Base URL for Ollama when `LLM` uses `ollama:*` or AI provider is set to `ollama` in Settings. |
+| `OLLAMA_TIMEOUT_SECONDS` | No | `15` | backend, worker | Env fallback timeout (seconds) for Ollama model discovery/runtime calls when user-level override is not set. |
+| `OLLAMA_MAX_RETRIES` | No | `2` | backend, worker | Env fallback retry count for Ollama HTTP calls when user-level override is not set. |
+| `OLLAMA_RETRY_BACKOFF_MS` | No | `400` | backend, worker | Env fallback backoff (milliseconds) for Ollama retries when user-level override is not set. |
 | `WHISPER_MODEL_SIZE` | No | `medium` | backend, worker | Whisper size: `tiny`, `base`, `small`, `medium`, `large`. |
 | `WHISPER_DEVICE` | No | `auto` | backend, worker | Whisper execution target: `auto`, `cuda`, or `cpu`. |
 | `WHISPER_CHUNKING_ENABLED` | No | `true` | backend, worker | Enable chunked local Whisper transcription for long videos. |
@@ -100,9 +103,21 @@ Examples:
 
 ## Ollama Server Settings (UI/DB)
 
-- AI provider `ollama` uses a per-user saved server URL first (`default_ollama_base_url`).
-- If no user URL is saved, backend falls back to `OLLAMA_BASE_URL`.
-- Model discovery uses Ollama `GET /api/tags` on the resolved server URL.
+- AI provider `ollama` supports multiple per-user server profiles (`user_ollama_server_profiles`):
+  - `profile_name`, `base_url`, `enabled`, `is_default`
+  - auth modes: `none`, `bearer`, `custom_header`
+  - auth token is encrypted at rest (`auth_secret_encrypted`)
+- User-level defaults:
+  - `default_ollama_profile`
+  - `default_ollama_timeout_seconds`
+  - `default_ollama_max_retries`
+  - `default_ollama_retry_backoff_ms`
+- Resolution order for model listing/runtime:
+  1. request overrides (profile/base URL/timeout-retry controls)
+  2. user profile + user request-control defaults
+  3. env fallback (`OLLAMA_BASE_URL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_MAX_RETRIES`, `OLLAMA_RETRY_BACKOFF_MS`)
+  4. hard defaults (`http://localhost:11434`, `15s`, `2`, `400ms`)
+- Model discovery and connection tests call Ollama `GET /api/tags`; connection test also attempts `GET /api/version`.
 
 ## Entrypoint Alignment
 

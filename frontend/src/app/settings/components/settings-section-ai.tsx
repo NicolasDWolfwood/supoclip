@@ -1,8 +1,13 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { AiProvider, ZaiRoutingMode } from "../settings-section-types";
-import { AI_PROVIDERS, DEFAULT_AI_MODELS } from "../settings-section-types";
+import type {
+  AiProvider,
+  OllamaAuthMode,
+  OllamaProfileSummary,
+  ZaiRoutingMode,
+} from "../settings-section-types";
+import { AI_PROVIDERS, DEFAULT_AI_MODELS, OLLAMA_AUTH_MODES } from "../settings-section-types";
 
 interface SettingsSectionAiProps {
   isSaving: boolean;
@@ -19,6 +24,18 @@ interface SettingsSectionAiProps {
   ollamaServerUrl: string;
   hasSavedOllamaServer: boolean;
   hasEnvOllamaServer: boolean;
+  ollamaProfiles: OllamaProfileSummary[];
+  selectedOllamaProfile: string;
+  newOllamaProfileName: string;
+  ollamaAuthMode: OllamaAuthMode;
+  ollamaAuthHeaderName: string;
+  ollamaAuthToken: string;
+  ollamaTimeoutSeconds: number;
+  ollamaMaxRetries: number;
+  ollamaRetryBackoffMs: number;
+  isTestingOllamaConnection: boolean;
+  ollamaConnectionStatus: string | null;
+  ollamaConnectionError: string | null;
   aiKeyStatus: string | null;
   aiKeyError: string | null;
   aiModelStatus: string | null;
@@ -34,8 +51,20 @@ interface SettingsSectionAiProps {
   onSaveAiProviderKey: () => void;
   onDeleteAiProviderKey: () => void;
   onOllamaServerUrlChange: (value: string) => void;
-  onSaveOllamaServer: () => void;
-  onDeleteOllamaServer: () => void;
+  onSelectedOllamaProfileChange: (value: string) => void;
+  onNewOllamaProfileNameChange: (value: string) => void;
+  onCreateOllamaProfile: () => void;
+  onSaveOllamaProfile: () => void;
+  onDeleteOllamaProfile: () => void;
+  onSetDefaultOllamaProfile: () => void;
+  onOllamaAuthModeChange: (value: OllamaAuthMode) => void;
+  onOllamaAuthHeaderNameChange: (value: string) => void;
+  onOllamaAuthTokenChange: (value: string) => void;
+  onOllamaTimeoutSecondsChange: (value: number) => void;
+  onOllamaMaxRetriesChange: (value: number) => void;
+  onOllamaRetryBackoffMsChange: (value: number) => void;
+  onSaveOllamaRequestControls: () => void;
+  onTestOllamaConnection: () => void;
   onRefreshAiModels: () => void;
   onSelectedZaiKeyProfileChange: (profile: "subscription" | "metered") => void;
   onZaiRoutingModeChange: (mode: ZaiRoutingMode) => void;
@@ -59,6 +88,18 @@ export function SettingsSectionAi({
   ollamaServerUrl,
   hasSavedOllamaServer,
   hasEnvOllamaServer,
+  ollamaProfiles,
+  selectedOllamaProfile,
+  newOllamaProfileName,
+  ollamaAuthMode,
+  ollamaAuthHeaderName,
+  ollamaAuthToken,
+  ollamaTimeoutSeconds,
+  ollamaMaxRetries,
+  ollamaRetryBackoffMs,
+  isTestingOllamaConnection,
+  ollamaConnectionStatus,
+  ollamaConnectionError,
   aiKeyStatus,
   aiKeyError,
   aiModelStatus,
@@ -74,8 +115,20 @@ export function SettingsSectionAi({
   onSaveAiProviderKey,
   onDeleteAiProviderKey,
   onOllamaServerUrlChange,
-  onSaveOllamaServer,
-  onDeleteOllamaServer,
+  onSelectedOllamaProfileChange,
+  onNewOllamaProfileNameChange,
+  onCreateOllamaProfile,
+  onSaveOllamaProfile,
+  onDeleteOllamaProfile,
+  onSetDefaultOllamaProfile,
+  onOllamaAuthModeChange,
+  onOllamaAuthHeaderNameChange,
+  onOllamaAuthTokenChange,
+  onOllamaTimeoutSecondsChange,
+  onOllamaMaxRetriesChange,
+  onOllamaRetryBackoffMsChange,
+  onSaveOllamaRequestControls,
+  onTestOllamaConnection,
   onRefreshAiModels,
   onSelectedZaiKeyProfileChange,
   onZaiRoutingModeChange,
@@ -83,6 +136,8 @@ export function SettingsSectionAi({
   onSaveZaiProfileKey,
   onDeleteZaiProfileKey,
 }: SettingsSectionAiProps) {
+  const selectedProfileMeta = ollamaProfiles.find((profile) => profile.profile_name === selectedOllamaProfile);
+
   return (
     <div className="space-y-4">
       <div className="space-y-3">
@@ -198,47 +253,201 @@ export function SettingsSectionAi({
             {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
           </div>
         ) : aiProvider === "ollama" ? (
-          <div className="space-y-2 rounded border border-gray-100 bg-gray-50 p-3">
-            <label htmlFor="ollama-server-url" className="text-xs font-medium text-black">
-              Ollama Server URL
-            </label>
-            <Input
-              id="ollama-server-url"
-              type="text"
-              value={ollamaServerUrl}
-              onChange={(event) => onOllamaServerUrlChange(event.target.value ?? "")}
-              placeholder="http://localhost:11434"
-              disabled={isSaving || isSavingAiKey}
-            />
+          <div className="space-y-3 rounded border border-gray-100 bg-gray-50 p-3">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Profile</label>
+                <Select
+                  value={selectedOllamaProfile || "__none__"}
+                  onValueChange={(value) => onSelectedOllamaProfileChange(value === "__none__" ? "" : value)}
+                  disabled={isSaving || isSavingAiKey}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select profile" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ollamaProfiles.length === 0 && <SelectItem value="__none__">No saved profiles</SelectItem>}
+                    {ollamaProfiles.map((profile) => (
+                      <SelectItem key={profile.profile_name} value={profile.profile_name}>
+                        {profile.profile_name}
+                        {profile.is_default ? " (default)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-wrap items-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isSaving || isSavingAiKey || !selectedOllamaProfile || selectedProfileMeta?.is_default}
+                  onClick={onSetDefaultOllamaProfile}
+                >
+                  Set Default
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={isSaving || isSavingAiKey || !selectedOllamaProfile}
+                  onClick={onDeleteOllamaProfile}
+                >
+                  Delete Profile
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Input
+                value={newOllamaProfileName}
+                onChange={(event) => onNewOllamaProfileNameChange(event.target.value ?? "")}
+                placeholder="new profile name"
+                disabled={isSaving || isSavingAiKey}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || !newOllamaProfileName.trim()}
+                onClick={onCreateOllamaProfile}
+              >
+                Create Profile
+              </Button>
+            </div>
+
+            <div className="space-y-1">
+              <label htmlFor="ollama-server-url" className="text-xs font-medium text-black">
+                Ollama Server URL
+              </label>
+              <Input
+                id="ollama-server-url"
+                type="text"
+                value={ollamaServerUrl}
+                onChange={(event) => onOllamaServerUrlChange(event.target.value ?? "")}
+                placeholder="http://localhost:11434"
+                disabled={isSaving || isSavingAiKey}
+              />
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Auth Mode</label>
+                <Select
+                  value={ollamaAuthMode}
+                  onValueChange={(value) => onOllamaAuthModeChange(value as OllamaAuthMode)}
+                  disabled={isSaving || isSavingAiKey}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Auth mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OLLAMA_AUTH_MODES.map((mode) => (
+                      <SelectItem key={mode} value={mode}>
+                        {mode}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {ollamaAuthMode === "custom_header" && (
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-black">Header Name</label>
+                  <Input
+                    value={ollamaAuthHeaderName}
+                    onChange={(event) => onOllamaAuthHeaderNameChange(event.target.value ?? "")}
+                    placeholder="X-API-Key"
+                    disabled={isSaving || isSavingAiKey}
+                  />
+                </div>
+              )}
+            </div>
+
+            {ollamaAuthMode !== "none" && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Auth Token (write-only)</label>
+                <Input
+                  type="password"
+                  value={ollamaAuthToken}
+                  onChange={(event) => onOllamaAuthTokenChange(event.target.value ?? "")}
+                  placeholder="Leave blank to keep existing token"
+                  disabled={isSaving || isSavingAiKey}
+                />
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 disabled={isSaving || isSavingAiKey || !ollamaServerUrl.trim()}
-                onClick={onSaveOllamaServer}
+                onClick={onSaveOllamaProfile}
               >
-                {isSavingAiKey ? "Saving..." : "Save Server"}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={isSaving || isSavingAiKey || !hasSavedOllamaServer}
-                onClick={onDeleteOllamaServer}
-              >
-                Remove Saved Server
+                {isSavingAiKey ? "Saving..." : "Save Profile"}
               </Button>
               <span className="text-xs text-gray-500">
                 {hasSavedOllamaServer
-                  ? "Saved server URL available"
+                  ? `Saved profiles: ${ollamaProfiles.length}`
                   : hasEnvOllamaServer
-                    ? "No saved server; using backend env fallback"
-                    : ollamaServerUrl.trim()
-                      ? "Using default backend Ollama URL"
-                      : "No server configured"}
+                    ? "No saved profile; using backend env fallback"
+                    : "No saved profile configured"}
               </span>
             </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Timeout (s)</label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={600}
+                  value={String(ollamaTimeoutSeconds)}
+                  onChange={(event) => onOllamaTimeoutSecondsChange(Number(event.target.value))}
+                  disabled={isSaving || isSavingAiKey}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Max Retries</label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={String(ollamaMaxRetries)}
+                  onChange={(event) => onOllamaMaxRetriesChange(Number(event.target.value))}
+                  disabled={isSaving || isSavingAiKey}
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-black">Backoff (ms)</label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={30000}
+                  value={String(ollamaRetryBackoffMs)}
+                  onChange={(event) => onOllamaRetryBackoffMsChange(Number(event.target.value))}
+                  disabled={isSaving || isSavingAiKey}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" variant="outline" size="sm" disabled={isSaving || isSavingAiKey} onClick={onSaveOllamaRequestControls}>
+                Save Request Controls
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                disabled={isSaving || isSavingAiKey || isTestingOllamaConnection}
+                onClick={onTestOllamaConnection}
+              >
+                {isTestingOllamaConnection ? "Testing..." : "Test Connection"}
+              </Button>
+            </div>
+
+            {ollamaConnectionStatus && <p className="text-xs text-green-600">{ollamaConnectionStatus}</p>}
+            {ollamaConnectionError && <p className="text-xs text-red-600">{ollamaConnectionError}</p>}
             {aiKeyStatus && <p className="text-xs text-green-600">{aiKeyStatus}</p>}
             {aiKeyError && <p className="text-xs text-red-600">{aiKeyError}</p>}
           </div>
@@ -308,7 +517,7 @@ export function SettingsSectionAi({
             {!hasAiKeyForSelectedProvider && (
               <span className="text-xs text-gray-500">
                 {aiProvider === "ollama"
-                  ? "Save an Ollama server URL (or configure OLLAMA_BASE_URL) to load models."
+                  ? "Configure an Ollama profile/server to load models."
                   : "Save a key (or configure env fallback) to load models."}
               </span>
             )}

@@ -4,13 +4,16 @@ Provider-backed model catalog lookup for AI settings.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+import time
+from typing import Any, Iterable, Optional
 from urllib import error, parse, request
 
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
 HTTP_TIMEOUT_SECONDS = 15
+HTTP_MAX_RETRIES = 2
+HTTP_RETRY_BACKOFF_MS = 400
 
 
 class ModelCatalogError(Exception):
@@ -28,8 +31,6 @@ def _dedupe_and_sort(values: Iterable[str]) -> list[str]:
 
 def _extract_error_message(payload: Any) -> str | None:
     if isinstance(payload, dict):
-        # Common provider error shapes:
-        # {"error": {"message": "..."}}, {"message": "..."} or {"detail": "..."}
         nested_error = payload.get("error")
         if isinstance(nested_error, dict):
             nested_message = nested_error.get("message")
@@ -51,61 +52,128 @@ def _normalize_base_url(base_url: str | None) -> str:
     return raw.rstrip("/")
 
 
-def _request_json(provider: str, url: str, headers: dict[str, str]) -> dict[str, Any]:
+def _normalize_timeout_seconds(value: Optional[int]) -> int:
+    try:
+        normalized = int(value if value is not None else HTTP_TIMEOUT_SECONDS)
+    except (TypeError, ValueError):
+        normalized = HTTP_TIMEOUT_SECONDS
+    return max(1, min(600, normalized))
+
+
+def _normalize_max_retries(value: Optional[int]) -> int:
+    try:
+        normalized = int(value if value is not None else HTTP_MAX_RETRIES)
+    except (TypeError, ValueError):
+        normalized = HTTP_MAX_RETRIES
+    return max(0, min(10, normalized))
+
+
+def _normalize_retry_backoff_ms(value: Optional[int]) -> int:
+    try:
+        normalized = int(value if value is not None else HTTP_RETRY_BACKOFF_MS)
+    except (TypeError, ValueError):
+        normalized = HTTP_RETRY_BACKOFF_MS
+    return max(0, min(30000, normalized))
+
+
+def _sleep_before_retry(attempt_index: int, retry_backoff_ms: int) -> None:
+    if retry_backoff_ms <= 0:
+        return
+    delay_ms = retry_backoff_ms * max(1, attempt_index)
+    time.sleep(delay_ms / 1000.0)
+
+
+def _request_json(
+    provider: str,
+    url: str,
+    headers: dict[str, str],
+    *,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    retry_backoff_ms: Optional[int] = None,
+    allow_404: bool = False,
+) -> dict[str, Any]:
+    resolved_timeout = _normalize_timeout_seconds(timeout_seconds)
+    resolved_retries = _normalize_max_retries(max_retries)
+    resolved_backoff = _normalize_retry_backoff_ms(retry_backoff_ms)
+
     req = request.Request(url, headers=headers, method="GET")
-    try:
-        with request.urlopen(req, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            raw_body = response.read().decode("utf-8", errors="replace")
-    except error.HTTPError as exc:
-        body = ""
+    for attempt_index in range(resolved_retries + 1):
         try:
-            body = exc.read().decode("utf-8", errors="replace")
-        except Exception:
+            with request.urlopen(req, timeout=resolved_timeout) as response:
+                raw_body = response.read().decode("utf-8", errors="replace")
+        except error.HTTPError as exc:
             body = ""
-        message = ""
-        if body:
             try:
-                parsed = json.loads(body)
-                message = _extract_error_message(parsed) or body
-            except json.JSONDecodeError:
-                message = body
-        message = (message or f"HTTP {exc.code}").strip()
-        if exc.code in {401, 403}:
-            raise ModelCatalogError(
-                f"{provider} API key is invalid or unauthorized ({message})",
-                status_code=401,
-            ) from exc
-        if exc.code == 429:
-            raise ModelCatalogError(
-                f"{provider} model listing was rate-limited ({message})",
-                status_code=429,
-            ) from exc
-        raise ModelCatalogError(
-            f"{provider} model listing request failed ({message})",
-            status_code=502,
-        ) from exc
-    except error.URLError as exc:
-        raise ModelCatalogError(
-            f"Could not reach {provider} model endpoint ({exc.reason})",
-            status_code=502,
-        ) from exc
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            message = ""
+            if body:
+                try:
+                    parsed = json.loads(body)
+                    message = _extract_error_message(parsed) or body
+                except json.JSONDecodeError:
+                    message = body
+            message = (message or f"HTTP {exc.code}").strip()
 
-    if not raw_body.strip():
-        return {}
-    try:
-        payload = json.loads(raw_body)
-    except json.JSONDecodeError as exc:
-        raise ModelCatalogError(
-            f"{provider} model listing returned invalid JSON",
-            status_code=502,
-        ) from exc
+            if allow_404 and exc.code == 404:
+                return {}
 
-    if not isinstance(payload, dict):
-        raise ModelCatalogError(
-            f"{provider} model listing returned an unexpected payload",
-            status_code=502,
-        )
-    return payload
+            should_retry = exc.code >= 500 or exc.code == 429
+            if should_retry and attempt_index < resolved_retries:
+                _sleep_before_retry(attempt_index + 1, resolved_backoff)
+                continue
+
+            if exc.code in {401, 403}:
+                unauthorized_message = (
+                    f"{provider} credentials are invalid or unauthorized ({message})"
+                    if provider == "ollama"
+                    else f"{provider} API key is invalid or unauthorized ({message})"
+                )
+                raise ModelCatalogError(
+                    unauthorized_message,
+                    status_code=401,
+                ) from exc
+            if exc.code == 429:
+                raise ModelCatalogError(
+                    f"{provider} model listing was rate-limited ({message})",
+                    status_code=429,
+                ) from exc
+            raise ModelCatalogError(
+                f"{provider} model listing request failed ({message})",
+                status_code=502,
+            ) from exc
+        except error.URLError as exc:
+            if attempt_index < resolved_retries:
+                _sleep_before_retry(attempt_index + 1, resolved_backoff)
+                continue
+            raise ModelCatalogError(
+                f"Could not reach {provider} model endpoint ({exc.reason})",
+                status_code=502,
+            ) from exc
+
+        if not raw_body.strip():
+            return {}
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise ModelCatalogError(
+                f"{provider} model listing returned invalid JSON",
+                status_code=502,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise ModelCatalogError(
+                f"{provider} model listing returned an unexpected payload",
+                status_code=502,
+            )
+        return payload
+
+    raise ModelCatalogError(
+        f"Could not reach {provider} model endpoint",
+        status_code=502,
+    )
 
 
 def _list_openai_models(api_key: str) -> list[str]:
@@ -187,12 +255,21 @@ def _list_zai_models(api_key: str) -> list[str]:
     return preferred or ids
 
 
-def _list_ollama_models(base_url: str | None) -> list[str]:
+def _list_ollama_models(
+    base_url: str | None,
+    auth_headers: Optional[dict[str, str]] = None,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    retry_backoff_ms: Optional[int] = None,
+) -> list[str]:
     normalized_base_url = _normalize_base_url(base_url) or DEFAULT_OLLAMA_BASE_URL
     payload = _request_json(
         provider="ollama",
         url=f"{normalized_base_url}/api/tags",
-        headers={},
+        headers=dict(auth_headers or {}),
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        retry_backoff_ms=retry_backoff_ms,
     )
     rows = payload.get("models")
     if not isinstance(rows, list):
@@ -211,7 +288,103 @@ def _list_ollama_models(base_url: str | None) -> list[str]:
     return _dedupe_and_sort(names)
 
 
-def list_models_for_provider(provider: str, api_key: str, base_url: str | None = None) -> list[str]:
+def _get_ollama_version(
+    base_url: str,
+    auth_headers: Optional[dict[str, str]] = None,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    retry_backoff_ms: Optional[int] = None,
+) -> Optional[str]:
+    payload = _request_json(
+        provider="ollama",
+        url=f"{base_url}/api/version",
+        headers=dict(auth_headers or {}),
+        timeout_seconds=timeout_seconds,
+        max_retries=max_retries,
+        retry_backoff_ms=retry_backoff_ms,
+        allow_404=True,
+    )
+    version = payload.get("version") if isinstance(payload, dict) else None
+    if isinstance(version, str) and version.strip():
+        return version.strip()
+    return None
+
+
+def test_ollama_connection(
+    base_url: str | None,
+    auth_headers: Optional[dict[str, str]] = None,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    retry_backoff_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    normalized_base_url = _normalize_base_url(base_url) or DEFAULT_OLLAMA_BASE_URL
+    resolved_timeout = _normalize_timeout_seconds(timeout_seconds)
+    resolved_retries = _normalize_max_retries(max_retries)
+    resolved_backoff = _normalize_retry_backoff_ms(retry_backoff_ms)
+
+    try:
+        models = _list_ollama_models(
+            normalized_base_url,
+            auth_headers=auth_headers,
+            timeout_seconds=resolved_timeout,
+            max_retries=resolved_retries,
+            retry_backoff_ms=resolved_backoff,
+        )
+    except ModelCatalogError as exc:
+        return {
+            "connected": False,
+            "status": "error",
+            "server_url": normalized_base_url,
+            "version": None,
+            "model_count": 0,
+            "models": [],
+            "failure_reason": str(exc),
+            "failure_status_code": int(exc.status_code),
+            "request_controls": {
+                "timeout_seconds": resolved_timeout,
+                "max_retries": resolved_retries,
+                "retry_backoff_ms": resolved_backoff,
+            },
+        }
+
+    version: Optional[str] = None
+    try:
+        version = _get_ollama_version(
+            normalized_base_url,
+            auth_headers=auth_headers,
+            timeout_seconds=resolved_timeout,
+            max_retries=resolved_retries,
+            retry_backoff_ms=resolved_backoff,
+        )
+    except Exception:
+        version = None
+
+    return {
+        "connected": True,
+        "status": "ok",
+        "server_url": normalized_base_url,
+        "version": version,
+        "model_count": len(models),
+        "models": models,
+        "failure_reason": None,
+        "failure_status_code": None,
+        "request_controls": {
+            "timeout_seconds": resolved_timeout,
+            "max_retries": resolved_retries,
+            "retry_backoff_ms": resolved_backoff,
+        },
+    }
+
+
+def list_models_for_provider(
+    provider: str,
+    api_key: str,
+    base_url: str | None = None,
+    auth_headers: Optional[dict[str, str]] = None,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    retry_backoff_ms: Optional[int] = None,
+) -> list[str]:
     normalized_provider = (provider or "").strip().lower()
     normalized_key = (api_key or "").strip()
     if normalized_provider not in SUPPORTED_AI_PROVIDERS:
@@ -228,7 +401,13 @@ def list_models_for_provider(provider: str, api_key: str, base_url: str | None =
     elif normalized_provider == "zai":
         models = _list_zai_models(normalized_key)
     else:
-        models = _list_ollama_models(base_url)
+        models = _list_ollama_models(
+            base_url,
+            auth_headers=auth_headers,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+        )
 
     if not models:
         raise ModelCatalogError(f"No models returned for {normalized_provider}", status_code=502)

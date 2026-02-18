@@ -11,10 +11,34 @@ export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 export const TRANSCRIPTION_PROVIDERS = ["local", "assemblyai"] as const;
 export const AI_PROVIDERS = ["openai", "google", "anthropic", "zai", "ollama"] as const;
 export const ZAI_ROUTING_MODES = ["auto", "subscription", "metered"] as const;
+export const OLLAMA_AUTH_MODES = ["none", "bearer", "custom_header"] as const;
 
 export type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number];
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 export type ZaiRoutingMode = (typeof ZAI_ROUTING_MODES)[number];
+export type OllamaAuthMode = (typeof OLLAMA_AUTH_MODES)[number];
+
+export interface OllamaProfileSummary {
+  profile_name: string;
+  base_url: string;
+  auth_mode: OllamaAuthMode;
+  auth_header_name?: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  has_auth_secret: boolean;
+}
+
+export interface OllamaRequestControls {
+  timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_ms: number;
+}
+
+export const DEFAULT_OLLAMA_REQUEST_CONTROLS: OllamaRequestControls = {
+  timeout_seconds: 15,
+  max_retries: 2,
+  retry_backoff_ms: 400,
+};
 
 export const MIN_WHISPER_CHUNK_DURATION_SECONDS = 300;
 export const MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600;

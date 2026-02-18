@@ -16,7 +16,7 @@ from ..repositories.clip_repository import ClipRepository
 from ..repositories.draft_clip_repository import DraftClipRepository
 from .video_service import VideoService
 from .secret_service import SecretService
-from .ai_model_catalog_service import list_models_for_provider
+from .ai_model_catalog_service import list_models_for_provider, test_ollama_connection as run_ollama_connection_test
 from ..config import Config
 from ..video_utils import load_cached_transcript_data
 
@@ -33,7 +33,18 @@ DEFAULT_AI_MODELS = {
 }
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
+SUPPORTED_OLLAMA_AUTH_MODES = {"none", "bearer", "custom_header"}
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_PROFILE_NAME = "default"
+DEFAULT_OLLAMA_TIMEOUT_SECONDS = 15
+DEFAULT_OLLAMA_MAX_RETRIES = 2
+DEFAULT_OLLAMA_RETRY_BACKOFF_MS = 400
+MIN_OLLAMA_TIMEOUT_SECONDS = 1
+MAX_OLLAMA_TIMEOUT_SECONDS = 600
+MIN_OLLAMA_MAX_RETRIES = 0
+MAX_OLLAMA_MAX_RETRIES = 10
+MIN_OLLAMA_RETRY_BACKOFF_MS = 0
+MAX_OLLAMA_RETRY_BACKOFF_MS = 30000
 DRAFT_MIN_DURATION_SECONDS = 3
 DRAFT_MAX_DURATION_SECONDS = 180
 TIMELINE_INCREMENT_SECONDS = 0.5
@@ -144,21 +155,272 @@ class TaskService:
             raise ValueError("Ollama server URL is required")
         return normalized
 
+    @staticmethod
+    def _normalize_ollama_profile_name(value: Optional[str]) -> Optional[str]:
+        normalized = (value or "").strip().lower()
+        return normalized or None
+
+    @staticmethod
+    def _normalize_ollama_auth_mode(value: Optional[str]) -> str:
+        normalized = (value or "none").strip().lower()
+        if normalized not in SUPPORTED_OLLAMA_AUTH_MODES:
+            raise ValueError(f"Unsupported Ollama auth mode: {value}")
+        return normalized
+
+    @staticmethod
+    def _normalize_ollama_auth_header_name(value: Optional[str]) -> Optional[str]:
+        header_name = (value or "").strip()
+        if not header_name:
+            return None
+        if ":" in header_name or "\n" in header_name or "\r" in header_name:
+            raise ValueError("Invalid Ollama auth header name")
+        return header_name
+
+    @staticmethod
+    def _normalize_ollama_request_control(
+        value: Optional[int],
+        *,
+        field_name: str,
+        minimum: int,
+        maximum: int,
+    ) -> Optional[int]:
+        if value is None:
+            return None
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} must be an integer") from exc
+        if normalized < minimum or normalized > maximum:
+            raise ValueError(f"{field_name} must be between {minimum} and {maximum}")
+        return normalized
+
+    def _env_ollama_request_controls(self) -> Dict[str, int]:
+        timeout_seconds = self._normalize_ollama_request_control(
+            getattr(config, "ollama_timeout_seconds", DEFAULT_OLLAMA_TIMEOUT_SECONDS),
+            field_name="OLLAMA_TIMEOUT_SECONDS",
+            minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+            maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+        ) or DEFAULT_OLLAMA_TIMEOUT_SECONDS
+        max_retries = self._normalize_ollama_request_control(
+            getattr(config, "ollama_max_retries", DEFAULT_OLLAMA_MAX_RETRIES),
+            field_name="OLLAMA_MAX_RETRIES",
+            minimum=MIN_OLLAMA_MAX_RETRIES,
+            maximum=MAX_OLLAMA_MAX_RETRIES,
+        ) if getattr(config, "ollama_max_retries", None) is not None else DEFAULT_OLLAMA_MAX_RETRIES
+        retry_backoff_ms = self._normalize_ollama_request_control(
+            getattr(config, "ollama_retry_backoff_ms", DEFAULT_OLLAMA_RETRY_BACKOFF_MS),
+            field_name="OLLAMA_RETRY_BACKOFF_MS",
+            minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+            maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+        ) if getattr(config, "ollama_retry_backoff_ms", None) is not None else DEFAULT_OLLAMA_RETRY_BACKOFF_MS
+        return {
+            "timeout_seconds": timeout_seconds,
+            "max_retries": max_retries if max_retries is not None else DEFAULT_OLLAMA_MAX_RETRIES,
+            "retry_backoff_ms": (
+                retry_backoff_ms if retry_backoff_ms is not None else DEFAULT_OLLAMA_RETRY_BACKOFF_MS
+            ),
+        }
+
+    async def _resolve_ollama_request_controls(
+        self,
+        *,
+        user_id: Optional[str],
+        requested_timeout_seconds: Optional[int] = None,
+        requested_max_retries: Optional[int] = None,
+        requested_retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, int]:
+        resolved = self._env_ollama_request_controls()
+
+        if user_id:
+            stored = await self.task_repo.get_user_ollama_request_controls(self.db, user_id)
+            stored_timeout = self._normalize_ollama_request_control(
+                stored.get("timeout_seconds"),
+                field_name="default_ollama_timeout_seconds",
+                minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+                maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+            )
+            stored_retries = self._normalize_ollama_request_control(
+                stored.get("max_retries"),
+                field_name="default_ollama_max_retries",
+                minimum=MIN_OLLAMA_MAX_RETRIES,
+                maximum=MAX_OLLAMA_MAX_RETRIES,
+            )
+            stored_backoff = self._normalize_ollama_request_control(
+                stored.get("retry_backoff_ms"),
+                field_name="default_ollama_retry_backoff_ms",
+                minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+                maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+            )
+            if stored_timeout is not None:
+                resolved["timeout_seconds"] = stored_timeout
+            if stored_retries is not None:
+                resolved["max_retries"] = stored_retries
+            if stored_backoff is not None:
+                resolved["retry_backoff_ms"] = stored_backoff
+
+        override_timeout = self._normalize_ollama_request_control(
+            requested_timeout_seconds,
+            field_name="timeout_seconds",
+            minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+            maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+        )
+        override_retries = self._normalize_ollama_request_control(
+            requested_max_retries,
+            field_name="max_retries",
+            minimum=MIN_OLLAMA_MAX_RETRIES,
+            maximum=MAX_OLLAMA_MAX_RETRIES,
+        )
+        override_backoff = self._normalize_ollama_request_control(
+            requested_retry_backoff_ms,
+            field_name="retry_backoff_ms",
+            minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+            maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+        )
+        if override_timeout is not None:
+            resolved["timeout_seconds"] = override_timeout
+        if override_retries is not None:
+            resolved["max_retries"] = override_retries
+        if override_backoff is not None:
+            resolved["retry_backoff_ms"] = override_backoff
+        return resolved
+
+    def _resolve_ollama_auth_headers(
+        self,
+        *,
+        auth_mode: str,
+        auth_header_name: Optional[str],
+        auth_secret_value: Optional[str],
+    ) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if auth_mode == "none":
+            return headers
+        token = (auth_secret_value or "").strip()
+        if not token:
+            raise ValueError(f"Ollama auth token is missing for auth mode '{auth_mode}'")
+        if auth_mode == "bearer":
+            headers["Authorization"] = f"Bearer {token}"
+            return headers
+        header_name = self._normalize_ollama_auth_header_name(auth_header_name)
+        if not header_name:
+            raise ValueError("auth_header_name is required for custom_header mode")
+        headers[header_name] = token
+        return headers
+
+    async def _resolve_effective_ollama_settings(
+        self,
+        *,
+        user_id: Optional[str],
+        requested_profile: Optional[str] = None,
+        requested_base_url: Optional[str] = None,
+        requested_timeout_seconds: Optional[int] = None,
+        requested_max_retries: Optional[int] = None,
+        requested_retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        requested = self._normalize_base_url(requested_base_url)
+        controls = await self._resolve_ollama_request_controls(
+            user_id=user_id,
+            requested_timeout_seconds=requested_timeout_seconds,
+            requested_max_retries=requested_max_retries,
+            requested_retry_backoff_ms=requested_retry_backoff_ms,
+        )
+        if requested:
+            return {
+                "profile_name": None,
+                "base_url": requested,
+                "auth_headers": {},
+                "auth_mode": "none",
+                "has_auth_secret": False,
+                **controls,
+            }
+
+        resolved_profile_name = self._normalize_ollama_profile_name(requested_profile)
+        profile_record: Optional[Dict[str, Any]] = None
+        if user_id:
+            if resolved_profile_name:
+                profile_record = await self.task_repo.get_user_ollama_profile(
+                    self.db,
+                    user_id,
+                    resolved_profile_name,
+                    include_secret=True,
+                )
+                if profile_record and not bool(profile_record.get("enabled", True)):
+                    raise ValueError(f"Ollama profile is disabled: {resolved_profile_name}")
+                if not profile_record:
+                    raise ValueError(f"Ollama profile not found: {resolved_profile_name}")
+            else:
+                default_profile = await self.task_repo.get_user_default_ollama_profile(self.db, user_id)
+                if default_profile:
+                    profile_record = await self.task_repo.get_user_ollama_profile(
+                        self.db,
+                        user_id,
+                        default_profile,
+                        include_secret=True,
+                    )
+                if not profile_record:
+                    profiles = await self.task_repo.list_user_ollama_profiles(self.db, user_id)
+                    enabled_profiles = [profile for profile in profiles if profile.get("enabled")]
+                    if enabled_profiles:
+                        first_profile_name = str(enabled_profiles[0]["profile_name"])
+                        profile_record = await self.task_repo.get_user_ollama_profile(
+                            self.db,
+                            user_id,
+                            first_profile_name,
+                            include_secret=True,
+                        )
+
+        if profile_record:
+            auth_mode = self._normalize_ollama_auth_mode(str(profile_record.get("auth_mode") or "none"))
+            decrypted_secret: Optional[str] = None
+            encrypted_secret = profile_record.get("auth_secret_encrypted")
+            if encrypted_secret:
+                decrypted_secret = self.secret_service.decrypt(str(encrypted_secret))
+            auth_headers = self._resolve_ollama_auth_headers(
+                auth_mode=auth_mode,
+                auth_header_name=profile_record.get("auth_header_name"),
+                auth_secret_value=decrypted_secret,
+            )
+            return {
+                "profile_name": str(profile_record.get("profile_name") or ""),
+                "base_url": self._normalize_ollama_base_url(profile_record.get("base_url")),
+                "auth_headers": auth_headers,
+                "auth_mode": auth_mode,
+                "has_auth_secret": bool(profile_record.get("has_auth_secret")),
+                **controls,
+            }
+
+        if user_id:
+            saved = await self.task_repo.get_user_ollama_base_url(self.db, user_id)
+            normalized_saved = self._normalize_base_url(saved)
+            if normalized_saved:
+                return {
+                    "profile_name": None,
+                    "base_url": normalized_saved,
+                    "auth_headers": {},
+                    "auth_mode": "none",
+                    "has_auth_secret": False,
+                    **controls,
+                }
+
+        env_fallback = self._normalize_base_url(config.ollama_base_url)
+        return {
+            "profile_name": None,
+            "base_url": env_fallback or DEFAULT_OLLAMA_BASE_URL,
+            "auth_headers": {},
+            "auth_mode": "none",
+            "has_auth_secret": False,
+            **controls,
+        }
+
     async def _resolve_effective_ollama_base_url(
         self,
         user_id: Optional[str],
         requested_base_url: Optional[str] = None,
     ) -> str:
-        requested = self._normalize_base_url(requested_base_url)
-        if requested:
-            return requested
-        if user_id:
-            saved = await self.task_repo.get_user_ollama_base_url(self.db, user_id)
-            normalized_saved = self._normalize_base_url(saved)
-            if normalized_saved:
-                return normalized_saved
-        env_fallback = self._normalize_base_url(config.ollama_base_url)
-        return env_fallback or DEFAULT_OLLAMA_BASE_URL
+        settings = await self._resolve_effective_ollama_settings(
+            user_id=user_id,
+            requested_base_url=requested_base_url,
+        )
+        return str(settings["base_url"])
 
     @staticmethod
     def _normalize_text_for_compare(value: Optional[str]) -> str:
@@ -525,7 +787,7 @@ class TaskService:
         ai_provider: str,
         ai_routing_mode: Optional[str],
         user_id: Optional[str],
-    ) -> Tuple[Optional[str], str, Optional[str], Optional[str], Optional[str], List[str], List[str]]:
+    ) -> Tuple[Optional[str], str, Optional[str], Optional[str], Optional[str], List[str], List[str], Optional[Dict[str, Any]]]:
         assembly_api_key: Optional[str] = None
         if transcription_provider == "assemblyai":
             stored_encrypted_key = None
@@ -540,6 +802,7 @@ class TaskService:
         resolved_zai_routing_mode: Optional[str] = None
         ai_key_attempts: List[Dict[str, str]] = []
         ai_base_url: Optional[str] = None
+        ai_request_options: Optional[Dict[str, Any]] = None
         if selected_ai_provider in AI_KEY_REQUIRED_PROVIDERS:
             if user_id:
                 ai_key_attempts, resolved_zai_routing_mode = await self.get_effective_user_ai_api_key_attempts(
@@ -552,7 +815,16 @@ class TaskService:
                 if fallback_key:
                     ai_key_attempts = [{"label": "env", "key": fallback_key}]
         elif selected_ai_provider == "ollama":
-            ai_base_url = await self._resolve_effective_ollama_base_url(user_id=user_id)
+            ollama_settings = await self._resolve_effective_ollama_settings(user_id=user_id)
+            ai_base_url = str(ollama_settings["base_url"])
+            ai_request_options = {
+                "ollama_profile": ollama_settings.get("profile_name"),
+                "ollama_auth_mode": ollama_settings.get("auth_mode"),
+                "ollama_auth_headers": dict(ollama_settings.get("auth_headers") or {}),
+                "ollama_timeout_seconds": int(ollama_settings["timeout_seconds"]),
+                "ollama_max_retries": int(ollama_settings["max_retries"]),
+                "ollama_retry_backoff_ms": int(ollama_settings["retry_backoff_ms"]),
+            }
 
         ai_api_key = ai_key_attempts[0]["key"] if ai_key_attempts else None
         ai_api_key_fallbacks = [attempt["key"] for attempt in ai_key_attempts[1:]]
@@ -566,6 +838,7 @@ class TaskService:
             ai_base_url,
             ai_api_key_fallbacks,
             ai_key_labels,
+            ai_request_options,
         )
 
     async def _process_review_enabled_analysis(
@@ -592,6 +865,7 @@ class TaskService:
             ai_base_url,
             ai_api_key_fallbacks,
             ai_key_labels,
+            ai_request_options,
         ) = await self._resolve_processing_credentials(
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
@@ -611,6 +885,7 @@ class TaskService:
             ai_key_labels=ai_key_labels,
             ai_routing_mode=resolved_zai_routing_mode,
             ai_model=ai_model,
+            ai_request_options=ai_request_options,
             transcription_options=transcription_options,
             progress_callback=update_progress,
             cancel_check=cancel_check,
@@ -715,6 +990,7 @@ class TaskService:
             ai_base_url,
             ai_api_key_fallbacks,
             ai_key_labels,
+            ai_request_options,
         ) = await self._resolve_processing_credentials(
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
@@ -738,6 +1014,7 @@ class TaskService:
             ai_key_labels=ai_key_labels,
             ai_routing_mode=resolved_zai_routing_mode,
             ai_model=ai_model,
+            ai_request_options=ai_request_options,
             transcription_options=transcription_options,
             subtitle_style=subtitle_style,
             progress_callback=update_progress,
@@ -1243,12 +1520,45 @@ class TaskService:
         saved_ollama_base_url = await self.task_repo.get_user_ollama_base_url(self.db, user_id)
         normalized_saved_ollama_base_url = self._normalize_base_url(saved_ollama_base_url)
         normalized_env_ollama_base_url = self._normalize_base_url(config.ollama_base_url)
-        effective_ollama_base_url = (
-            normalized_saved_ollama_base_url or normalized_env_ollama_base_url or DEFAULT_OLLAMA_BASE_URL
-        )
-        result["has_ollama_server"] = bool(normalized_saved_ollama_base_url)
+        profiles = await self.task_repo.list_user_ollama_profiles(self.db, user_id)
+        default_profile = await self.task_repo.get_user_default_ollama_profile(self.db, user_id)
+        try:
+            effective_ollama_settings = await self._resolve_effective_ollama_settings(user_id=user_id)
+        except ValueError as resolution_error:
+            logger.warning("Failed to resolve effective Ollama settings for user %s: %s", user_id, resolution_error)
+            effective_ollama_settings = {
+                "base_url": normalized_saved_ollama_base_url or normalized_env_ollama_base_url or DEFAULT_OLLAMA_BASE_URL,
+                **(await self._resolve_ollama_request_controls(user_id=user_id)),
+            }
+        raw_user_controls = await self.task_repo.get_user_ollama_request_controls(self.db, user_id)
+        result["ollama_profiles"] = [
+            {
+                "profile_name": str(profile.get("profile_name") or ""),
+                "base_url": str(profile.get("base_url") or ""),
+                "auth_mode": str(profile.get("auth_mode") or "none"),
+                "auth_header_name": profile.get("auth_header_name"),
+                "enabled": bool(profile.get("enabled", True)),
+                "is_default": bool(profile.get("is_default", False)),
+                "has_auth_secret": bool(profile.get("has_auth_secret", False)),
+            }
+            for profile in profiles
+        ]
+        result["default_ollama_profile"] = default_profile
+        result["has_ollama_profiles"] = bool(profiles)
+        result["ollama_auth_modes"] = sorted(SUPPORTED_OLLAMA_AUTH_MODES)
+        result["ollama_request_controls"] = {
+            "timeout_seconds": int(effective_ollama_settings["timeout_seconds"]),
+            "max_retries": int(effective_ollama_settings["max_retries"]),
+            "retry_backoff_ms": int(effective_ollama_settings["retry_backoff_ms"]),
+        }
+        result["ollama_user_request_control_overrides"] = {
+            "timeout_seconds": raw_user_controls.get("timeout_seconds"),
+            "max_retries": raw_user_controls.get("max_retries"),
+            "retry_backoff_ms": raw_user_controls.get("retry_backoff_ms"),
+        }
+        result["has_ollama_server"] = bool(profiles) or bool(normalized_saved_ollama_base_url)
         result["has_env_ollama"] = bool(normalized_env_ollama_base_url)
-        result["ollama_server_url"] = effective_ollama_base_url
+        result["ollama_server_url"] = str(effective_ollama_settings["base_url"])
         return result
 
     async def save_user_ai_key(self, user_id: str, provider: str, api_key: str) -> None:
@@ -1272,12 +1582,249 @@ class TaskService:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
         normalized_base_url = self._normalize_ollama_base_url(base_url)
-        return await self.task_repo.set_user_ollama_base_url(self.db, user_id, normalized_base_url)
+        existing_default_profile = await self.task_repo.get_user_ollama_profile(
+            self.db,
+            user_id,
+            DEFAULT_OLLAMA_PROFILE_NAME,
+            include_secret=True,
+        )
+        saved_profile = await self.task_repo.set_user_ollama_profile(
+            self.db,
+            user_id=user_id,
+            profile_name=DEFAULT_OLLAMA_PROFILE_NAME,
+            base_url=normalized_base_url,
+            auth_mode=(
+                str(existing_default_profile.get("auth_mode") or "none")
+                if existing_default_profile
+                else "none"
+            ),
+            auth_header_name=(
+                existing_default_profile.get("auth_header_name")
+                if existing_default_profile
+                else None
+            ),
+            auth_secret_encrypted=None,
+            replace_auth_secret=False,
+            enabled=True,
+            set_as_default=True,
+        )
+        return str(saved_profile.get("base_url") or normalized_base_url)
 
     async def clear_user_ollama_base_url(self, user_id: str) -> None:
         if not await self.task_repo.user_exists(self.db, user_id):
             raise ValueError(f"User {user_id} not found")
+        default_profile = await self.task_repo.get_user_default_ollama_profile(self.db, user_id)
+        if default_profile:
+            deleted = await self.task_repo.delete_user_ollama_profile(self.db, user_id, default_profile)
+            if deleted:
+                return
         await self.task_repo.clear_user_ollama_base_url(self.db, user_id)
+
+    async def get_user_ollama_profiles(self, user_id: str) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        profiles = await self.task_repo.list_user_ollama_profiles(self.db, user_id)
+        default_profile = await self.task_repo.get_user_default_ollama_profile(self.db, user_id)
+        controls = await self._resolve_ollama_request_controls(user_id=user_id)
+        raw_controls = await self.task_repo.get_user_ollama_request_controls(self.db, user_id)
+        return {
+            "profiles": [
+                {
+                    "profile_name": str(profile.get("profile_name") or ""),
+                    "base_url": str(profile.get("base_url") or ""),
+                    "auth_mode": str(profile.get("auth_mode") or "none"),
+                    "auth_header_name": profile.get("auth_header_name"),
+                    "enabled": bool(profile.get("enabled", True)),
+                    "is_default": bool(profile.get("is_default", False)),
+                    "has_auth_secret": bool(profile.get("has_auth_secret", False)),
+                }
+                for profile in profiles
+            ],
+            "default_profile": default_profile,
+            "auth_modes": sorted(SUPPORTED_OLLAMA_AUTH_MODES),
+            "request_controls": controls,
+            "user_request_control_overrides": {
+                "timeout_seconds": raw_controls.get("timeout_seconds"),
+                "max_retries": raw_controls.get("max_retries"),
+                "retry_backoff_ms": raw_controls.get("retry_backoff_ms"),
+            },
+        }
+
+    async def save_user_ollama_profile(
+        self,
+        user_id: str,
+        *,
+        profile_name: str,
+        base_url: str,
+        auth_mode: str = "none",
+        auth_header_name: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        clear_auth_token: bool = False,
+        enabled: bool = True,
+        set_as_default: bool = False,
+    ) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        normalized_profile_name = self._normalize_ollama_profile_name(profile_name)
+        if not normalized_profile_name:
+            raise ValueError("profile_name is required")
+        normalized_base_url = self._normalize_ollama_base_url(base_url)
+        normalized_auth_mode = self._normalize_ollama_auth_mode(auth_mode)
+        normalized_auth_header_name = self._normalize_ollama_auth_header_name(auth_header_name)
+        existing_profile = await self.task_repo.get_user_ollama_profile(
+            self.db,
+            user_id,
+            normalized_profile_name,
+            include_secret=False,
+        )
+
+        replace_auth_secret = bool(clear_auth_token)
+        encrypted_auth_secret: Optional[str] = None
+        normalized_token = (auth_token or "").strip()
+
+        if normalized_auth_mode == "none":
+            normalized_auth_header_name = None
+            replace_auth_secret = True
+        elif normalized_auth_mode == "bearer":
+            normalized_auth_header_name = None
+            if normalized_token:
+                replace_auth_secret = True
+        elif normalized_auth_mode == "custom_header":
+            if not normalized_auth_header_name:
+                raise ValueError("auth_header_name is required for custom_header auth mode")
+            if normalized_token:
+                replace_auth_secret = True
+
+        if (
+            normalized_auth_mode != "none"
+            and not normalized_token
+            and not bool((existing_profile or {}).get("has_auth_secret"))
+            and not replace_auth_secret
+        ):
+            raise ValueError("auth_token is required when enabling authenticated Ollama profile")
+
+        if normalized_token:
+            encrypted_auth_secret = self.secret_service.encrypt(normalized_token)
+
+        saved_profile = await self.task_repo.set_user_ollama_profile(
+            self.db,
+            user_id=user_id,
+            profile_name=normalized_profile_name,
+            base_url=normalized_base_url,
+            auth_mode=normalized_auth_mode,
+            auth_header_name=normalized_auth_header_name,
+            auth_secret_encrypted=encrypted_auth_secret,
+            replace_auth_secret=replace_auth_secret,
+            enabled=bool(enabled),
+            set_as_default=bool(set_as_default),
+        )
+        return {
+            "profile_name": str(saved_profile.get("profile_name") or normalized_profile_name),
+            "base_url": str(saved_profile.get("base_url") or normalized_base_url),
+            "auth_mode": str(saved_profile.get("auth_mode") or normalized_auth_mode),
+            "auth_header_name": saved_profile.get("auth_header_name"),
+            "enabled": bool(saved_profile.get("enabled", True)),
+            "is_default": bool(saved_profile.get("is_default", False)),
+            "has_auth_secret": bool(saved_profile.get("has_auth_secret", False)),
+        }
+
+    async def delete_user_ollama_profile(self, user_id: str, profile_name: str) -> bool:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        normalized_profile_name = self._normalize_ollama_profile_name(profile_name)
+        if not normalized_profile_name:
+            raise ValueError("profile_name is required")
+        return await self.task_repo.delete_user_ollama_profile(self.db, user_id, normalized_profile_name)
+
+    async def set_user_default_ollama_profile(self, user_id: str, profile_name: str) -> str:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        normalized_profile_name = self._normalize_ollama_profile_name(profile_name)
+        if not normalized_profile_name:
+            raise ValueError("profile_name is required")
+        return await self.task_repo.set_user_default_ollama_profile(self.db, user_id, normalized_profile_name)
+
+    async def set_user_ollama_request_controls(
+        self,
+        user_id: str,
+        *,
+        timeout_seconds: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, int]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+        normalized_timeout = self._normalize_ollama_request_control(
+            timeout_seconds,
+            field_name="timeout_seconds",
+            minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+            maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+        )
+        normalized_retries = self._normalize_ollama_request_control(
+            max_retries,
+            field_name="max_retries",
+            minimum=MIN_OLLAMA_MAX_RETRIES,
+            maximum=MAX_OLLAMA_MAX_RETRIES,
+        )
+        normalized_backoff = self._normalize_ollama_request_control(
+            retry_backoff_ms,
+            field_name="retry_backoff_ms",
+            minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+            maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+        )
+        await self.task_repo.set_user_ollama_request_controls(
+            self.db,
+            user_id,
+            timeout_seconds=normalized_timeout,
+            max_retries=normalized_retries,
+            retry_backoff_ms=normalized_backoff,
+        )
+        return await self._resolve_ollama_request_controls(user_id=user_id)
+
+    async def test_ollama_connection(
+        self,
+        user_id: str,
+        *,
+        profile_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        auth_mode: Optional[str] = None,
+        auth_header_name: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+
+        resolved = await self._resolve_effective_ollama_settings(
+            user_id=user_id,
+            requested_profile=profile_name,
+            requested_base_url=base_url,
+            requested_timeout_seconds=timeout_seconds,
+            requested_max_retries=max_retries,
+            requested_retry_backoff_ms=retry_backoff_ms,
+        )
+        auth_headers = dict(resolved.get("auth_headers") or {})
+        if auth_mode is not None or auth_header_name is not None or auth_token is not None:
+            normalized_auth_mode = self._normalize_ollama_auth_mode(auth_mode or "none")
+            normalized_auth_header_name = self._normalize_ollama_auth_header_name(auth_header_name)
+            auth_headers = self._resolve_ollama_auth_headers(
+                auth_mode=normalized_auth_mode,
+                auth_header_name=normalized_auth_header_name,
+                auth_secret_value=(auth_token or "").strip(),
+            )
+
+        result = await asyncio.to_thread(
+            run_ollama_connection_test,
+            str(resolved["base_url"]),
+            auth_headers,
+            int(resolved["timeout_seconds"]),
+            int(resolved["max_retries"]),
+            int(resolved["retry_backoff_ms"]),
+        )
+        result["ollama_profile"] = resolved.get("profile_name")
+        return result
 
     async def get_effective_ollama_base_url(
         self,
@@ -1297,6 +1844,10 @@ class TaskService:
         provider: str,
         zai_routing_mode: Optional[str] = None,
         ollama_base_url: Optional[str] = None,
+        ollama_profile: Optional[str] = None,
+        ollama_timeout_seconds: Optional[int] = None,
+        ollama_max_retries: Optional[int] = None,
+        ollama_retry_backoff_ms: Optional[int] = None,
     ) -> Dict[str, Any]:
         normalized_provider = (provider or "").strip().lower()
         if normalized_provider not in SUPPORTED_AI_PROVIDERS:
@@ -1307,15 +1858,24 @@ class TaskService:
         resolved_routing_mode: Optional[str] = None
         resolved_ollama_base_url: Optional[str] = None
         if normalized_provider == "ollama":
-            resolved_ollama_base_url = await self._resolve_effective_ollama_base_url(
+            resolved_ollama = await self._resolve_effective_ollama_settings(
                 user_id=user_id,
                 requested_base_url=ollama_base_url,
+                requested_profile=ollama_profile,
+                requested_timeout_seconds=ollama_timeout_seconds,
+                requested_max_retries=ollama_max_retries,
+                requested_retry_backoff_ms=ollama_retry_backoff_ms,
             )
+            resolved_ollama_base_url = str(resolved_ollama["base_url"])
             models = await asyncio.to_thread(
                 list_models_for_provider,
                 normalized_provider,
                 "",
                 resolved_ollama_base_url,
+                dict(resolved_ollama.get("auth_headers") or {}),
+                int(resolved_ollama["timeout_seconds"]),
+                int(resolved_ollama["max_retries"]),
+                int(resolved_ollama["retry_backoff_ms"]),
             )
             default_model = DEFAULT_AI_MODELS[normalized_provider]
             return {
@@ -1325,6 +1885,12 @@ class TaskService:
                 "count": len(models),
                 "zai_routing_mode": None,
                 "ollama_server_url": resolved_ollama_base_url,
+                "ollama_profile": resolved_ollama.get("profile_name"),
+                "ollama_request_controls": {
+                    "timeout_seconds": int(resolved_ollama["timeout_seconds"]),
+                    "max_retries": int(resolved_ollama["max_retries"]),
+                    "retry_backoff_ms": int(resolved_ollama["retry_backoff_ms"]),
+                },
             }
 
         key_attempts, resolved_routing_mode = await self.get_effective_user_ai_api_key_attempts(

@@ -9,6 +9,7 @@ from typing import Optional, Any, Dict, List
 import json
 import logging
 import mimetypes
+import re
 from uuid import UUID
 
 from ...database import get_db
@@ -34,6 +35,14 @@ SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 AI_KEY_REQUIRED_PROVIDERS = {"openai", "google", "anthropic", "zai"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
+SUPPORTED_OLLAMA_AUTH_MODES = {"none", "bearer", "custom_header"}
+OLLAMA_PROFILE_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$")
+MIN_OLLAMA_TIMEOUT_SECONDS = 1
+MAX_OLLAMA_TIMEOUT_SECONDS = 600
+MIN_OLLAMA_MAX_RETRIES = 0
+MAX_OLLAMA_MAX_RETRIES = 10
+MIN_OLLAMA_RETRY_BACKOFF_MS = 0
+MAX_OLLAMA_RETRY_BACKOFF_MS = 30000
 MIN_WHISPER_CHUNK_DURATION_SECONDS = 300
 MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600
 MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0
@@ -223,6 +232,56 @@ def _resolve_zai_profile(raw: object) -> str:
     return profile
 
 
+def _resolve_ollama_profile_name(raw: object) -> str:
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="profile must be a string")
+    profile = raw.strip().lower()
+    if not profile:
+        raise HTTPException(status_code=400, detail="profile is required")
+    if not OLLAMA_PROFILE_NAME_RE.match(profile):
+        raise HTTPException(
+            status_code=400,
+            detail="profile must match [a-zA-Z0-9][a-zA-Z0-9._-]{0,99}",
+        )
+    return profile
+
+
+def _resolve_ollama_auth_mode(raw: object, *, required: bool = False) -> Optional[str]:
+    if raw is None:
+        if required:
+            raise HTTPException(status_code=400, detail="auth_mode is required")
+        return None
+    if not isinstance(raw, str):
+        raise HTTPException(status_code=400, detail="auth_mode must be a string")
+    auth_mode = raw.strip().lower()
+    if auth_mode not in SUPPORTED_OLLAMA_AUTH_MODES:
+        raise HTTPException(status_code=400, detail=f"Unsupported Ollama auth mode: {auth_mode}")
+    return auth_mode
+
+
+def _resolve_optional_int(
+    raw: object,
+    *,
+    field_name: str,
+    minimum: int,
+    maximum: int,
+) -> Optional[int]:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be between {minimum} and {maximum}",
+        )
+    return value
+
+
 def _require_admin_access(request: Request) -> None:
     """
     Admin guard for destructive task-management endpoints.
@@ -397,6 +456,12 @@ async def get_ai_settings(request: Request, db: AsyncSession = Depends(get_db)):
             "has_env_zai": bool((config.zai_api_key or "").strip()),
             "has_env_ollama": bool(settings.get("has_env_ollama")),
             "ollama_server_url": str(settings.get("ollama_server_url") or config.ollama_base_url or ""),
+            "has_ollama_profiles": bool(settings.get("has_ollama_profiles")),
+            "ollama_profiles": settings.get("ollama_profiles") or [],
+            "default_ollama_profile": settings.get("default_ollama_profile"),
+            "ollama_auth_modes": settings.get("ollama_auth_modes") or sorted(SUPPORTED_OLLAMA_AUTH_MODES),
+            "ollama_request_controls": settings.get("ollama_request_controls") or {},
+            "ollama_user_request_control_overrides": settings.get("ollama_user_request_control_overrides") or {},
         }
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -495,6 +560,236 @@ async def delete_ollama_server(
         raise HTTPException(status_code=500, detail=f"Error deleting Ollama server URL: {str(e)}")
 
 
+@router.get("/ai-settings/ollama/profiles")
+async def list_ollama_profiles(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """List per-user Ollama server profiles."""
+    user_id = _require_user_id(request)
+    try:
+        task_service = TaskService(db)
+        return await task_service.get_user_ollama_profiles(user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error listing Ollama profiles: {e}")
+        raise HTTPException(status_code=500, detail=f"Error listing Ollama profiles: {str(e)}")
+
+
+@router.put("/ai-settings/ollama/profiles/{profile}")
+async def save_ollama_profile(
+    profile: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or update a per-user Ollama server profile."""
+    user_id = _require_user_id(request)
+    normalized_profile = _resolve_ollama_profile_name(profile)
+    data = await _read_optional_json_object(request)
+    base_url = str(data.get("base_url") or data.get("server_url") or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=400, detail="base_url is required")
+
+    auth_mode = _resolve_ollama_auth_mode(data.get("auth_mode")) or "none"
+    auth_header_name = (
+        str(data.get("auth_header_name")).strip()
+        if data.get("auth_header_name") is not None
+        else None
+    )
+    auth_token = (
+        str(data.get("auth_token")).strip()
+        if data.get("auth_token") is not None
+        else None
+    )
+    clear_auth_token = bool(data.get("clear_auth_token", False))
+    enabled = bool(data.get("enabled", True))
+    set_as_default = bool(data.get("set_as_default", False))
+
+    try:
+        task_service = TaskService(db)
+        saved_profile = await task_service.save_user_ollama_profile(
+            user_id,
+            profile_name=normalized_profile,
+            base_url=base_url,
+            auth_mode=auth_mode,
+            auth_header_name=auth_header_name,
+            auth_token=auth_token,
+            clear_auth_token=clear_auth_token,
+            enabled=enabled,
+            set_as_default=set_as_default,
+        )
+        return {
+            "message": "ollama profile saved",
+            "profile": saved_profile,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving Ollama profile {normalized_profile}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving Ollama profile: {str(e)}")
+
+
+@router.delete("/ai-settings/ollama/profiles/{profile}")
+async def delete_ollama_profile(
+    profile: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a per-user Ollama server profile."""
+    user_id = _require_user_id(request)
+    normalized_profile = _resolve_ollama_profile_name(profile)
+    try:
+        task_service = TaskService(db)
+        deleted = await task_service.delete_user_ollama_profile(user_id, normalized_profile)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Ollama profile not found: {normalized_profile}")
+        return {
+            "message": "ollama profile removed",
+            "profile_name": normalized_profile,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting Ollama profile {normalized_profile}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting Ollama profile: {str(e)}")
+
+
+@router.put("/ai-settings/ollama/default-profile")
+async def set_ollama_default_profile(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set the default per-user Ollama profile."""
+    user_id = _require_user_id(request)
+    data = await _read_optional_json_object(request)
+    normalized_profile = _resolve_ollama_profile_name(data.get("profile"))
+    try:
+        task_service = TaskService(db)
+        saved_profile = await task_service.set_user_default_ollama_profile(user_id, normalized_profile)
+        return {
+            "message": "ollama default profile saved",
+            "default_profile": saved_profile,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error setting Ollama default profile {normalized_profile}: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving Ollama default profile: {str(e)}")
+
+
+@router.put("/ai-settings/ollama/request-controls")
+async def save_ollama_request_controls(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save user-level Ollama timeout/retry controls."""
+    user_id = _require_user_id(request)
+    data = await _read_optional_json_object(request)
+    timeout_seconds = _resolve_optional_int(
+        data.get("timeout_seconds"),
+        field_name="timeout_seconds",
+        minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+        maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+    )
+    max_retries = _resolve_optional_int(
+        data.get("max_retries"),
+        field_name="max_retries",
+        minimum=MIN_OLLAMA_MAX_RETRIES,
+        maximum=MAX_OLLAMA_MAX_RETRIES,
+    )
+    retry_backoff_ms = _resolve_optional_int(
+        data.get("retry_backoff_ms"),
+        field_name="retry_backoff_ms",
+        minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+        maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+    )
+    if timeout_seconds is None and max_retries is None and retry_backoff_ms is None:
+        raise HTTPException(status_code=400, detail="At least one request control is required")
+
+    try:
+        task_service = TaskService(db)
+        resolved = await task_service.set_user_ollama_request_controls(
+            user_id,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+        )
+        return {"message": "ollama request controls saved", "request_controls": resolved}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error saving Ollama request controls: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving Ollama request controls: {str(e)}")
+
+
+@router.post("/ai-settings/ollama/test-connection")
+async def test_ollama_connection(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Test connectivity to the resolved Ollama profile/base URL."""
+    user_id = _require_user_id(request)
+    data = await _read_optional_json_object(request)
+    profile = (
+        _resolve_ollama_profile_name(data.get("profile"))
+        if data.get("profile") is not None
+        else None
+    )
+    base_url = str(data.get("base_url") or data.get("server_url") or "").strip() or None
+    auth_mode = _resolve_ollama_auth_mode(data.get("auth_mode")) if data.get("auth_mode") is not None else None
+    auth_header_name = (
+        str(data.get("auth_header_name")).strip()
+        if data.get("auth_header_name") is not None
+        else None
+    )
+    auth_token = (
+        str(data.get("auth_token")).strip()
+        if data.get("auth_token") is not None
+        else None
+    )
+    timeout_seconds = _resolve_optional_int(
+        data.get("timeout_seconds"),
+        field_name="timeout_seconds",
+        minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+        maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+    )
+    max_retries = _resolve_optional_int(
+        data.get("max_retries"),
+        field_name="max_retries",
+        minimum=MIN_OLLAMA_MAX_RETRIES,
+        maximum=MAX_OLLAMA_MAX_RETRIES,
+    )
+    retry_backoff_ms = _resolve_optional_int(
+        data.get("retry_backoff_ms"),
+        field_name="retry_backoff_ms",
+        minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+        maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+    )
+
+    try:
+        task_service = TaskService(db)
+        result = await task_service.test_ollama_connection(
+            user_id,
+            profile_name=profile,
+            base_url=base_url,
+            auth_mode=auth_mode,
+            auth_header_name=auth_header_name,
+            auth_token=auth_token,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error testing Ollama connection: {e}")
+        raise HTTPException(status_code=500, detail=f"Error testing Ollama connection: {str(e)}")
+
+
 @router.put("/ai-settings/zai/profiles/{profile}/key")
 async def save_zai_profile_key(
     profile: str,
@@ -591,6 +886,41 @@ async def list_ai_provider_models(
         if provider == "ollama"
         else None
     )
+    ollama_profile = (
+        _resolve_ollama_profile_name(request.query_params.get("profile"))
+        if provider == "ollama" and request.query_params.get("profile") is not None
+        else None
+    )
+    ollama_timeout_seconds = (
+        _resolve_optional_int(
+            request.query_params.get("timeout_seconds"),
+            field_name="timeout_seconds",
+            minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+            maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+        )
+        if provider == "ollama"
+        else None
+    )
+    ollama_max_retries = (
+        _resolve_optional_int(
+            request.query_params.get("max_retries"),
+            field_name="max_retries",
+            minimum=MIN_OLLAMA_MAX_RETRIES,
+            maximum=MAX_OLLAMA_MAX_RETRIES,
+        )
+        if provider == "ollama"
+        else None
+    )
+    ollama_retry_backoff_ms = (
+        _resolve_optional_int(
+            request.query_params.get("retry_backoff_ms"),
+            field_name="retry_backoff_ms",
+            minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+            maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+        )
+        if provider == "ollama"
+        else None
+    )
 
     try:
         task_service = TaskService(db)
@@ -599,6 +929,10 @@ async def list_ai_provider_models(
             provider,
             zai_routing_mode=zai_routing_mode,
             ollama_base_url=ollama_server_url,
+            ollama_profile=ollama_profile,
+            ollama_timeout_seconds=ollama_timeout_seconds,
+            ollama_max_retries=ollama_max_retries,
+            ollama_retry_backoff_ms=ollama_retry_backoff_ms,
         )
         return result
     except ModelCatalogError as e:

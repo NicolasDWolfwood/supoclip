@@ -46,6 +46,10 @@ OPENAI_API_KEY=your_openai_key_here
 # or: ANTHROPIC_API_KEY=...
 # or: ZAI_API_KEY=...
 # or local/self-hosted: OLLAMA_BASE_URL=http://host.docker.internal:11434
+# Optional Ollama network fallback defaults (user AI Settings can override):
+# OLLAMA_TIMEOUT_SECONDS=15
+# OLLAMA_MAX_RETRIES=2
+# OLLAMA_RETRY_BACKOFF_MS=400
 
 # Configure which AI model to use
 LLM=openai:gpt-5-mini
@@ -161,6 +165,9 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `ANTHROPIC_API_KEY` | - | For Claude models |
 | `ZAI_API_KEY` | - | For z.ai GLM models (backend calls z.ai Coding API endpoint) |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` (Docker) / `http://localhost:11434` (local) | Ollama server base URL used when provider is `ollama` |
+| `OLLAMA_TIMEOUT_SECONDS` | `15` | Env fallback timeout for Ollama requests |
+| `OLLAMA_MAX_RETRIES` | `2` | Env fallback retry count for Ollama requests |
+| `OLLAMA_RETRY_BACKOFF_MS` | `400` | Env fallback retry backoff (ms) for Ollama requests |
 
 Note: with `TRANSCRIPTION_PROVIDER=local`, the first transcription downloads the Whisper model (size depends on `WHISPER_MODEL_SIZE`) into `WHISPER_CACHE_HOST_DIR` on your host filesystem.
 
@@ -204,7 +211,7 @@ In Settings, z.ai supports two user key profiles (`subscription`, `metered`) and
 LLM=ollama:llama3.2
 ```
 Runtime note: Ollama uses `OLLAMA_BASE_URL` (for Docker: typically `http://host.docker.internal:11434`).
-In Settings, set an Ollama server URL per user and refresh models directly from that server.
+In Settings, you can save multiple Ollama profiles per user, add bearer/custom-header auth, tune timeout/retries, and run Test Connection before model refresh/runtime usage.
 
 ## Troubleshooting
 

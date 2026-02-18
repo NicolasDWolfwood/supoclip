@@ -24,6 +24,9 @@ class Config:
         self.zai_api_key = os.getenv("ZAI_API_KEY")
         raw_ollama_base_url = os.getenv("OLLAMA_BASE_URL")
         self.ollama_base_url = raw_ollama_base_url.strip() if isinstance(raw_ollama_base_url, str) and raw_ollama_base_url.strip() else None
+        self.ollama_timeout_seconds = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "15"))
+        self.ollama_max_retries = int(os.getenv("OLLAMA_MAX_RETRIES", "2"))
+        self.ollama_retry_backoff_ms = int(os.getenv("OLLAMA_RETRY_BACKOFF_MS", "400"))
         self.assembly_ai_api_key = os.getenv("ASSEMBLY_AI_API_KEY")
         self.admin_api_key = os.getenv("ADMIN_API_KEY")
         self.secret_encryption_key = os.getenv("SECRET_ENCRYPTION_KEY")
