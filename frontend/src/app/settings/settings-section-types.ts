@@ -79,7 +79,7 @@ export const DEFAULT_AI_MODELS: Record<AiProvider, string> = {
   google: "gemini-2.5-pro",
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
-  ollama: "llama3.2",
+  ollama: "gpt-oss:latest",
 };
 
 export const FALLBACK_AI_MODEL_OPTIONS: Record<AiProvider, string[]> = {
@@ -87,7 +87,7 @@ export const FALLBACK_AI_MODEL_OPTIONS: Record<AiProvider, string[]> = {
   google: ["gemini-2.5-pro", "gemini-2.5-flash"],
   anthropic: ["claude-4-sonnet", "claude-3-5-haiku"],
   zai: ["glm-5"],
-  ollama: ["llama3.2", "qwen2.5:7b", "mistral"],
+  ollama: ["gpt-oss:latest", "qwen3:14b", "deepseek-r1:14b", "qwen3-vl:8b", "ministral-3:14b"],
 };
 
 export const SETTINGS_SECTION_META: Record<SettingsSection, { label: string; description: string }> = {

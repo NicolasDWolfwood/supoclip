@@ -13,7 +13,7 @@ import re
 from uuid import UUID
 
 from ...database import get_db
-from ...services.task_service import TaskService
+from ...services.task_service import DEFAULT_AI_MODELS, TaskService
 from ...services.ai_model_catalog_service import ModelCatalogError
 from ...workers.job_queue import JobQueue
 from ...workers.progress import ProgressTracker
@@ -43,6 +43,8 @@ MIN_OLLAMA_MAX_RETRIES = 0
 MAX_OLLAMA_MAX_RETRIES = 10
 MIN_OLLAMA_RETRY_BACKOFF_MS = 0
 MAX_OLLAMA_RETRY_BACKOFF_MS = 30000
+MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
+MAX_OLLAMA_VIABILITY_ATTEMPTS = 3
 MIN_WHISPER_CHUNK_DURATION_SECONDS = 300
 MAX_WHISPER_CHUNK_DURATION_SECONDS = 3600
 MIN_WHISPER_CHUNK_OVERLAP_SECONDS = 0
@@ -53,6 +55,10 @@ DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_select
 DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected"}
 SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
 MAX_SUBTITLE_STYLE_BACKFILL_LIMIT = 1000
+OLLAMA_CREATE_TASK_PREFLIGHT_TRANSCRIPT = """[00:00 - 00:12] A clear opening promise makes people keep watching.
+[00:12 - 00:24] Give one concrete example quickly so the claim feels real.
+[00:24 - 00:38] Keep each clip focused on a single idea with one practical takeaway.
+[00:38 - 00:52] End with one action viewers can apply immediately."""
 
 
 def _coerce_bool(value: object, default: bool = False) -> bool:
@@ -790,6 +796,91 @@ async def test_ollama_connection(
         raise HTTPException(status_code=500, detail=f"Error testing Ollama connection: {str(e)}")
 
 
+@router.post("/ai-settings/ollama/test-model-viability")
+async def test_ollama_model_viability(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Test whether an Ollama model is viable for structured clip analysis."""
+    user_id = _require_user_id(request)
+    data = await _read_optional_json_object(request)
+
+    model_raw = data.get("model")
+    if not isinstance(model_raw, str) or not model_raw.strip():
+        raise HTTPException(status_code=400, detail="model is required")
+    model = model_raw.strip()
+
+    profile = (
+        _resolve_ollama_profile_name(data.get("profile"))
+        if data.get("profile") is not None
+        else None
+    )
+    base_url = str(data.get("base_url") or data.get("server_url") or "").strip() or None
+    auth_mode = _resolve_ollama_auth_mode(data.get("auth_mode")) if data.get("auth_mode") is not None else None
+    auth_header_name = (
+        str(data.get("auth_header_name")).strip()
+        if data.get("auth_header_name") is not None
+        else None
+    )
+    auth_token = (
+        str(data.get("auth_token")).strip()
+        if data.get("auth_token") is not None
+        else None
+    )
+    timeout_seconds = _resolve_optional_int(
+        data.get("timeout_seconds"),
+        field_name="timeout_seconds",
+        minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+        maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+    )
+    max_retries = _resolve_optional_int(
+        data.get("max_retries"),
+        field_name="max_retries",
+        minimum=MIN_OLLAMA_MAX_RETRIES,
+        maximum=MAX_OLLAMA_MAX_RETRIES,
+    )
+    retry_backoff_ms = _resolve_optional_int(
+        data.get("retry_backoff_ms"),
+        field_name="retry_backoff_ms",
+        minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+        maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+    )
+    attempts = _resolve_optional_int(
+        data.get("attempts"),
+        field_name="attempts",
+        minimum=MIN_OLLAMA_VIABILITY_ATTEMPTS,
+        maximum=MAX_OLLAMA_VIABILITY_ATTEMPTS,
+    )
+
+    transcript_sample: Optional[str] = None
+    if data.get("transcript_sample") is not None:
+        if not isinstance(data.get("transcript_sample"), str):
+            raise HTTPException(status_code=400, detail="transcript_sample must be a string")
+        transcript_sample = str(data.get("transcript_sample")).strip() or None
+
+    try:
+        task_service = TaskService(db)
+        return await task_service.test_ollama_model_viability(
+            user_id=user_id,
+            model=model,
+            attempts=attempts or 2,
+            transcript_sample=transcript_sample,
+            profile_name=profile,
+            base_url=base_url,
+            auth_mode=auth_mode,
+            auth_header_name=auth_header_name,
+            auth_token=auth_token,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error testing Ollama model viability: {e}")
+        raise HTTPException(status_code=500, detail=f"Error testing Ollama model viability: {str(e)}")
+
+
 @router.put("/ai-settings/zai/profiles/{profile}/key")
 async def save_zai_profile_key(
     profile: str,
@@ -1047,6 +1138,23 @@ async def create_task(request: Request, db: AsyncSession = Depends(get_db)):
                 )
         elif ai_provider == "ollama":
             await task_service.get_effective_ollama_base_url(user_id)
+            resolved_ollama_model = ai_model or DEFAULT_AI_MODELS["ollama"]
+            viability = await task_service.test_ollama_model_viability(
+                user_id=user_id,
+                model=resolved_ollama_model,
+                attempts=1,
+                transcript_sample=OLLAMA_CREATE_TASK_PREFLIGHT_TRANSCRIPT,
+            )
+            if not bool(viability.get("viable")):
+                failure_reason = str(viability.get("reason") or "model failed viability check")
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Ollama model '{resolved_ollama_model}' failed preflight viability check: {failure_reason}. "
+                        "Run /tasks/ai-settings/ollama/test-model-viability in Settings to inspect and switch to a viable model."
+                    ),
+                )
+            ai_model = resolved_ollama_model
 
         task_id = await task_service.create_task_with_source(
             user_id=user_id,

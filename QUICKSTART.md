@@ -208,7 +208,7 @@ In Settings, z.ai supports two user key profiles (`subscription`, `metered`) and
 
 ### Ollama
 ```bash
-LLM=ollama:llama3.2
+LLM=ollama:gpt-oss:latest
 ```
 Runtime note: Ollama uses `OLLAMA_BASE_URL` (for Docker: typically `http://host.docker.internal:11434`).
 In Settings, you can save multiple Ollama profiles per user, add bearer/custom-header auth, tune timeout/retries, and run Test Connection before model refresh/runtime usage.

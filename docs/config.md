@@ -88,7 +88,7 @@ Examples:
 - `anthropic:claude-4-sonnet`
 - `google:gemini-2.5-pro`
 - `zai:glm-5`
-- `ollama:llama3.2`
+- `ollama:gpt-oss:latest`
 
 ## z.ai Key Routing (UI/DB)
 
@@ -117,6 +117,8 @@ Examples:
   2. user profile + user request-control defaults
   3. env fallback (`OLLAMA_BASE_URL`, `OLLAMA_TIMEOUT_SECONDS`, `OLLAMA_MAX_RETRIES`, `OLLAMA_RETRY_BACKOFF_MS`)
   4. hard defaults (`http://localhost:11434`, `15s`, `2`, `400ms`)
+- Runtime applies model-aware Ollama request presets (timeout/retry/backoff plus optional `think`/temperature tuning) for newer/slower models.
+- Task creation with `ai_provider=ollama` runs a 1-attempt structured-output viability preflight and blocks queueing when the selected model is non-viable.
 - Model discovery and connection tests call Ollama `GET /api/tags`; connection test also attempts `GET /api/version`.
 
 ## Entrypoint Alignment

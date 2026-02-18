@@ -7,7 +7,7 @@ import asyncio
 import logging
 import re
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, NativeOutput
 from pydantic import BaseModel, Field
 
 from .config import Config
@@ -20,10 +20,14 @@ DEFAULT_AI_MODELS = {
     "google": "gemini-2.5-pro",
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
-    "ollama": "llama3.2",
+    "ollama": "gpt-oss:latest",
 }
 ZAI_OPENAI_BASE_URL = "https://api.z.ai/api/coding/paas/v4"
 DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_NATIVE_OUTPUT_TEMPLATE = (
+    "Return only valid JSON that matches this schema exactly. "
+    "Do not include markdown code fences or any extra commentary.\n\n{schema}"
+)
 ANALYSIS_SINGLE_PASS_CHAR_THRESHOLD = 24_000
 ANALYSIS_SINGLE_PASS_LINE_THRESHOLD = 180
 ANALYSIS_CHUNK_MAX_CHARS = 16_000
@@ -142,6 +146,32 @@ def _resolve_ollama_openai_base_url(value: Optional[str]) -> str:
     if resolved_base.endswith("/v1"):
         return resolved_base
     return f"{resolved_base}/v1"
+
+
+def _normalize_ollama_think(value: Any) -> Optional[Any]:
+    if isinstance(value, bool):
+        return value
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"false", "0", "no", "off"}:
+        return False
+    if raw in {"true", "1", "yes", "on"}:
+        return True
+    if raw in {"low", "medium", "high"}:
+        return raw
+    return None
+
+
+def _default_ollama_think_for_model(model_name: str) -> Optional[Any]:
+    normalized_model = str(model_name or "").strip().lower()
+    if not normalized_model:
+        return None
+    if "qwen3" in normalized_model or "deepseek-r1" in normalized_model:
+        return False
+    if normalized_model.startswith("gpt-oss"):
+        return "low"
+    return None
 
 
 def _parse_timestamp_to_seconds(raw_timestamp: str) -> Optional[float]:
@@ -700,6 +730,8 @@ def _build_ai_agent(
 
     selected_model = _resolve_ai_model(selected_provider, ai_model)
     resolved_key = (ai_api_key or "").strip()
+    agent_output_type: Any = output_type
+    agent_model_settings: Optional[Dict[str, Any]] = None
 
     if selected_provider == "openai":
         from pydantic_ai.models.openai import OpenAIModel
@@ -735,6 +767,8 @@ def _build_ai_agent(
                     auth_headers[header_key] = header_value
         timeout_override = request_options.get("ollama_timeout_seconds")
         max_retries_override = request_options.get("ollama_max_retries")
+        temperature_override = request_options.get("ollama_temperature")
+        think_override = _normalize_ollama_think(request_options.get("ollama_think"))
 
         timeout_value: float = 15.0
         if timeout_override is not None:
@@ -752,6 +786,14 @@ def _build_ai_agent(
                 max_retries_value = 2
         max_retries_value = max(0, min(10, max_retries_value))
 
+        temperature_value: float = 0.0
+        if temperature_override is not None:
+            try:
+                temperature_value = float(temperature_override)
+            except (TypeError, ValueError):
+                temperature_value = 0.0
+        temperature_value = max(0.0, min(2.0, temperature_value))
+
         openai_client = AsyncOpenAI(
             api_key=resolved_key or "ollama",
             base_url=_resolve_ollama_openai_base_url(ai_base_url),
@@ -763,6 +805,22 @@ def _build_ai_agent(
             openai_client=openai_client,
         )
         model = OpenAIModel(selected_model, provider=provider)
+        # Ollama reliability improves when we force native JSON schema mode and deterministic decoding.
+        agent_output_type = NativeOutput(
+            output_type,
+            strict=False,
+            template=OLLAMA_NATIVE_OUTPUT_TEMPLATE,
+        )
+        think_value = (
+            think_override
+            if think_override is not None
+            else _default_ollama_think_for_model(selected_model)
+        )
+        agent_model_settings = {
+            "temperature": temperature_value,
+        }
+        if think_value is not None:
+            agent_model_settings["extra_body"] = {"think": think_value}
     elif selected_provider == "google":
         from pydantic_ai.models.google import GoogleModel
         from pydantic_ai.providers.google_gla import GoogleGLAProvider
@@ -785,8 +843,9 @@ def _build_ai_agent(
     return (
         Agent(
             model=model,
-            output_type=output_type,
+            output_type=agent_output_type,
             system_prompt=system_prompt,
+            model_settings=agent_model_settings,
         ),
         selected_provider,
         selected_model,

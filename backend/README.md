@@ -94,6 +94,7 @@ When running locally or via Docker:
 - AI model discovery: `GET /tasks/ai-settings/{provider}/models`
   - key providers use saved user key first, then env fallback
   - `ollama` supports profile-aware model listing with auth + timeout/retry controls
+  - `ollama` runtime applies model-aware request presets (timeout/retry/backoff and optional structured-output tuning fields)
 - Legacy Ollama server settings (still supported):
   - `PUT /tasks/ai-settings/ollama/server`
   - `DELETE /tasks/ai-settings/ollama/server`
@@ -104,6 +105,8 @@ When running locally or via Docker:
   - `PUT /tasks/ai-settings/ollama/default-profile`
   - `PUT /tasks/ai-settings/ollama/request-controls`
   - `POST /tasks/ai-settings/ollama/test-connection`
+  - `POST /tasks/ai-settings/ollama/test-model-viability`
+  - `POST /tasks/` with `ai_provider=ollama` now runs a model viability preflight and rejects non-viable models before queueing
 - z.ai profile keys:
   - `PUT /tasks/ai-settings/zai/profiles/{subscription|metered}/key`
   - `DELETE /tasks/ai-settings/zai/profiles/{subscription|metered}/key`

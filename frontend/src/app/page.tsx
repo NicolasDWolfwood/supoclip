@@ -54,7 +54,7 @@ const DEFAULT_AI_MODELS = {
   google: "gemini-2.5-pro",
   anthropic: "claude-4-sonnet",
   zai: "glm-5",
-  ollama: "llama3.2",
+  ollama: "gpt-oss:latest",
 } as const satisfies Record<AiProvider, string>;
 const SWATCH_COLORS = ["#FFFFFF", "#000000", "#FFD700", "#FF6B6B", "#4ECDC4", "#45B7D1"];
 const DEFAULT_WHISPER_CHUNKING_ENABLED = true;

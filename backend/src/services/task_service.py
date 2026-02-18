@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, Callable, Awaitable, List, Tuple
 import logging
 import asyncio
 import re
+import time
 from pathlib import Path
 
 from ..repositories.task_repository import TaskRepository
@@ -29,7 +30,7 @@ DEFAULT_AI_MODELS = {
     "google": "gemini-2.5-pro",
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
-    "ollama": "llama3.2",
+    "ollama": "gpt-oss:latest",
 }
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
@@ -49,6 +50,80 @@ DRAFT_MIN_DURATION_SECONDS = 3
 DRAFT_MAX_DURATION_SECONDS = 180
 TIMELINE_INCREMENT_SECONDS = 0.5
 _TIMESTAMP_SECONDS_RE = re.compile(r"^\d+(?:\.\d+)?$")
+DEFAULT_OLLAMA_VIABILITY_ATTEMPTS = 2
+MIN_OLLAMA_VIABILITY_ATTEMPTS = 1
+MAX_OLLAMA_VIABILITY_ATTEMPTS = 3
+OLLAMA_MODEL_REQUEST_PRESETS: Tuple[Tuple[str, Dict[str, Any]], ...] = (
+    (
+        "qwen3-vl",
+        {
+            "timeout_seconds": 90,
+            "max_retries": 1,
+            "retry_backoff_ms": 250,
+            "temperature": 0.0,
+            "think": False,
+        },
+    ),
+    (
+        "deepseek-r1",
+        {
+            "timeout_seconds": 90,
+            "max_retries": 1,
+            "retry_backoff_ms": 250,
+            "temperature": 0.0,
+            "think": False,
+        },
+    ),
+    (
+        "qwen3",
+        {
+            "timeout_seconds": 90,
+            "max_retries": 1,
+            "retry_backoff_ms": 250,
+            "temperature": 0.0,
+            "think": False,
+        },
+    ),
+    (
+        "ministral",
+        {
+            "timeout_seconds": 90,
+            "max_retries": 1,
+            "retry_backoff_ms": 250,
+            "temperature": 0.0,
+        },
+    ),
+    (
+        "magistral",
+        {
+            "timeout_seconds": 90,
+            "max_retries": 1,
+            "retry_backoff_ms": 250,
+            "temperature": 0.0,
+        },
+    ),
+    (
+        "gpt-oss",
+        {
+            "timeout_seconds": 60,
+            "max_retries": 1,
+            "retry_backoff_ms": 250,
+            "temperature": 0.0,
+            "think": "low",
+        },
+    ),
+)
+DEFAULT_OLLAMA_VIABILITY_TRANSCRIPT = """[00:00 - 00:12] Most creators miss this simple framing rule that can double watch time.
+[00:12 - 00:25] If your first sentence does not create curiosity, viewers leave before the value appears.
+[00:25 - 00:41] Start with a concrete promise, then prove it quickly with one clear example.
+[00:41 - 00:58] For example: change from \"Here are some tips\" to \"Use this 20-second hook to stop the scroll.\"
+[00:58 - 01:15] The second principle is momentum: each line should naturally force the next line.
+[01:15 - 01:34] Ask a question, answer half of it, then reveal the key insight after a short pause.
+[01:34 - 01:52] Third: keep only one core idea per clip so the audience can repeat it to someone else.
+[01:52 - 02:09] Add emotion with contrast: \"I spent months guessing, then fixed it in one day.\"
+[02:09 - 02:27] Close with a practical step people can apply immediately after watching.
+[02:27 - 02:44] If viewers can act on one instruction right away, shares and saves usually increase.
+[02:44 - 03:00] Recap: hook with a promise, build momentum, and end with one actionable takeaway."""
 
 
 class TaskService:
@@ -131,6 +206,13 @@ class TaskService:
         if normalized_provider == "zai":
             return (config.zai_api_key or "").strip() or None
         return None
+
+    @staticmethod
+    def _resolve_ai_model(provider: str, requested_model: Optional[str]) -> str:
+        normalized_provider = (provider or "").strip().lower()
+        if requested_model and requested_model.strip():
+            return requested_model.strip()
+        return DEFAULT_AI_MODELS.get(normalized_provider, DEFAULT_AI_MODELS["openai"])
 
     @staticmethod
     def _normalize_zai_routing_mode(value: Optional[str]) -> str:
@@ -220,6 +302,104 @@ class TaskService:
                 retry_backoff_ms if retry_backoff_ms is not None else DEFAULT_OLLAMA_RETRY_BACKOFF_MS
             ),
         }
+
+    @staticmethod
+    def _resolve_ollama_model_request_preset(model_name: Optional[str]) -> Dict[str, Any]:
+        normalized_model = str(model_name or "").strip().lower()
+        if not normalized_model:
+            return {}
+        for needle, preset in OLLAMA_MODEL_REQUEST_PRESETS:
+            if needle in normalized_model:
+                return dict(preset)
+        return {}
+
+    @classmethod
+    def _apply_ollama_model_request_preset(
+        cls,
+        *,
+        timeout_seconds: int,
+        max_retries: int,
+        retry_backoff_ms: int,
+        model_name: Optional[str],
+    ) -> Tuple[Dict[str, int], Dict[str, Any]]:
+        preset = cls._resolve_ollama_model_request_preset(model_name)
+        effective_timeout = timeout_seconds
+        effective_retries = max_retries
+        effective_backoff = retry_backoff_ms
+
+        preset_timeout = preset.get("timeout_seconds")
+        if isinstance(preset_timeout, int):
+            effective_timeout = max(effective_timeout, preset_timeout)
+        preset_retries = preset.get("max_retries")
+        if isinstance(preset_retries, int):
+            effective_retries = max(effective_retries, preset_retries)
+        preset_backoff = preset.get("retry_backoff_ms")
+        if isinstance(preset_backoff, int):
+            effective_backoff = max(effective_backoff, preset_backoff)
+
+        normalized_timeout = cls._normalize_ollama_request_control(
+            effective_timeout,
+            field_name="ollama_timeout_seconds",
+            minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+            maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+        ) or DEFAULT_OLLAMA_TIMEOUT_SECONDS
+        normalized_retries = cls._normalize_ollama_request_control(
+            effective_retries,
+            field_name="ollama_max_retries",
+            minimum=MIN_OLLAMA_MAX_RETRIES,
+            maximum=MAX_OLLAMA_MAX_RETRIES,
+        )
+        normalized_backoff = cls._normalize_ollama_request_control(
+            effective_backoff,
+            field_name="ollama_retry_backoff_ms",
+            minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+            maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+        )
+
+        return (
+            {
+                "timeout_seconds": normalized_timeout,
+                "max_retries": (
+                    normalized_retries if normalized_retries is not None else DEFAULT_OLLAMA_MAX_RETRIES
+                ),
+                "retry_backoff_ms": (
+                    normalized_backoff if normalized_backoff is not None else DEFAULT_OLLAMA_RETRY_BACKOFF_MS
+                ),
+            },
+            preset,
+        )
+
+    @classmethod
+    def _build_ollama_request_options(
+        cls,
+        *,
+        profile_name: Optional[str],
+        auth_mode: Optional[str],
+        auth_headers: Dict[str, str],
+        timeout_seconds: int,
+        max_retries: int,
+        retry_backoff_ms: int,
+        model_name: Optional[str],
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        effective_controls, preset = cls._apply_ollama_model_request_preset(
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+            model_name=model_name,
+        )
+        options: Dict[str, Any] = {
+            "ollama_profile": profile_name,
+            "ollama_auth_mode": auth_mode,
+            "ollama_auth_headers": dict(auth_headers or {}),
+            "ollama_timeout_seconds": int(effective_controls["timeout_seconds"]),
+            "ollama_max_retries": int(effective_controls["max_retries"]),
+            "ollama_retry_backoff_ms": int(effective_controls["retry_backoff_ms"]),
+        }
+        if "temperature" in preset:
+            options["ollama_temperature"] = float(preset["temperature"])
+        if "think" in preset:
+            options["ollama_think"] = preset["think"]
+        return options, preset
 
     async def _resolve_ollama_request_controls(
         self,
@@ -785,6 +965,7 @@ class TaskService:
         self,
         transcription_provider: str,
         ai_provider: str,
+        ai_model: Optional[str],
         ai_routing_mode: Optional[str],
         user_id: Optional[str],
     ) -> Tuple[Optional[str], str, Optional[str], Optional[str], Optional[str], List[str], List[str], Optional[Dict[str, Any]]]:
@@ -817,14 +998,16 @@ class TaskService:
         elif selected_ai_provider == "ollama":
             ollama_settings = await self._resolve_effective_ollama_settings(user_id=user_id)
             ai_base_url = str(ollama_settings["base_url"])
-            ai_request_options = {
-                "ollama_profile": ollama_settings.get("profile_name"),
-                "ollama_auth_mode": ollama_settings.get("auth_mode"),
-                "ollama_auth_headers": dict(ollama_settings.get("auth_headers") or {}),
-                "ollama_timeout_seconds": int(ollama_settings["timeout_seconds"]),
-                "ollama_max_retries": int(ollama_settings["max_retries"]),
-                "ollama_retry_backoff_ms": int(ollama_settings["retry_backoff_ms"]),
-            }
+            resolved_model = self._resolve_ai_model("ollama", ai_model)
+            ai_request_options, _preset = self._build_ollama_request_options(
+                profile_name=ollama_settings.get("profile_name"),
+                auth_mode=ollama_settings.get("auth_mode"),
+                auth_headers=dict(ollama_settings.get("auth_headers") or {}),
+                timeout_seconds=int(ollama_settings["timeout_seconds"]),
+                max_retries=int(ollama_settings["max_retries"]),
+                retry_backoff_ms=int(ollama_settings["retry_backoff_ms"]),
+                model_name=resolved_model,
+            )
 
         ai_api_key = ai_key_attempts[0]["key"] if ai_key_attempts else None
         ai_api_key_fallbacks = [attempt["key"] for attempt in ai_key_attempts[1:]]
@@ -869,6 +1052,7 @@ class TaskService:
         ) = await self._resolve_processing_credentials(
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            ai_model=ai_model,
             ai_routing_mode=ai_routing_mode,
             user_id=user_id,
         )
@@ -994,6 +1178,7 @@ class TaskService:
         ) = await self._resolve_processing_credentials(
             transcription_provider=transcription_provider,
             ai_provider=ai_provider,
+            ai_model=ai_model,
             ai_routing_mode=ai_routing_mode,
             user_id=user_id,
         )
@@ -1825,6 +2010,224 @@ class TaskService:
         )
         result["ollama_profile"] = resolved.get("profile_name")
         return result
+
+    async def test_ollama_model_viability(
+        self,
+        user_id: str,
+        *,
+        model: str,
+        attempts: int = DEFAULT_OLLAMA_VIABILITY_ATTEMPTS,
+        transcript_sample: Optional[str] = None,
+        profile_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        auth_mode: Optional[str] = None,
+        auth_header_name: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+
+        normalized_model = str(model or "").strip()
+        if not normalized_model:
+            raise ValueError("model is required")
+
+        normalized_attempts = self._normalize_ollama_request_control(
+            attempts,
+            field_name="attempts",
+            minimum=MIN_OLLAMA_VIABILITY_ATTEMPTS,
+            maximum=MAX_OLLAMA_VIABILITY_ATTEMPTS,
+        ) or DEFAULT_OLLAMA_VIABILITY_ATTEMPTS
+
+        sample_transcript = (
+            str(transcript_sample).strip()
+            if isinstance(transcript_sample, str) and transcript_sample.strip()
+            else DEFAULT_OLLAMA_VIABILITY_TRANSCRIPT
+        )
+
+        resolved = await self._resolve_effective_ollama_settings(
+            user_id=user_id,
+            requested_profile=profile_name,
+            requested_base_url=base_url,
+            requested_timeout_seconds=timeout_seconds,
+            requested_max_retries=max_retries,
+            requested_retry_backoff_ms=retry_backoff_ms,
+        )
+
+        auth_headers = dict(resolved.get("auth_headers") or {})
+        if auth_mode is not None or auth_header_name is not None or auth_token is not None:
+            normalized_auth_mode = self._normalize_ollama_auth_mode(auth_mode or "none")
+            normalized_auth_header_name = self._normalize_ollama_auth_header_name(auth_header_name)
+            auth_headers = self._resolve_ollama_auth_headers(
+                auth_mode=normalized_auth_mode,
+                auth_header_name=normalized_auth_header_name,
+                auth_secret_value=(auth_token or "").strip(),
+            )
+
+        effective_controls, model_preset = self._apply_ollama_model_request_preset(
+            timeout_seconds=int(resolved["timeout_seconds"]),
+            max_retries=int(resolved["max_retries"]),
+            retry_backoff_ms=int(resolved["retry_backoff_ms"]),
+            model_name=normalized_model,
+        )
+
+        connection_result = await asyncio.to_thread(
+            run_ollama_connection_test,
+            str(resolved["base_url"]),
+            auth_headers,
+            int(effective_controls["timeout_seconds"]),
+            int(effective_controls["max_retries"]),
+            int(effective_controls["retry_backoff_ms"]),
+        )
+        available_models = list(connection_result.get("models") or [])
+        model_available = normalized_model in available_models
+
+        attempt_results: List[Dict[str, Any]] = []
+        successful_attempts = 0
+        timeout_failures = 0
+        validation_failures = 0
+        ai_request_options, _preset = self._build_ollama_request_options(
+            profile_name=resolved.get("profile_name"),
+            auth_mode=resolved.get("auth_mode"),
+            auth_headers=auth_headers,
+            timeout_seconds=int(resolved["timeout_seconds"]),
+            max_retries=int(resolved["max_retries"]),
+            retry_backoff_ms=int(resolved["retry_backoff_ms"]),
+            model_name=normalized_model,
+        )
+
+        if connection_result.get("connected") and model_available:
+            from ..ai import get_most_relevant_parts_by_transcript
+
+            per_attempt_timeout_seconds = max(
+                45,
+                min(240, int(ai_request_options["ollama_timeout_seconds"]) + 60),
+            )
+
+            for attempt_index in range(1, normalized_attempts + 1):
+                started_at = time.perf_counter()
+                try:
+                    analysis = await asyncio.wait_for(
+                        get_most_relevant_parts_by_transcript(
+                            sample_transcript,
+                            ai_provider="ollama",
+                            ai_api_key=None,
+                            ai_base_url=str(resolved["base_url"]),
+                            ai_model=normalized_model,
+                            ai_request_options=ai_request_options,
+                        ),
+                        timeout=per_attempt_timeout_seconds,
+                    )
+                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                    diagnostics = analysis.diagnostics if isinstance(analysis.diagnostics, dict) else {}
+                    diagnostics_error = str(diagnostics.get("error") or "").strip() or None
+                    selected_segments = len(analysis.most_relevant_segments or [])
+                    attempt_ok = diagnostics_error is None and selected_segments > 0
+                    if diagnostics_error is not None:
+                        validation_failures += 1
+                    if attempt_ok:
+                        successful_attempts += 1
+                    attempt_results.append(
+                        {
+                            "attempt": attempt_index,
+                            "ok": attempt_ok,
+                            "latency_ms": elapsed_ms,
+                            "selected_segments": selected_segments,
+                            "summary_preview": str(analysis.summary or "")[:180],
+                            "diagnostics_error": diagnostics_error,
+                            "diagnostics_error_type": diagnostics.get("error_type"),
+                        }
+                    )
+                except asyncio.TimeoutError:
+                    timeout_failures += 1
+                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                    attempt_results.append(
+                        {
+                            "attempt": attempt_index,
+                            "ok": False,
+                            "latency_ms": elapsed_ms,
+                            "selected_segments": 0,
+                            "summary_preview": "",
+                            "diagnostics_error": "viability attempt timed out",
+                            "diagnostics_error_type": "TimeoutError",
+                        }
+                    )
+                except Exception as exc:
+                    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+                    validation_failures += 1
+                    attempt_results.append(
+                        {
+                            "attempt": attempt_index,
+                            "ok": False,
+                            "latency_ms": elapsed_ms,
+                            "selected_segments": 0,
+                            "summary_preview": "",
+                            "diagnostics_error": str(exc),
+                            "diagnostics_error_type": type(exc).__name__,
+                        }
+                    )
+
+        viable = bool(connection_result.get("connected")) and model_available and successful_attempts > 0
+        if viable:
+            status = "ok"
+            reason = "Model passed structured analysis viability checks."
+        elif not connection_result.get("connected"):
+            status = "error"
+            reason = str(connection_result.get("failure_reason") or "Could not connect to Ollama server.")
+        elif not model_available:
+            status = "error"
+            reason = f"Model '{normalized_model}' is not available on the selected Ollama server."
+        elif timeout_failures == normalized_attempts:
+            status = "error"
+            reason = (
+                "All viability attempts timed out. Increase Ollama timeout/request controls or use a faster model."
+            )
+        elif validation_failures > 0:
+            status = "error"
+            reason = (
+                "Model responded, but structured-output validation failed during transcript analysis."
+            )
+        else:
+            status = "error"
+            reason = "Model did not produce viable clip segments."
+
+        return {
+            "provider": "ollama",
+            "status": status,
+            "viable": viable,
+            "reason": reason,
+            "server_url": str(resolved["base_url"]),
+            "ollama_profile": resolved.get("profile_name"),
+            "model": normalized_model,
+            "checks": {
+                "connection": {
+                    "ok": bool(connection_result.get("connected")),
+                    "failure_reason": connection_result.get("failure_reason"),
+                    "failure_status_code": connection_result.get("failure_status_code"),
+                },
+                "model_available": {
+                    "ok": model_available,
+                    "available_models": available_models,
+                },
+                "structured_analysis": {
+                    "ok": successful_attempts > 0,
+                    "attempts": normalized_attempts,
+                    "successful_attempts": successful_attempts,
+                    "timeout_failures": timeout_failures,
+                    "validation_failures": validation_failures,
+                    "sample_transcript_char_count": len(sample_transcript),
+                },
+            },
+            "attempt_results": attempt_results,
+            "request_controls": {
+                "timeout_seconds": int(ai_request_options["ollama_timeout_seconds"]),
+                "max_retries": int(ai_request_options["ollama_max_retries"]),
+                "retry_backoff_ms": int(ai_request_options["ollama_retry_backoff_ms"]),
+            },
+            "model_request_preset": model_preset,
+        }
 
     async def get_effective_ollama_base_url(
         self,
