@@ -160,6 +160,8 @@ function SettingsPageContent() {
 
   const activeAiProviderRef = useRef<AiProvider>(preferencesDraft.aiProvider);
   const latestAiModelsRequestRef = useRef(0);
+  const ollamaAutoEnsurePromptedRef = useRef<string | null>(null);
+  const ollamaAutoEnsureInFlightRef = useRef(false);
 
   const { data: session, isPending } = useSession();
   const router = useRouter();
@@ -231,8 +233,12 @@ function SettingsPageContent() {
   }, [apiUrl]);
 
   const fetchAiModels = useCallback(
-    async (provider: AiProvider, options?: { showStatus?: boolean }): Promise<boolean> => {
+    async (
+      provider: AiProvider,
+      options?: { showStatus?: boolean; skipOllamaAutoPrompt?: boolean },
+    ): Promise<boolean> => {
       const showStatus = options?.showStatus ?? true;
+      const skipOllamaAutoPrompt = options?.skipOllamaAutoPrompt ?? false;
       if (!session?.user?.id) {
         return false;
       }
@@ -277,9 +283,88 @@ function SettingsPageContent() {
         const rawModels = Array.isArray(responseData.models)
           ? responseData.models.filter((value: unknown): value is string => typeof value === "string")
           : [];
-        const models: string[] = Array.from(
+        let models: string[] = Array.from(
           new Set(rawModels.map((value: string) => value.trim()).filter((value: string) => value.length > 0)),
         );
+        if (models.length === 0 && provider !== "ollama") {
+          throw new Error(`No models were returned for ${provider}`);
+        }
+
+        if (
+          provider === "ollama" &&
+          !skipOllamaAutoPrompt &&
+          activeAiProviderRef.current === "ollama" &&
+          !models.includes(DEFAULT_AI_MODELS.ollama)
+        ) {
+          const promptKey = `${selectedOllamaProfile.trim()}|${ollamaServerUrl.trim() || "default"}`;
+          if (ollamaAutoEnsurePromptedRef.current !== promptKey && !ollamaAutoEnsureInFlightRef.current) {
+            ollamaAutoEnsurePromptedRef.current = promptKey;
+            const shouldInstall = window.confirm(
+              `Ollama model ${DEFAULT_AI_MODELS.ollama} is not available on this server. Download it now?`,
+            );
+            if (shouldInstall) {
+              ollamaAutoEnsureInFlightRef.current = true;
+              setAiModelStatus(`Installing ${DEFAULT_AI_MODELS.ollama} on Ollama...`);
+              setAiModelError(null);
+              try {
+                const ensureResponse = await fetch(`${apiUrl}/tasks/ai-settings/ollama/ensure-recommended-model`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    user_id: session.user.id,
+                  },
+                  body: JSON.stringify({
+                    confirm: true,
+                    profile: selectedOllamaProfile || undefined,
+                    base_url: selectedOllamaProfile ? undefined : ollamaServerUrl.trim() || undefined,
+                    auth_mode: ollamaAuthToken.trim() ? ollamaAuthMode : undefined,
+                    auth_header_name:
+                      ollamaAuthToken.trim() && ollamaAuthMode === "custom_header"
+                        ? ollamaAuthHeaderName.trim()
+                        : undefined,
+                    auth_token: ollamaAuthToken.trim() || undefined,
+                    timeout_seconds: ollamaRequestControls.timeout_seconds,
+                    max_retries: ollamaRequestControls.max_retries,
+                    retry_backoff_ms: ollamaRequestControls.retry_backoff_ms,
+                  }),
+                });
+                const ensureData = await ensureResponse
+                  .json()
+                  .catch(() => ({} as { detail?: string; models?: unknown; pulled?: boolean; already_available?: boolean }));
+                if (!ensureResponse.ok) {
+                  throw new Error(ensureData?.detail || `Failed to install ${DEFAULT_AI_MODELS.ollama}`);
+                }
+                const ensuredModels = Array.isArray(ensureData.models)
+                  ? ensureData.models.filter((value: unknown): value is string => typeof value === "string")
+                  : [];
+                const normalizedEnsuredModels = Array.from(
+                  new Set(ensuredModels.map((value) => value.trim()).filter((value) => value.length > 0)),
+                );
+                if (normalizedEnsuredModels.length > 0) {
+                  models = normalizedEnsuredModels;
+                }
+                if (!models.includes(DEFAULT_AI_MODELS.ollama)) {
+                  throw new Error(`${DEFAULT_AI_MODELS.ollama} is still unavailable after pull.`);
+                }
+                setAiModelStatus(
+                  ensureData.pulled
+                    ? `Installed ${DEFAULT_AI_MODELS.ollama}.`
+                    : `${DEFAULT_AI_MODELS.ollama} is already available.`,
+                );
+              } catch (ensureError) {
+                const message =
+                  ensureError instanceof Error ? ensureError.message : `Failed to install ${DEFAULT_AI_MODELS.ollama}`;
+                setAiModelError(message);
+              } finally {
+                ollamaAutoEnsureInFlightRef.current = false;
+              }
+            } else {
+              setAiModelStatus(
+                `${DEFAULT_AI_MODELS.ollama} is not installed. You can use another model and run viability tests.`,
+              );
+            }
+          }
+        }
         if (models.length === 0) {
           throw new Error(`No models were returned for ${provider}`);
         }
@@ -321,7 +406,19 @@ function SettingsPageContent() {
         }
       }
     },
-    [apiUrl, ollamaRequestControls.max_retries, ollamaRequestControls.retry_backoff_ms, ollamaRequestControls.timeout_seconds, ollamaServerUrl, selectedOllamaProfile, session?.user?.id, zaiRoutingMode],
+    [
+      apiUrl,
+      ollamaAuthHeaderName,
+      ollamaAuthMode,
+      ollamaAuthToken,
+      ollamaRequestControls.max_retries,
+      ollamaRequestControls.retry_backoff_ms,
+      ollamaRequestControls.timeout_seconds,
+      ollamaServerUrl,
+      selectedOllamaProfile,
+      session?.user?.id,
+      zaiRoutingMode,
+    ],
   );
 
   const refreshAiSettings = useCallback(async (): Promise<void> => {
@@ -1578,6 +1675,9 @@ function SettingsPageContent() {
                   if (!isAiProvider(provider)) {
                     return;
                   }
+                  if (provider === "ollama") {
+                    ollamaAutoEnsurePromptedRef.current = null;
+                  }
 
                   setPreferencesDraft((prev) => {
                     const prevDefaultModel = DEFAULT_AI_MODELS[prev.aiProvider];
@@ -1655,6 +1755,9 @@ function SettingsPageContent() {
                   void testOllamaConnection();
                 }}
                 onRefreshAiModels={() => {
+                  if (preferencesDraft.aiProvider === "ollama") {
+                    ollamaAutoEnsurePromptedRef.current = null;
+                  }
                   void fetchAiModels(preferencesDraft.aiProvider);
                 }}
                 onSelectedZaiKeyProfileChange={setSelectedZaiKeyProfile}

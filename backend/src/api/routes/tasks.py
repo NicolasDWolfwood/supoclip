@@ -55,6 +55,7 @@ DRAFT_UPDATE_FIELDS = {"id", "start_time", "end_time", "edited_text", "is_select
 DRAFT_CREATE_FIELDS = {"start_time", "end_time", "edited_text", "is_selected"}
 SUBTITLE_STYLE_FIELDS = set(DEFAULT_SUBTITLE_STYLE.keys())
 MAX_SUBTITLE_STYLE_BACKFILL_LIMIT = 1000
+OLLAMA_AUTO_PULL_MODEL = DEFAULT_AI_MODELS["ollama"]
 OLLAMA_CREATE_TASK_PREFLIGHT_TRANSCRIPT = """[00:00 - 00:12] A clear opening promise makes people keep watching.
 [00:12 - 00:24] Give one concrete example quickly so the claim feels real.
 [00:24 - 00:38] Keep each clip focused on a single idea with one practical takeaway.
@@ -794,6 +795,83 @@ async def test_ollama_connection(
     except Exception as e:
         logger.error(f"Error testing Ollama connection: {e}")
         raise HTTPException(status_code=500, detail=f"Error testing Ollama connection: {str(e)}")
+
+
+@router.post("/ai-settings/ollama/ensure-recommended-model")
+async def ensure_ollama_recommended_model(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ensure the recommended Ollama model is installed (requires explicit confirm=true)."""
+    user_id = _require_user_id(request)
+    data = await _read_optional_json_object(request)
+    if data.get("confirm") is not True:
+        raise HTTPException(
+            status_code=400,
+            detail="confirm=true is required to pull the recommended Ollama model",
+        )
+
+    profile = (
+        _resolve_ollama_profile_name(data.get("profile"))
+        if data.get("profile") is not None
+        else None
+    )
+    base_url = str(data.get("base_url") or data.get("server_url") or "").strip() or None
+    auth_mode = _resolve_ollama_auth_mode(data.get("auth_mode")) if data.get("auth_mode") is not None else None
+    auth_header_name = (
+        str(data.get("auth_header_name")).strip()
+        if data.get("auth_header_name") is not None
+        else None
+    )
+    auth_token = (
+        str(data.get("auth_token")).strip()
+        if data.get("auth_token") is not None
+        else None
+    )
+    timeout_seconds = _resolve_optional_int(
+        data.get("timeout_seconds"),
+        field_name="timeout_seconds",
+        minimum=MIN_OLLAMA_TIMEOUT_SECONDS,
+        maximum=MAX_OLLAMA_TIMEOUT_SECONDS,
+    )
+    max_retries = _resolve_optional_int(
+        data.get("max_retries"),
+        field_name="max_retries",
+        minimum=MIN_OLLAMA_MAX_RETRIES,
+        maximum=MAX_OLLAMA_MAX_RETRIES,
+    )
+    retry_backoff_ms = _resolve_optional_int(
+        data.get("retry_backoff_ms"),
+        field_name="retry_backoff_ms",
+        minimum=MIN_OLLAMA_RETRY_BACKOFF_MS,
+        maximum=MAX_OLLAMA_RETRY_BACKOFF_MS,
+    )
+
+    try:
+        task_service = TaskService(db)
+        result = await task_service.ensure_ollama_recommended_model(
+            user_id=user_id,
+            profile_name=profile,
+            base_url=base_url,
+            auth_mode=auth_mode,
+            auth_header_name=auth_header_name,
+            auth_token=auth_token,
+            timeout_seconds=timeout_seconds,
+            max_retries=max_retries,
+            retry_backoff_ms=retry_backoff_ms,
+        )
+        if str(result.get("model") or "").strip() != OLLAMA_AUTO_PULL_MODEL:
+            raise HTTPException(status_code=500, detail="Unexpected model pulled")
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error ensuring recommended Ollama model: {e}")
+        raise HTTPException(status_code=500, detail=f"Error ensuring recommended Ollama model: {str(e)}")
 
 
 @router.post("/ai-settings/ollama/test-model-viability")

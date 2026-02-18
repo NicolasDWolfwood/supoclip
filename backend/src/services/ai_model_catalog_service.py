@@ -376,6 +376,108 @@ def test_ollama_connection(
     }
 
 
+def pull_ollama_model(
+    base_url: str | None,
+    model: str,
+    auth_headers: Optional[dict[str, str]] = None,
+    timeout_seconds: Optional[int] = None,
+    max_retries: Optional[int] = None,
+    retry_backoff_ms: Optional[int] = None,
+) -> dict[str, Any]:
+    normalized_base_url = _normalize_base_url(base_url) or DEFAULT_OLLAMA_BASE_URL
+    normalized_model = str(model or "").strip()
+    if not normalized_model:
+        raise ModelCatalogError("ollama model name is required", status_code=400)
+
+    resolved_timeout = _normalize_timeout_seconds(timeout_seconds)
+    resolved_retries = _normalize_max_retries(max_retries)
+    resolved_backoff = _normalize_retry_backoff_ms(retry_backoff_ms)
+    request_headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        **dict(auth_headers or {}),
+    }
+    body = json.dumps({"model": normalized_model, "stream": False}).encode("utf-8")
+    req = request.Request(
+        f"{normalized_base_url}/api/pull",
+        headers=request_headers,
+        data=body,
+        method="POST",
+    )
+
+    for attempt_index in range(resolved_retries + 1):
+        try:
+            with request.urlopen(req, timeout=resolved_timeout) as response:
+                raw_body = response.read().decode("utf-8", errors="replace")
+        except error.HTTPError as exc:
+            body_text = ""
+            try:
+                body_text = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body_text = ""
+
+            message = ""
+            if body_text:
+                try:
+                    parsed = json.loads(body_text)
+                    message = _extract_error_message(parsed) or body_text
+                except json.JSONDecodeError:
+                    message = body_text
+            message = (message or f"HTTP {exc.code}").strip()
+
+            should_retry = exc.code >= 500 or exc.code == 429
+            if should_retry and attempt_index < resolved_retries:
+                _sleep_before_retry(attempt_index + 1, resolved_backoff)
+                continue
+
+            if exc.code in {401, 403}:
+                raise ModelCatalogError(
+                    f"ollama credentials are invalid or unauthorized ({message})",
+                    status_code=401,
+                ) from exc
+            if exc.code == 429:
+                raise ModelCatalogError(
+                    f"ollama model pull was rate-limited ({message})",
+                    status_code=429,
+                ) from exc
+            raise ModelCatalogError(
+                f"ollama model pull failed ({message})",
+                status_code=502,
+            ) from exc
+        except error.URLError as exc:
+            if attempt_index < resolved_retries:
+                _sleep_before_retry(attempt_index + 1, resolved_backoff)
+                continue
+            raise ModelCatalogError(
+                f"Could not reach ollama model endpoint ({exc.reason})",
+                status_code=502,
+            ) from exc
+
+        if not raw_body.strip():
+            return {"status": "ok", "message": "pull request accepted"}
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise ModelCatalogError(
+                "ollama model pull returned invalid JSON",
+                status_code=502,
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ModelCatalogError(
+                "ollama model pull returned an unexpected payload",
+                status_code=502,
+            )
+        error_message = _extract_error_message(payload)
+        if error_message:
+            raise ModelCatalogError(
+                f"ollama model pull failed ({error_message})",
+                status_code=502,
+            )
+        return payload
+
+    raise ModelCatalogError("Could not reach ollama model endpoint", status_code=502)
+
+
 def list_models_for_provider(
     provider: str,
     api_key: str,

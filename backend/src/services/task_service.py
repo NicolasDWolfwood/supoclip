@@ -17,7 +17,11 @@ from ..repositories.clip_repository import ClipRepository
 from ..repositories.draft_clip_repository import DraftClipRepository
 from .video_service import VideoService
 from .secret_service import SecretService
-from .ai_model_catalog_service import list_models_for_provider, test_ollama_connection as run_ollama_connection_test
+from .ai_model_catalog_service import (
+    list_models_for_provider,
+    pull_ollama_model as run_ollama_model_pull,
+    test_ollama_connection as run_ollama_connection_test,
+)
 from ..config import Config
 from ..video_utils import load_cached_transcript_data
 
@@ -25,12 +29,13 @@ logger = logging.getLogger(__name__)
 config = Config()
 SUPPORTED_AI_PROVIDERS = {"openai", "google", "anthropic", "zai", "ollama"}
 AI_KEY_REQUIRED_PROVIDERS = {"openai", "google", "anthropic", "zai"}
+OLLAMA_RECOMMENDED_MODEL = "gpt-oss:latest"
 DEFAULT_AI_MODELS = {
     "openai": "gpt-5-mini",
     "google": "gemini-2.5-pro",
     "anthropic": "claude-4-sonnet",
     "zai": "glm-5",
-    "ollama": "gpt-oss:latest",
+    "ollama": OLLAMA_RECOMMENDED_MODEL,
 }
 SUPPORTED_ZAI_ROUTING_MODES = {"auto", "subscription", "metered"}
 SUPPORTED_ZAI_KEY_PROFILES = {"subscription", "metered"}
@@ -2010,6 +2015,112 @@ class TaskService:
         )
         result["ollama_profile"] = resolved.get("profile_name")
         return result
+
+    async def ensure_ollama_recommended_model(
+        self,
+        user_id: str,
+        *,
+        profile_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        auth_mode: Optional[str] = None,
+        auth_header_name: Optional[str] = None,
+        auth_token: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+        max_retries: Optional[int] = None,
+        retry_backoff_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        if not await self.task_repo.user_exists(self.db, user_id):
+            raise ValueError(f"User {user_id} not found")
+
+        resolved = await self._resolve_effective_ollama_settings(
+            user_id=user_id,
+            requested_profile=profile_name,
+            requested_base_url=base_url,
+            requested_timeout_seconds=timeout_seconds,
+            requested_max_retries=max_retries,
+            requested_retry_backoff_ms=retry_backoff_ms,
+        )
+
+        auth_headers = dict(resolved.get("auth_headers") or {})
+        if auth_mode is not None or auth_header_name is not None or auth_token is not None:
+            normalized_auth_mode = self._normalize_ollama_auth_mode(auth_mode or "none")
+            normalized_auth_header_name = self._normalize_ollama_auth_header_name(auth_header_name)
+            auth_headers = self._resolve_ollama_auth_headers(
+                auth_mode=normalized_auth_mode,
+                auth_header_name=normalized_auth_header_name,
+                auth_secret_value=(auth_token or "").strip(),
+            )
+
+        effective_controls, model_preset = self._apply_ollama_model_request_preset(
+            timeout_seconds=int(resolved["timeout_seconds"]),
+            max_retries=int(resolved["max_retries"]),
+            retry_backoff_ms=int(resolved["retry_backoff_ms"]),
+            model_name=OLLAMA_RECOMMENDED_MODEL,
+        )
+        connection_result = await asyncio.to_thread(
+            run_ollama_connection_test,
+            str(resolved["base_url"]),
+            auth_headers,
+            int(effective_controls["timeout_seconds"]),
+            int(effective_controls["max_retries"]),
+            int(effective_controls["retry_backoff_ms"]),
+        )
+        if not connection_result.get("connected"):
+            raise RuntimeError(str(connection_result.get("failure_reason") or "Could not connect to Ollama server."))
+
+        available_models = list(connection_result.get("models") or [])
+        already_available = OLLAMA_RECOMMENDED_MODEL in available_models
+        pulled = False
+        pull_result: Optional[Dict[str, Any]] = None
+
+        if not already_available:
+            pull_timeout_seconds = max(120, min(1800, int(effective_controls["timeout_seconds"]) * 20))
+            pull_result = await asyncio.to_thread(
+                run_ollama_model_pull,
+                str(resolved["base_url"]),
+                OLLAMA_RECOMMENDED_MODEL,
+                auth_headers,
+                pull_timeout_seconds,
+                int(effective_controls["max_retries"]),
+                int(effective_controls["retry_backoff_ms"]),
+            )
+            refreshed_connection_result = await asyncio.to_thread(
+                run_ollama_connection_test,
+                str(resolved["base_url"]),
+                auth_headers,
+                int(effective_controls["timeout_seconds"]),
+                int(effective_controls["max_retries"]),
+                int(effective_controls["retry_backoff_ms"]),
+            )
+            if not refreshed_connection_result.get("connected"):
+                raise RuntimeError(
+                    str(refreshed_connection_result.get("failure_reason") or "Could not reconnect to Ollama server.")
+                )
+            available_models = list(refreshed_connection_result.get("models") or [])
+            if OLLAMA_RECOMMENDED_MODEL not in available_models:
+                raise RuntimeError(
+                    f"Ollama pull completed but model '{OLLAMA_RECOMMENDED_MODEL}' is still unavailable."
+                )
+            pulled = True
+
+        return {
+            "provider": "ollama",
+            "status": "ok",
+            "server_url": str(resolved["base_url"]),
+            "ollama_profile": resolved.get("profile_name"),
+            "model": OLLAMA_RECOMMENDED_MODEL,
+            "already_available": already_available,
+            "pulled": pulled,
+            "model_count": len(available_models),
+            "models": available_models,
+            "request_controls": {
+                "timeout_seconds": int(effective_controls["timeout_seconds"]),
+                "max_retries": int(effective_controls["max_retries"]),
+                "retry_backoff_ms": int(effective_controls["retry_backoff_ms"]),
+            },
+            "model_request_preset": model_preset,
+            "pull_result": pull_result,
+        }
 
     async def test_ollama_model_viability(
         self,

@@ -105,6 +105,7 @@ When running locally or via Docker:
   - `PUT /tasks/ai-settings/ollama/default-profile`
   - `PUT /tasks/ai-settings/ollama/request-controls`
   - `POST /tasks/ai-settings/ollama/test-connection`
+  - `POST /tasks/ai-settings/ollama/ensure-recommended-model` (pulls `gpt-oss:latest` when explicitly confirmed)
   - `POST /tasks/ai-settings/ollama/test-model-viability`
   - `POST /tasks/` with `ai_provider=ollama` now runs a model viability preflight and rejects non-viable models before queueing
 - z.ai profile keys:

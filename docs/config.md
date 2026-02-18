@@ -119,6 +119,7 @@ Examples:
   4. hard defaults (`http://localhost:11434`, `15s`, `2`, `400ms`)
 - Runtime applies model-aware Ollama request presets (timeout/retry/backoff plus optional `think`/temperature tuning) for newer/slower models.
 - Task creation with `ai_provider=ollama` runs a 1-attempt structured-output viability preflight and blocks queueing when the selected model is non-viable.
+- Settings can explicitly pull the recommended model (`gpt-oss:latest`) via `POST /tasks/ai-settings/ollama/ensure-recommended-model` (requires `confirm=true`).
 - Model discovery and connection tests call Ollama `GET /api/tags`; connection test also attempts `GET /api/version`.
 
 ## Entrypoint Alignment
