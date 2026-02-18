@@ -13,6 +13,10 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `MEDIAPIPE_FACE_MODEL_SHA256` | No | `b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f` | backend, worker | Optional integrity check for downloaded/baked face model file. |
 | `MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD` | No | `true` | backend, worker | Auto-download face model if missing at startup/runtime. |
 | `LLM` | No | `openai:gpt-5-mini` | backend, worker | Primary model selector (`provider:model`). |
+| `MAX_CLIPS` | No | `10` | backend, worker | Maximum number of AI-selected clip segments returned after validation/diversity filtering. |
+| `CLIP_DIVERSITY_ENABLED` | No | `true` | backend, worker | Enable timeline diversity filtering after AI scoring. |
+| `CLIP_DIVERSITY_MIN_GAP_SECONDS` | No | `600` | backend, worker | Preferred minimum separation between selected clip start times. |
+| `CLIP_DIVERSITY_BUCKETS` | No | `4` | backend, worker | Number of timeline coverage buckets used by diversity filtering. |
 | `OPENAI_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `openai:*`. |
 | `GOOGLE_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `google:*`. |
 | `ANTHROPIC_API_KEY` | Conditional | - | backend, worker | Required when `LLM` uses `anthropic:*`. |
@@ -113,6 +117,14 @@ Examples:
 - Finalize queues rendering from approved draft clips.
 - User preference `default_timeline_editor_enabled` controls the default timeline editor toggle for new tasks.
 - User preference `default_review_before_render_enabled` controls whether new tasks default to pause at `awaiting_review`.
+
+## Clip Selection Runtime Behavior
+
+- AI transcript analysis asks for a larger candidate pool, then applies backend validation.
+- Final clip candidates are capped by `MAX_CLIPS`.
+- When `CLIP_DIVERSITY_ENABLED=true`, backend enforces timeline spread using:
+  - bucket coverage (`CLIP_DIVERSITY_BUCKETS`)
+  - start-time separation target (`CLIP_DIVERSITY_MIN_GAP_SECONDS`)
 
 ## Validation Checklist
 

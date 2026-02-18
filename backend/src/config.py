@@ -31,6 +31,9 @@ class Config:
 
         self.max_clips = int(os.getenv("MAX_CLIPS", "10"))
         self.clip_duration = int(os.getenv("CLIP_DURATION", "30"))  # seconds
+        self.clip_diversity_enabled = env_bool("CLIP_DIVERSITY_ENABLED", "true")
+        self.clip_diversity_min_gap_seconds = max(0, int(os.getenv("CLIP_DIVERSITY_MIN_GAP_SECONDS", "600")))
+        self.clip_diversity_buckets = max(1, int(os.getenv("CLIP_DIVERSITY_BUCKETS", "4")))
 
         self.temp_dir = os.getenv("TEMP_DIR", "temp")
 

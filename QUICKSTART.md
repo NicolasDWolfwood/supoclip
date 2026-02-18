@@ -48,6 +48,12 @@ OPENAI_API_KEY=your_openai_key_here
 # Configure which AI model to use
 LLM=openai:gpt-5-mini
 
+# Optional clip selection spread controls
+# MAX_CLIPS=10
+# CLIP_DIVERSITY_ENABLED=true
+# CLIP_DIVERSITY_MIN_GAP_SECONDS=600
+# CLIP_DIVERSITY_BUCKETS=4
+
 # Optional (default local transcription)
 TRANSCRIPTION_PROVIDER=local
 
@@ -120,6 +126,10 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `WHISPER_CHUNKING_ENABLED` | `true` | Enable chunked local Whisper transcription for long videos |
 | `WHISPER_CHUNK_DURATION_SECONDS` | `1200` | Chunk duration in seconds for local Whisper (default 20 minutes) |
 | `WHISPER_CHUNK_OVERLAP_SECONDS` | `8` | Overlap in seconds between chunks for boundary continuity |
+| `MAX_CLIPS` | `10` | Max clip segments selected after AI validation/diversity filtering |
+| `CLIP_DIVERSITY_ENABLED` | `true` | Enable timeline spread filtering after AI scoring |
+| `CLIP_DIVERSITY_MIN_GAP_SECONDS` | `600` | Preferred minimum spacing between selected clip start times |
+| `CLIP_DIVERSITY_BUCKETS` | `4` | Timeline buckets used to encourage coverage across long videos |
 | `TRANSCRIPTION_PROVIDER` | `local` | `local` (Whisper in your container) or `assemblyai` (remote API; auto-falls back to local if media exceeds AssemblyAI limits) |
 | `ASSEMBLY_AI_API_KEY` | - | Only required when `TRANSCRIPTION_PROVIDER=assemblyai` |
 | `MEDIAPIPE_FACE_MODEL_PATH` | `./backend/models/blaze_face_short_range.tflite` | Face detector model path for face-aware crop (Docker default resolves to `/app/models/...`) |

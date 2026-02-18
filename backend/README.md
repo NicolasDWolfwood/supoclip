@@ -51,6 +51,11 @@ Use the root env file and canonical config reference:
 Backend compatibility behavior:
 - preferred model var: `LLM`
 - legacy model var: `LLM_MODEL`
+- clip selection vars:
+  - `MAX_CLIPS`
+  - `CLIP_DIVERSITY_ENABLED`
+  - `CLIP_DIVERSITY_MIN_GAP_SECONDS`
+  - `CLIP_DIVERSITY_BUCKETS`
 - AI provider keys: `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `ZAI_API_KEY`
 - z.ai requests use Coding API endpoint: `https://api.z.ai/api/coding/paas/v4`
 - z.ai supports user key profiles in Settings (`subscription`, `metered`) with routing mode (`auto`, `subscription`, `metered`)
