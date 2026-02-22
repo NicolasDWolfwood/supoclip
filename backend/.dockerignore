@@ -27,6 +27,9 @@ Thumbs.db
 
 # Project specific
 uploads/
+clips/
+models/
+.cache/
 logs/
 *.log
 

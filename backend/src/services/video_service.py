@@ -16,13 +16,6 @@ from ..youtube_utils import (
     get_youtube_video_title,
     get_youtube_video_id
 )
-from ..video_utils import (
-    get_video_transcript,
-    get_cached_formatted_transcript,
-    create_clips_with_transitions,
-    create_clips_from_segments,
-    align_edited_text_to_clip_audio as align_text_to_audio,
-)
 from ..ai import get_most_relevant_parts_by_transcript
 from ..config import Config
 from ..transcription_limits import (
@@ -42,6 +35,13 @@ WAVEFORM_SAMPLE_RATE_HZ = 2000
 
 class VideoService:
     """Service for video processing operations."""
+
+    @staticmethod
+    def _video_utils_attr(name: str):
+        # Keep heavy video/ML imports out of API startup path.
+        from .. import video_utils
+
+        return getattr(video_utils, name)
 
     @staticmethod
     def _is_retryable_zai_error(error_text: Optional[str]) -> bool:
@@ -124,6 +124,7 @@ class VideoService:
         Runs in thread pool to avoid blocking.
         """
         logger.info(f"Generating transcript for: {video_path}")
+        get_video_transcript = VideoService._video_utils_attr("get_video_transcript")
         transcript = await run_in_thread(
             get_video_transcript,
             str(video_path),
@@ -151,6 +152,7 @@ class VideoService:
         Generate transcript and emit heartbeat progress while waiting for transcription.
         This prevents the UI from appearing stuck during long transcription calls.
         """
+        get_cached_formatted_transcript = VideoService._video_utils_attr("get_cached_formatted_transcript")
         cached_transcript = await run_in_thread(get_cached_formatted_transcript, str(video_path))
         if cached_transcript:
             logger.info(f"Using cached transcript for: {video_path.name}")
@@ -368,6 +370,8 @@ class VideoService:
                 loop,
             )
 
+        create_clips_with_transitions = VideoService._video_utils_attr("create_clips_with_transitions")
+        create_clips_from_segments = VideoService._video_utils_attr("create_clips_from_segments")
         clip_builder = create_clips_with_transitions if transitions_enabled else create_clips_from_segments
         clips_info = await run_in_thread(
             clip_builder,
@@ -395,6 +399,7 @@ class VideoService:
         edited_text: str,
     ) -> List[Dict[str, Any]]:
         """Align edited subtitle text to clip audio at word granularity."""
+        align_text_to_audio = VideoService._video_utils_attr("align_edited_text_to_clip_audio")
         return await run_in_thread(
             align_text_to_audio,
             video_path,

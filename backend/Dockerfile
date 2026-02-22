@@ -1,18 +1,14 @@
-# Use Python 3.11 slim image
-FROM python:3.11-slim
+FROM python:3.11-slim AS builder
 
-# Install system dependencies including ffmpeg
-RUN apt-get update && apt-get install -y \
-    ffmpeg \
+# Build-time dependencies only (compiler toolchain stays out of runtime image).
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gcc \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv package manager
-RUN pip install uv
+RUN pip install --no-cache-dir uv
 
-# Set working directory
 WORKDIR /app
 
 # MediaPipe face detector model (baked into image for deterministic runtime behavior)
@@ -23,34 +19,83 @@ ENV MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL}
 ENV MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256}
 ENV MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=true
 
-# Copy pyproject.toml and uv.lock for dependency installation
+# Copy dependency metadata first to maximize cache hits.
 COPY pyproject.toml uv.lock* ./
 
-# Create virtual environment and install dependencies using uv sync
-RUN uv venv .venv && uv sync
+# Create virtual environment and install dependencies using uv sync.
+# `UV_SYNC_EXTRA=worker` installs heavy video/ML deps for worker images.
+ARG UV_SYNC_EXTRA=
+RUN uv venv .venv \
+    && if [ -n "${UV_SYNC_EXTRA}" ]; then \
+        uv sync --extra "${UV_SYNC_EXTRA}"; \
+    else \
+        uv sync; \
+    fi
 
-# Force update yt-dlp to the absolute latest version to handle YouTube API changes
-# Also install from git to get the very latest commits
-RUN uv pip install --upgrade --force-reinstall yt-dlp
-RUN uv pip install --upgrade --force-reinstall "yt-dlp[default]"
+# Torch now defaults to CUDA packages on Linux. For lean worker images, swap
+# to the CPU wheel and remove CUDA-only Python packages.
+ARG TORCH_VARIANT=default
+RUN if [ "${UV_SYNC_EXTRA}" = "worker" ] && [ "${TORCH_VARIANT}" = "cpu" ]; then \
+      uv pip uninstall \
+        triton \
+        nvidia-cublas-cu12 \
+        nvidia-cuda-cupti-cu12 \
+        nvidia-cuda-nvrtc-cu12 \
+        nvidia-cuda-runtime-cu12 \
+        nvidia-cudnn-cu12 \
+        nvidia-cufft-cu12 \
+        nvidia-cufile-cu12 \
+        nvidia-curand-cu12 \
+        nvidia-cusolver-cu12 \
+        nvidia-cusparse-cu12 \
+        nvidia-cusparselt-cu12 \
+        nvidia-nccl-cu12 \
+        nvidia-nvjitlink-cu12 \
+        nvidia-nvshmem-cu12 \
+        nvidia-nvtx-cu12 \
+        torch || true; \
+      uv pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu "torch==2.10.0+cpu"; \
+    fi
 
-# Fetch and verify MediaPipe face detector model
+# Keep yt-dlp at latest to handle upstream site/API changes.
+RUN uv pip install --upgrade --force-reinstall --no-cache-dir "yt-dlp[default]"
+
+# Fetch and verify MediaPipe face detector model.
 RUN mkdir -p /app/models \
     && curl -fsSL "${MEDIAPIPE_FACE_MODEL_URL}" -o "${MEDIAPIPE_FACE_MODEL_PATH}" \
     && echo "${MEDIAPIPE_FACE_MODEL_SHA256}  ${MEDIAPIPE_FACE_MODEL_PATH}" | sha256sum -c -
 
-# Copy source code
 COPY src/ ./src/
-
-# Copy fonts and transitions directories
 COPY fonts/ ./fonts/
 COPY transitions/ ./transitions/
 
-# Create necessary directories for video processing
 RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
 
-# Expose the port FastAPI will run on
+FROM python:3.11-slim AS runtime
+
+# Runtime-only system packages.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+ARG MEDIAPIPE_FACE_MODEL_URL=https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite
+ARG MEDIAPIPE_FACE_MODEL_SHA256=b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f
+ENV MEDIAPIPE_FACE_MODEL_PATH=/app/models/blaze_face_short_range.tflite
+ENV MEDIAPIPE_FACE_MODEL_URL=${MEDIAPIPE_FACE_MODEL_URL}
+ENV MEDIAPIPE_FACE_MODEL_SHA256=${MEDIAPIPE_FACE_MODEL_SHA256}
+ENV MEDIAPIPE_FACE_MODEL_AUTO_DOWNLOAD=true
+
+COPY --from=builder /app/.venv /app/.venv
+COPY --from=builder /app/models /app/models
+COPY --from=builder /app/src /app/src
+COPY --from=builder /app/fonts /app/fonts
+COPY --from=builder /app/transitions /app/transitions
+
+RUN mkdir -p /app/uploads /app/clips /app/logs /tmp
+
 EXPOSE 8000
 
-# Activate virtual environment and start the application
 CMD [".venv/bin/uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]

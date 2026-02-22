@@ -35,6 +35,8 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `WORKER2_MAX_JOBS` | No | `1` | worker2 (optional) | Max concurrent jobs for optional second worker (`multi-worker` profile). |
 | `WORKER2_WHISPER_DEVICE` | No | `auto` | worker2 (optional) | Whisper target device for second worker: `auto`, `cuda`, `cpu`. |
 | `ENABLE_MULTI_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `multi-worker` to include `worker2`. |
+| `WORKER_GPU_WHISPER_DEVICE` | No | `cuda` | worker-gpu (optional) | Whisper target device for optional GPU worker profile. |
+| `ENABLE_GPU_WORKER` | No | `false` | start.sh | When true, `./start.sh` runs Docker Compose with profile `gpu-worker` to include `worker-gpu`. |
 | `ARQ_QUEUE_NAME_LOCAL` | No | `arq:queue:local` | backend, workers | Queue name for local Whisper jobs. |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | No | `arq:queue:assembly` | backend, workers | Queue name for AssemblyAI jobs. |
 | `ADMIN_API_KEY` | No | - | backend | Optional key for admin task-management endpoints (send as `x-admin-key`). |
@@ -46,6 +48,7 @@ This is the single source of truth for MrglSnips runtime environment variables.
 | `BETTER_AUTH_TRUSTED_ORIGINS` | No | `http://localhost:3000,http://127.0.0.1:3000` | frontend | Comma-separated Better Auth origin allowlist for local/dev. |
 | `DOCKER_GPU_REQUEST` | No | `all` | docker-compose | GPU device request for backend/worker (`all` or `0`). |
 | `DOCKER_GPU_REQUEST_WORKER2` | No | `all` | docker-compose | GPU device request for optional `worker2` profile (`all` or `0`). |
+| `DOCKER_GPU_REQUEST_WORKER_GPU` | No | `all` | docker-compose | GPU device request for optional `worker-gpu` profile (`all` or `0`). |
 | `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | No | `all` | docker-compose | GPU device request for dedicated AssemblyAI worker. |
 | `SECRET_ENCRYPTION_KEY` | No | - | backend | Optional encryption secret for user-stored API keys (recommended for production). |
 | `WHISPER_CACHE_HOST_DIR` | No | `./backend/.cache/whisper` | docker-compose | Host bind-mount location for Whisper model cache (`/root/.cache/whisper` in containers). |

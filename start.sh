@@ -80,15 +80,22 @@ FRONTEND_ORIGIN="${FRONTEND_ORIGIN:-http://${APP_HOST}:${FRONTEND_HOST_PORT}}"
 BACKEND_ORIGIN="${BACKEND_ORIGIN:-http://${APP_HOST}:${BACKEND_HOST_PORT}}"
 API_DOCS_URL="${BACKEND_ORIGIN}/docs"
 ENABLE_MULTI_WORKER="${ENABLE_MULTI_WORKER:-false}"
+ENABLE_GPU_WORKER="${ENABLE_GPU_WORKER:-false}"
 
 COMPOSE_ARGS=()
 if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
     COMPOSE_ARGS+=(--profile multi-worker)
 fi
+if [[ "${ENABLE_GPU_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
+    COMPOSE_ARGS+=(--profile gpu-worker)
+fi
 
 echo -e "${GREEN}Starting MrglSnips...${NC}"
 if [[ "${ENABLE_MULTI_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
     echo "Multi-worker profile enabled (worker + worker2)."
+fi
+if [[ "${ENABLE_GPU_WORKER,,}" =~ ^(1|true|yes|on)$ ]]; then
+    echo "GPU worker profile enabled (worker-gpu)."
 fi
 echo ""
 

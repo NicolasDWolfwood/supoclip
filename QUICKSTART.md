@@ -98,8 +98,12 @@ docker-compose up -d --build
 # Start with optional second worker (parallel job processing)
 docker-compose --profile multi-worker up -d --build
 
+# Start with optional GPU worker profile
+docker-compose --profile gpu-worker up -d --build
+
 # Or via start script using .env toggle:
 # ENABLE_MULTI_WORKER=true
+# ENABLE_GPU_WORKER=true
 # ./start.sh
 
 # View logs
@@ -146,6 +150,8 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `WORKER2_MAX_JOBS` | `1` | Max concurrent jobs for optional second worker profile |
 | `WORKER2_WHISPER_DEVICE` | `auto` | Device target for optional second worker (`auto`, `cuda`, `cpu`) |
 | `ENABLE_MULTI_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker2` profile |
+| `WORKER_GPU_WHISPER_DEVICE` | `cuda` | Device target for optional `worker-gpu` profile |
+| `ENABLE_GPU_WORKER` | `false` | When `true`, `./start.sh` automatically enables `worker-gpu` profile |
 | `ARQ_QUEUE_NAME_LOCAL` | `arq:queue:local` | Queue name for local Whisper jobs |
 | `ARQ_QUEUE_NAME_ASSEMBLY` | `arq:queue:assembly` | Queue name for AssemblyAI jobs |
 | `ADMIN_API_KEY` | - | Optional key for admin endpoints (send via `x-admin-key`) |
@@ -157,6 +163,7 @@ Local URL/port mapping reference: `docs/local-host-mappings.md`
 | `BETTER_AUTH_TRUSTED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` | Better Auth origin allowlist |
 | `DOCKER_GPU_REQUEST` | `all` | Docker GPU request for backend/worker (`all` or `0`) |
 | `DOCKER_GPU_REQUEST_WORKER2` | `all` | Docker GPU request for optional second worker (`all` or `0`) |
+| `DOCKER_GPU_REQUEST_WORKER_GPU` | `all` | Docker GPU request for optional `worker-gpu` profile |
 | `DOCKER_GPU_REQUEST_WORKER_ASSEMBLY` | `all` | Docker GPU request for dedicated AssemblyAI worker |
 | `SECRET_ENCRYPTION_KEY` | - | Encryption secret for user-stored API keys (recommended in production) |
 | `WHISPER_CACHE_HOST_DIR` | `./backend/.cache/whisper` | Host path for Whisper model cache (prevents re-downloads after rebuilds) |
@@ -263,6 +270,7 @@ MrglSnips runs 6 Docker containers by default:
 
 Optional:
 - **Worker 2** (same queue, enabled with `--profile multi-worker`)
+- **Worker GPU** (same queue, enabled with `--profile gpu-worker`)
 
 All services are connected via a Docker network and start automatically with proper health checks.
 

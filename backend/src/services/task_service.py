@@ -9,6 +9,7 @@ import logging
 import asyncio
 import re
 import time
+import json
 from pathlib import Path
 
 from ..repositories.task_repository import TaskRepository
@@ -23,7 +24,6 @@ from .ai_model_catalog_service import (
     test_ollama_connection as run_ollama_connection_test,
 )
 from ..config import Config
-from ..video_utils import load_cached_transcript_data
 
 logger = logging.getLogger(__name__)
 config = Config()
@@ -701,7 +701,16 @@ class TaskService:
 
     @staticmethod
     def _extract_text_from_transcript_cache(video_path: Path, clip_start: float, clip_end: float) -> str:
-        transcript_data = load_cached_transcript_data(video_path)
+        transcript_cache_path = video_path.with_suffix(".transcript_cache.json")
+        if not transcript_cache_path.exists():
+            return ""
+
+        try:
+            transcript_data = json.loads(transcript_cache_path.read_text(encoding="utf-8"))
+        except Exception as cache_error:
+            logger.warning("Failed to load transcript cache %s: %s", transcript_cache_path, cache_error)
+            return ""
+
         if not transcript_data or not transcript_data.get("words"):
             return ""
 
